@@ -26,7 +26,7 @@ jobs:
       - name: Type check
         env:
           PYTHONPATH: backend
-        run: mypy backend/app plugins
+        run: mypy backend plugins
       - name: Migrate an empty SQLite database
         env:
           NOTIFY_HUB_DATABASE_URL: sqlite+aiosqlite:////tmp/notify-hub-ci.db

@@ -27,7 +27,7 @@ jobs:
       - name: Type check
         env:
           PYTHONPATH: backend
-        run: mypy backend/app plugins
+        run: mypy backend plugins
       - name: Test
         run: pytest
 
