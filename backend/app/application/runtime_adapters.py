@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from app.application.event_service import EventService
 from app.application.reminder_service import EventAcceptance, ReminderEventDraft
@@ -64,6 +65,25 @@ class ReminderEventEmitterAdapter:
         )
 
 
+def _read_env_key_manually(key: str) -> str | None:
+    current = Path(__file__).resolve()
+    for parent in [current.parent, current.parents[1], current.parents[2], current.parents[3]]:
+        env_path = parent / ".env"
+        if env_path.is_file():
+            try:
+                for line in env_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == key:
+                            return v.strip().strip("'\"")
+            except Exception:
+                pass
+    return None
+
+
 class PluginSecretResolverAdapter:
     def __init__(self, store: SecretStore | None) -> None:
         self._store = store
@@ -72,6 +92,10 @@ class PluginSecretResolverAdapter:
         # Try loading from env first for cloud-native Docker environments
         env_key = f"NOTIFY_HUB_PLUGIN_{plugin_id.upper()}_SECRET_{name.upper()}"
         env_val = os.environ.get(env_key)
+        if env_val is None:
+            # Fallback: try manual .env file parsing for local development
+            env_val = _read_env_key_manually(env_key)
+
         if env_val is not None:
             return env_val
 
