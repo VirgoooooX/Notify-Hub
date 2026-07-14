@@ -1,0 +1,27 @@
+{
+  "id": "fabrizio_hwg_monitor",
+  "name": "Fabrizio HWG Monitor",
+  "version": "0.1.0",
+  "description": "Monitor Fabrizio Romano's tweets for 'HERE WE GO' transfer news",
+  "entrypoint": "plugin:FabrizioHwgPlugin",
+  "api_version": "1",
+  "kind": "monitor",
+  "trusted": true,
+  "default_schedule": {
+    "type": "interval",
+    "seconds": 180
+  },
+  "max_concurrency": 1,
+  "timeout_seconds": 60,
+  "permissions": {
+    "network": [
+      "x.com",
+      "pbs.twimg.com"
+    ],
+    "secrets": [
+      "twscrape_cookie"
+    ],
+    "broadcast": false,
+    "media_write": true
+  }
+}

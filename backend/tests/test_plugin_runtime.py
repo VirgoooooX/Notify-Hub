@@ -152,3 +152,86 @@ async def test_plugin_state_optimistic_lock(tmp_path: Path) -> None:
         await store.set("plugin", "cursor", 2, 0)
     assert await store.set("plugin", "cursor", 2, 1) == 2
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_plugin_service_updates_schedule_on_initialize(tmp_path: Path) -> None:
+    from app.infrastructure.database.plugin_models import PluginRecord
+    from sqlalchemy import select
+
+    plugin_root = tmp_path / "builtin"
+    plugin_dir = plugin_root / "fake_monitor"
+    _write_fake_plugin(plugin_root)
+
+    registry = PluginRegistry({"builtin": plugin_root})
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+
+    # Initialize the first time to create the record
+    service = PluginService(
+        session_factory=factory,
+        registry=registry,
+        event_emitter=FakeEmitter(),
+        secret_resolver=FakeSecrets(),
+    )
+    await service.initialize()
+
+    # Enable the plugin so next_run_at is computed
+    await service.enable("fake_monitor")
+
+    # Verify initial schedule is 60s
+    async with factory() as session:
+        row = await session.get(PluginRecord, "fake_monitor")
+        assert row is not None
+        assert row.schedule == {"type": "interval", "seconds": 60}
+        initial_next_run = row.next_run_at
+
+    # 2. Modify the manifest to have a new default schedule (interval of 120s)
+    manifest_path = plugin_dir / "manifest.json"
+    manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest_data["default_schedule"] = {"type": "interval", "seconds": 120}
+    manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    # Re-initialize the plugin service
+    registry_new = PluginRegistry({"builtin": plugin_root})
+    service_new = PluginService(
+        session_factory=factory,
+        registry=registry_new,
+        event_emitter=FakeEmitter(),
+        secret_resolver=FakeSecrets(),
+    )
+    await service_new.initialize()
+
+    # Verify that the schedule and next_run_at were updated automatically
+    async with factory() as session:
+        row = await session.get(PluginRecord, "fake_monitor")
+        assert row is not None
+        assert row.schedule == {"type": "interval", "seconds": 120}
+        assert row.next_run_at != initial_next_run
+
+    # 3. Test that custom schedules are preserved
+    custom_schedule = {"type": "interval", "seconds": 300}
+    await service_new.update_config("fake_monitor", {}, schedule=custom_schedule)
+
+    # Modify the manifest again to 240s
+    manifest_data["default_schedule"] = {"type": "interval", "seconds": 240}
+    manifest_path.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    registry_new_2 = PluginRegistry({"builtin": plugin_root})
+    service_new_2 = PluginService(
+        session_factory=factory,
+        registry=registry_new_2,
+        event_emitter=FakeEmitter(),
+        secret_resolver=FakeSecrets(),
+    )
+    await service_new_2.initialize()
+
+    # Verify that the custom schedule of 300s is preserved
+    async with factory() as session:
+        row = await session.get(PluginRecord, "fake_monitor")
+        assert row is not None
+        assert row.schedule == {"type": "interval", "seconds": 300}
+
+    await engine.dispose()

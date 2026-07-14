@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from typing import Annotated
+import re
+import time
 
 from app.api.dependencies import get_session, require_admin
 from app.api.errors import AppError
@@ -9,7 +11,8 @@ from app.application.media_service import MediaService
 from app.infrastructure.database.models import Admin
 from app.media.errors import MediaError
 from app.media.validation import MediaKind
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from app.infrastructure.security.tokens import verify_media_signature
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,3 +145,61 @@ async def delete_media(
         await service.delete(session, asset)
     except MediaError as exc:
         raise _map_error(exc) from exc
+
+
+ASSET_ID_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+public_router = APIRouter(prefix="/public/media", tags=["public-media"])
+
+
+@public_router.get("/{asset_id}")
+async def get_public_media(
+    asset_id: str,
+    expires: int,
+    sig: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> Response:
+    if not ASSET_ID_RE.match(asset_id):
+        raise AppError("validation_error", "Invalid asset ID format", 422)
+
+    settings = request.app.state.settings
+    key = settings.public_media_signing_key.get_secret_value()
+
+    if not verify_media_signature(asset_id, expires, sig, key):
+        raise AppError("forbidden", "Invalid signature", 403)
+
+    if int(time.time()) > expires:
+        raise AppError("forbidden", "Signature has expired", 403)
+
+    service = _service(request)
+    try:
+        asset = await service.get(session, asset_id)
+    except MediaError as exc:
+        raise _map_error(exc) from exc
+
+    if asset.kind != "image":
+        raise AppError("forbidden", "Only image assets are publicly accessible", 403)
+
+    now = request.app.state.clock.now()
+    expires_at = asset.expires_at
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        if expires_at < now:
+            raise AppError("media_expired", "Media asset has expired", 403)
+
+    try:
+        content = await service.read(asset)
+    except Exception as exc:
+        raise AppError("read_failed", "Failed to read media asset", 500)
+
+    headers = {
+        "Content-Type": asset.mime_type,
+        "Cache-Control": "public, max-age=86400",
+        "X-Content-Type-Options": "nosniff",
+        "ETag": asset.checksum_sha256,
+    }
+    return Response(content=content, headers=headers)
+

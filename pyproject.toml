@@ -27,6 +27,7 @@ dependencies = [
   "tzdata>=2026.1,<2027",
   "uvicorn[standard]>=0.35,<1",
   "twscrape>=0.19.1,<0.20",
+  "pillow>=10.0.0,<12",
 ]
 
 [project.optional-dependencies]

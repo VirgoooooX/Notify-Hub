@@ -188,6 +188,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         event_emitter=PluginEventEmitterAdapter(event_service),
         secret_resolver=PluginSecretResolverAdapter(secret_store),
         clock=clock.now,
+        media_service=media_service,
+        settings=settings,
     )
     plugin_worker = PluginWorker(plugin_service, worker_id="plugin-main")
 
@@ -308,7 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
     from app.api.events import router as events_router
-    from app.api.media import router as media_router
+    from app.api.media import router as media_router, public_router
     from app.api.plugins import router as plugins_router
     from app.api.reminders import router as reminders_router
     from app.api.wecom_callback import router as callback_router
@@ -321,6 +323,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(reminders_router, prefix="/api/v1/admin")
     app.include_router(callback_router, prefix="/api/v1")
     app.include_router(media_router)
+    app.include_router(public_router)
     install_error_handlers(app)
     from pathlib import Path
 

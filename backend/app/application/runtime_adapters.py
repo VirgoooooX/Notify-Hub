@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import functools
 from pathlib import Path
 
 from app.application.event_service import EventService
@@ -65,6 +66,7 @@ class ReminderEventEmitterAdapter:
         )
 
 
+@functools.lru_cache(maxsize=128)
 def _read_env_key_manually(key: str) -> str | None:
     current = Path(__file__).resolve()
     for parent in [current.parent, current.parents[1], current.parents[2], current.parents[3]]:
@@ -95,6 +97,13 @@ class PluginSecretResolverAdapter:
         if env_val is None:
             # Fallback: try manual .env file parsing for local development
             env_val = _read_env_key_manually(env_key)
+
+        # Global secret fallback if plugin-specific secret is not defined in env
+        if env_val is None:
+            global_key = f"NOTIFY_HUB_GLOBAL_SECRET_{name.upper()}"
+            env_val = os.environ.get(global_key)
+            if env_val is None:
+                env_val = _read_env_key_manually(global_key)
 
         if env_val is not None:
             return env_val

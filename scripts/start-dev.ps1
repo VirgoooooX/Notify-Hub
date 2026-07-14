@@ -94,7 +94,14 @@ function Sync-Dependencies {
     }
     if ($createdVenv -or $installedBackendHash -ne $backendHash) {
         Invoke-Checked "Install backend dependencies" {
-            & $VenvPython -m pip install -e "$RepoRoot[dev]"
+            $uv = Get-Command uv -ErrorAction SilentlyContinue
+            if ($null -ne $uv) {
+                & $uv.Source pip install -e "$RepoRoot[dev]"
+            }
+            else {
+                & $VenvPython -m ensurepip
+                & $VenvPython -m pip install -e "$RepoRoot[dev]"
+            }
         }
         Set-Content -NoNewline -LiteralPath $backendStamp -Value $backendHash
     }

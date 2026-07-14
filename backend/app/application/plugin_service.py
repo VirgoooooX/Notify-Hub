@@ -26,6 +26,8 @@ from app.plugin_runtime.registry import PluginRegistry
 from app.plugin_runtime.runner import PluginRunner, RunOutcome
 from app.plugin_runtime.schedule import next_run_at
 from app.plugin_runtime.schema import validate_json_schema
+from app.application.media_service import MediaService
+from app.config import Settings
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -150,6 +152,8 @@ class PluginService:
         secret_resolver: SecretResolver,
         runner: PluginRunner | None = None,
         clock: Callable[[], datetime] = utcnow,
+        media_service: MediaService | None = None,
+        settings: Settings | None = None,
     ) -> None:
         self._factory = session_factory
         self.registry = registry
@@ -159,6 +163,8 @@ class PluginService:
         self._clock = clock
         self._state = _DatabaseStateStore(session_factory, clock)
         self._config = _DatabaseConfigStore(session_factory)
+        self._media_service = media_service
+        self._settings = settings
 
     async def initialize(self) -> None:
         self.registry.discover()
@@ -189,6 +195,16 @@ class PluginService:
                         )
                     )
                 else:
+                    old_manifest = row.manifest
+                    if isinstance(old_manifest, dict):
+                        old_default = old_manifest.get("default_schedule")
+                        # NOTE: Dict comparison is order-independent in Python. We assume that row.schedule
+                        # matches old_default if the user never customized it. If a custom schedule matches the
+                        # old default exactly, it gets updated to the new default. This once-off behavior is expected.
+                        if old_default is not None and row.schedule == old_default:
+                            row.schedule = manifest.default_schedule.model_dump(mode="json")
+                            if row.enabled and not row.circuit_open:
+                                row.next_run_at = next_run_at(manifest.default_schedule, now)
                     row.name = manifest.name
                     row.version = manifest.version
                     row.description = manifest.description
@@ -419,6 +435,19 @@ class PluginService:
             allowed_hosts=manifest.permissions.network,
             allowed_private_networks=manifest.permissions.private_network,
         )
+        from app.plugin_runtime.context import PluginMediaPublisher
+        key_str = "development-only-change-me-public-media-signing-key"
+        if self._settings and self._settings.public_media_signing_key:
+            key_str = self._settings.public_media_signing_key.get_secret_value()
+        
+        media_publisher = PluginMediaPublisher(
+            plugin_id=plugin_id,
+            media_write_allowed=manifest.permissions.media_write,
+            media_service=self._media_service,
+            session_factory=self._factory,
+            public_base_url=self._settings.public_base_url if self._settings else None,
+            signing_key=key_str.encode("utf-8"),
+        )
         context = PluginContext(
             plugin_id=plugin_id,
             run_id=run_id,
@@ -429,6 +458,7 @@ class PluginService:
                 plugin_id, set(manifest.permissions.secrets), self._secrets
             ),
             http=http,
+            media=media_publisher,
         )
         try:
             outcome = await self._runner.run(

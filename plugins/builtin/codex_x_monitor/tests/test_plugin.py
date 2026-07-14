@@ -316,8 +316,8 @@ def make_fake_tweet(
     )
 
 
-@patch("plugins.builtin.codex_x_monitor.sources.API")
-@patch("plugins.builtin.codex_x_monitor.sources.gather")
+@patch("plugins.shared.x_monitor.twscrape_source.API")
+@patch("plugins.shared.x_monitor.twscrape_source.gather")
 def test_twscrape_fetch_with_replies(mock_gather: MagicMock, mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
@@ -353,8 +353,8 @@ def test_twscrape_fetch_with_replies(mock_gather: MagicMock, mock_api_cls: Magic
     mock_api.pool.add_account_cookies.assert_called_once()
 
 
-@patch("plugins.builtin.codex_x_monitor.sources.API")
-@patch("plugins.builtin.codex_x_monitor.sources.gather")
+@patch("plugins.shared.x_monitor.twscrape_source.API")
+@patch("plugins.shared.x_monitor.twscrape_source.gather")
 def test_twscrape_fetch_without_replies(mock_gather: MagicMock, mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
@@ -394,7 +394,7 @@ def test_twscrape_cookie_validation() -> None:
         asyncio.run(TwscrapeSource().fetch(context_no_ct0, config))
 
 
-@patch("plugins.builtin.codex_x_monitor.sources.API")
+@patch("plugins.shared.x_monitor.twscrape_source.API")
 def test_twscrape_no_account_error_mapping(mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
@@ -408,7 +408,7 @@ def test_twscrape_no_account_error_mapping(mock_api_cls: MagicMock) -> None:
         asyncio.run(TwscrapeSource().fetch(context, config))
 
 
-@patch("plugins.builtin.codex_x_monitor.sources.API")
+@patch("plugins.shared.x_monitor.twscrape_source.API")
 def test_twscrape_general_exception_masking(mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
@@ -428,8 +428,8 @@ def test_twscrape_general_exception_masking(mock_api_cls: MagicMock) -> None:
     assert "twscrape request failed" in str(caught.value)
 
 
-@patch("plugins.builtin.codex_x_monitor.sources.API")
-@patch("plugins.builtin.codex_x_monitor.sources.gather")
+@patch("plugins.shared.x_monitor.twscrape_source.API")
+@patch("plugins.shared.x_monitor.twscrape_source.gather")
 def test_twscrape_temp_dir_deleted(mock_gather: MagicMock, mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
@@ -442,7 +442,7 @@ def test_twscrape_temp_dir_deleted(mock_gather: MagicMock, mock_api_cls: MagicMo
     context = FakeContext(config.model_dump(), [])
 
     # We will patch Path.exists to check temporary accounts.db deletion behavior
-    with patch("plugins.builtin.codex_x_monitor.sources.TemporaryDirectory") as mock_temp_dir:
+    with patch("plugins.shared.x_monitor.twscrape_source.TemporaryDirectory") as mock_temp_dir:
         mock_temp_dir.return_value.__enter__.return_value = "/mock/temp/dir"
 
         asyncio.run(TwscrapeSource().fetch(context, config))

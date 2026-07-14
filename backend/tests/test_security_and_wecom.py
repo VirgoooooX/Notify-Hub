@@ -115,6 +115,7 @@ def test_production_rejects_weak_or_partial_secret_configuration() -> None:
             _env_file=None,
             environment="production",
             jwt_secret=strong,
+            public_media_signing_key=strong,
             secret_encryption_key="",
         )
     with pytest.raises(ValidationError, match="must be configured together"):
@@ -122,6 +123,7 @@ def test_production_rejects_weak_or_partial_secret_configuration() -> None:
             _env_file=None,
             environment="production",
             jwt_secret=strong,
+            public_media_signing_key=strong,
             secret_encryption_key=strong,
             wecom_corp_id="corp-only",
             wecom_agent_id=None,
@@ -132,6 +134,7 @@ def test_production_rejects_weak_or_partial_secret_configuration() -> None:
             _env_file=None,
             environment="production",
             jwt_secret=strong,
+            public_media_signing_key=strong,
             secret_encryption_key=strong,
             wecom_corp_id=None,
             wecom_agent_id=None,

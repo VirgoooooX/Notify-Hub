@@ -13,6 +13,21 @@ from app.infrastructure.database.models import Secret
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+import os
+from app.application.runtime_adapters import _read_env_key_manually
+
+async def check_secret_status(plugin_id: str, name: str, store: Any) -> dict[str, Any]:
+    env_key = f"NOTIFY_HUB_PLUGIN_{plugin_id.upper()}_SECRET_{name.upper()}"
+    if os.environ.get(env_key) is not None or _read_env_key_manually(env_key) is not None:
+        return {"configured": True, "source": "env"}
+    
+    global_key = f"NOTIFY_HUB_GLOBAL_SECRET_{name.upper()}"
+    if os.environ.get(global_key) is not None or _read_env_key_manually(global_key) is not None:
+        return {"configured": True, "source": "env"}
+
+    if store is not None and await store.configured("plugin", plugin_id, name):
+        return {"configured": True, "source": "db"}
+    return {"configured": False, "source": None}
 
 router = APIRouter(prefix="/plugins", tags=["plugins"], dependencies=[Depends(require_admin)])
 
@@ -64,14 +79,15 @@ async def list_plugins(request: Request) -> DataResponse:
             names = _service(request).registry.get(item["id"]).manifest.permissions.secrets
         except Exception:
             names = []
-        item["secrets"] = [
-            {
+        secrets_status = []
+        for name in names:
+            status_info = await check_secret_status(item["id"], name, store)
+            secrets_status.append({
                 "name": name,
-                "configured": store is not None
-                and await store.configured("plugin", item["id"], name),
-            }
-            for name in names
-        ]
+                "configured": status_info["configured"],
+                "source": status_info["source"],
+            })
+        item["secrets"] = secrets_status
     return DataResponse(data=items)
 
 
@@ -145,23 +161,30 @@ def _secret_names(request: Request, plugin_id: str) -> list[str]:
 @router.get("/{plugin_id}/secrets")
 async def list_secrets(plugin_id: str, request: Request) -> DataResponse:
     names = _secret_names(request, plugin_id)
-    async with request.app.state.session_factory() as session:
-        rows = (
-            await session.scalars(
-                select(Secret).where(
-                    Secret.scope_type == "plugin",
-                    Secret.scope_id == plugin_id,
-                    Secret.name.in_(names),
+    store = request.app.state.secret_store
+    
+    data = []
+    for name in names:
+        status_info = await check_secret_status(plugin_id, name, store)
+        updated_at = None
+        if status_info["source"] == "db":
+            async with request.app.state.session_factory() as session:
+                row = await session.scalar(
+                    select(Secret).where(
+                        Secret.scope_type == "plugin",
+                        Secret.scope_id == plugin_id,
+                        Secret.name == name,
+                    )
                 )
-            )
-        ).all()
-    configured = {row.name: row.updated_at for row in rows}
-    return DataResponse(
-        data=[
-            {"name": name, "configured": name in configured, "updated_at": configured.get(name)}
-            for name in names
-        ]
-    )
+                if row:
+                    updated_at = row.updated_at
+        data.append({
+            "name": name,
+            "configured": status_info["configured"],
+            "source": status_info["source"],
+            "updated_at": updated_at,
+        })
+    return DataResponse(data=data)
 
 
 @router.put("/{plugin_id}/secrets/{name}")
