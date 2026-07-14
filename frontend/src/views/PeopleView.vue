@@ -133,7 +133,9 @@ onMounted(load);
       </div>
       <div class="flex" style="gap: 12px; align-items: center; height: 38px;">
         <label><input v-model="form.is_default" type="checkbox"> 默认接收人</label>
-        <button class="btn btn--primary" :disabled="busy">保存</button>
+        <button class="btn btn--primary" :disabled="busy">
+          保存
+        </button>
       </div>
     </form>
   </section>
@@ -149,7 +151,9 @@ onMounted(load);
       <div>
         <header style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;">
           <div>
-            <h3 style="margin: 0; font-size: 16px;">{{ person.name }}</h3>
+            <h3 style="margin: 0; font-size: 16px;">
+              {{ person.name }}
+            </h3>
             <span class="mono muted" style="font-size: 11px;">{{ person.id }}</span>
           </div>
           <div class="flex" style="gap: 8px; align-items: center;">
@@ -187,7 +191,9 @@ onMounted(load);
       <div v-if="!person.wecom_identities?.length" style="margin-top: 12px;">
         <form class="flex" style="gap: 8px;" @submit.prevent="bindIdentity(person.id)">
           <input v-model="bindForms[person.id]" class="input input--sm" placeholder="绑定企业微信 UserID" required style="flex: 1; padding: 4px 8px; font-size: 12px; height: 28px;">
-          <button class="btn btn--sm btn--primary" style="height: 28px; padding: 0 10px; font-size: 12px;">绑定</button>
+          <button class="btn btn--sm btn--primary" style="height: 28px; padding: 0 10px; font-size: 12px;">
+            绑定
+          </button>
         </form>
       </div>
     </article>
