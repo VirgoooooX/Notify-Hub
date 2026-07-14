@@ -79,7 +79,7 @@ def _read_env_key_manually(key: str) -> str | None:
                         k, v = line.split("=", 1)
                         if k.strip() == key:
                             return v.strip().strip("'\"")
-            except Exception:
+            except Exception:  # noqa: S110
                 pass
     return None
 

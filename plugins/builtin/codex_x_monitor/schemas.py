@@ -45,7 +45,7 @@ class CodexXMonitorConfig(BaseModel):
 
     enabled: bool = True
     username: str = "thsottiaux"
-    source: Literal["rss", "x_api", "twscrape"] = "rss"
+    source: Literal["rss", "x_api", "twscrape"] = "twscrape"
     feed_url: AnyHttpUrl | None = None
     twscrape_fetch_limit: int = Field(default=40, ge=10, le=100)
     interval_seconds: int = Field(default=600, ge=60, le=86400)

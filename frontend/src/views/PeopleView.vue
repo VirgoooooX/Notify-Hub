@@ -60,7 +60,7 @@ async function create() {
 }
 
 async function removePerson(id: string) {
-  if (!confirm('确认删除该接收人吗？相关企业微信关联也将一并解绑。')) return;
+  if (!window.confirm('确认删除该接收人吗？相关企业微信关联也将一并解绑。')) return;
   try {
     await api.delete(`/admin/people/${id}`);
     ui.toast('接收人已删除', 'success');
@@ -71,7 +71,7 @@ async function removePerson(id: string) {
 }
 
 async function removeIdentity(personId: string, identityId: string) {
-  if (!confirm('确定解绑此企业微信身份吗？')) return;
+  if (!window.confirm('确定解绑此企业微信身份吗？')) return;
   try {
     await api.delete(`/admin/people/${personId}/wecom-identities/${identityId}`);
     ui.toast('已解绑企业微信身份', 'success');

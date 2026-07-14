@@ -602,14 +602,12 @@ async def delete_person(
         person = await session.get(Person, person_id)
         if person is None:
             raise AppError("not_found", "Person not found", 404)
-        
+
         # 解绑所有企业微信绑定
-        await session.execute(
-            delete(WeComIdentity).where(WeComIdentity.person_id == person_id)
-        )
+        await session.execute(delete(WeComIdentity).where(WeComIdentity.person_id == person_id))
         # 删除接收人
         await session.delete(person)
-        
+
         add_audit(
             session,
             request.app.state.clock,
