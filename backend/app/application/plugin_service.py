@@ -217,6 +217,14 @@ class PluginService:
             return result
 
     def _plugin_dict(self, row: PluginRecord) -> dict[str, Any]:
+        last_run = row.last_run_at
+        if last_run is not None and last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=UTC)
+
+        next_run = row.next_run_at
+        if next_run is not None and next_run.tzinfo is None:
+            next_run = next_run.replace(tzinfo=UTC)
+
         return {
             "id": row.id,
             "name": row.name,
@@ -226,8 +234,8 @@ class PluginService:
             "status": row.status,
             "consecutive_failures": row.consecutive_failures,
             "circuit_open": row.circuit_open,
-            "last_run_at": row.last_run_at,
-            "next_run_at": row.next_run_at,
+            "last_run_at": last_run,
+            "next_run_at": next_run,
             "last_error": row.last_error,
             "manifest": row.manifest,
             "schedule": row.schedule,

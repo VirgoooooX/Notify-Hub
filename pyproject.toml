@@ -26,6 +26,7 @@ dependencies = [
   "structlog>=25.4,<26",
   "tzdata>=2026.1,<2027",
   "uvicorn[standard]>=0.35,<1",
+  "twscrape>=0.19.1,<0.20",
 ]
 
 [project.optional-dependencies]
@@ -97,5 +98,5 @@ warn_unreachable = true
 exclude = ["backend/migrations/versions", "(^|/)tests/"]
 
 [[tool.mypy.overrides]]
-module = ["feedparser", "filetype", "dateutil.*"]
+module = ["feedparser", "filetype", "dateutil.*", "twscrape", "twscrape.*"]
 ignore_missing_imports = true

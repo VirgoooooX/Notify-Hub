@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
+from twscrape import API, gather
+from twscrape.accounts_pool import NoAccountError
 
 from .schemas import CodexXMonitorConfig, PluginContext, XPost
 
@@ -207,3 +212,99 @@ class XApiSource:
             raise SourceRateLimited(response.headers.get("x-rate-limit-reset"))
         if response.status_code < 200 or response.status_code >= 300:
             raise SourceError(f"X API returned HTTP {response.status_code}")
+
+
+class TwscrapeSource:
+    """Use a temporary twscrape account pool seeded from an encrypted plugin secret."""
+
+    async def fetch(
+        self,
+        context: PluginContext,
+        config: CodexXMonitorConfig,
+    ) -> list[XPost]:
+        cookie = await context.get_secret("twscrape_cookie")
+        self._validate_cookie(cookie)
+
+        # Disable third-party telemetry for the self-hosted deployment.
+        os.environ.setdefault("TWS_TELEMETRY", "0")
+        os.environ.setdefault("TWS_LOG_LEVEL", "WARNING")
+
+        try:
+            with TemporaryDirectory(prefix="notify-hub-twscrape-") as temp_dir:
+                account_db = Path(temp_dir) / "accounts.db"
+
+                api = API(
+                    str(account_db),
+                    raise_when_no_account=True,
+                )
+
+                await api.pool.add_account_cookies(
+                    "notify-hub",
+                    cookie,
+                )
+
+                user = await api.user_by_login(config.username)
+                if user is None:
+                    raise SourceParseError(
+                        f"X user @{config.username} was not found"
+                    )
+
+                if config.include_replies:
+                    iterator = api.user_tweets_and_replies(
+                        user.id,
+                        limit=config.twscrape_fetch_limit,
+                    )
+                else:
+                    iterator = api.user_tweets(
+                        user.id,
+                        limit=config.twscrape_fetch_limit,
+                    )
+
+                tweets = await gather(iterator)
+
+        except NoAccountError as exc:
+            raise SourceRateLimited() from exc
+        except (SourceError, SourceParseError):
+            raise
+        except Exception as exc:
+            # Do not persist third-party exception bodies that might contain
+            # account details or response data.
+            raise SourceError(
+                f"twscrape request failed: {type(exc).__name__}"
+            ) from exc
+
+        posts: list[XPost] = []
+
+        for tweet in tweets:
+            # Defensive filter in case the timeline contains an injected item.
+            if tweet.user.username.casefold() != config.username.casefold():
+                continue
+
+            posts.append(
+                XPost(
+                    id=tweet.id_str,
+                    author_username=tweet.user.username,
+                    author_display_name=tweet.user.displayname,
+                    text=tweet.rawContent,
+                    url=tweet.url,
+                    published_at=tweet.date,
+                    is_repost=tweet.retweetedTweet is not None,
+                    is_reply=tweet.inReplyToTweetId is not None,
+                )
+            )
+
+        return posts
+
+    @staticmethod
+    def _validate_cookie(cookie: str) -> None:
+        normalized = cookie.casefold()
+
+        if "auth_token=" not in normalized:
+            raise SourceError(
+                "twscrape_cookie does not contain auth_token"
+            )
+
+        if "ct0=" not in normalized:
+            raise SourceError(
+                "twscrape_cookie does not contain ct0"
+            )

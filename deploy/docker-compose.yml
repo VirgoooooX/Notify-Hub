@@ -33,6 +33,7 @@ services:
       - ../data:/app/data
       - ../logs:/app/logs
       - ../media:/app/data/media
+      - ../plugins:/app/plugins/private
     healthcheck:
       test:
         - CMD

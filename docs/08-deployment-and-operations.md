@@ -27,13 +27,13 @@ notify-hub container
 ├── .env
 ├── data/
 │   ├── notify-hub.db
-│   ├── plugins/
 │   ├── media/
 │   └── backups/
-└── logs/
+├── logs/
+└── plugins/
 ```
 
-目录权限只授予运行容器所需 UID/GID。敏感凭证直接在 `.env` 中声明，不用创建 `secrets/` 物理目录。
+目录权限只授予运行容器所需 UID/GID。敏感凭证直接在 `.env` 中声明，不用创建 `secrets/` 物理目录。宿主机的 `plugins/` 目录用于放置外部热添加的私有插件。
 
 ## 3. Compose 示例
 
@@ -68,6 +68,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./media:/app/data/media
+      - ./plugins:/app/plugins/private
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
       interval: 30s

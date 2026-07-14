@@ -20,7 +20,7 @@ from .schemas import (
     PluginRunResult,
     XPost,
 )
-from .sources import PostSource, RssAtomSource, XApiSource
+from .sources import PostSource, RssAtomSource, TwscrapeSource, XApiSource
 
 MAX_RECENT_PROCESSED_IDS = 200
 
@@ -57,6 +57,7 @@ class CodexXMonitorPlugin:
         self._sources: Mapping[str, PostSource] = sources or {
             "rss": RssAtomSource(),
             "x_api": XApiSource(),
+            "twscrape": TwscrapeSource(),
         }
 
     @classmethod
@@ -115,6 +116,7 @@ class CodexXMonitorPlugin:
                         level=config.notification_level,
                         occurred_at=post.published_at,
                         url=post.url,
+                        image_url=config.cover_image_url,
                         recipients=config.recipients or None,
                         payload={
                             "post_id": post.id,
@@ -126,6 +128,7 @@ class CodexXMonitorPlugin:
                             title="Codex 用量可能已重置",
                             description=summary,
                             url=post.url,
+                            image_url=config.cover_image_url,
                         ),
                     )
                 )

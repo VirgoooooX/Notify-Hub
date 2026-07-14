@@ -10,10 +10,15 @@ from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, 
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.2.0"
 STATE_KEY = "monitor_state"
 
-DEFAULT_CONTEXT_PATTERNS = [r"\bcodex\b", r"\bopenai\s+codex\b"]
+DEFAULT_CONTEXT_PATTERNS = [
+    r"\bcodex\b",
+    r"\bopenai\s+codex\b",
+    r"\bchatgpt\s+work\b",
+    r"\bchatgpt\b",
+]
 DEFAULT_POSITIVE_PATTERNS = [
     r"\bresets?\b",
     r"\bresetting\b",
@@ -40,21 +45,23 @@ class CodexXMonitorConfig(BaseModel):
 
     enabled: bool = True
     username: str = "thsottiaux"
-    source: Literal["rss", "x_api"] = "rss"
+    source: Literal["rss", "x_api", "twscrape"] = "rss"
     feed_url: AnyHttpUrl | None = None
+    twscrape_fetch_limit: int = Field(default=40, ge=10, le=100)
     interval_seconds: int = Field(default=600, ge=60, le=86400)
     first_run_mode: Literal["baseline", "scan_recent"] = "baseline"
     scan_recent_limit: int = Field(default=10, ge=1, le=100)
     recipients: list[str] = Field(default_factory=list)
     notification_level: Literal["info", "warning"] = "info"
     include_reposts: bool = False
-    include_replies: bool = False
+    include_replies: bool = True
     match_mode: Literal["rules"] = "rules"
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
     )
     negative_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_NEGATIVE_PATTERNS))
+    cover_image_url: AnyHttpUrl | None = None
 
     @field_validator("username")
     @classmethod
@@ -127,7 +134,7 @@ class MonitorState(BaseModel):
     last_seen_published_at: datetime | None = None
     recent_processed_ids: list[str] = Field(default_factory=list)
     last_success_at: datetime | None = None
-    last_source: Literal["rss", "x_api"] | None = None
+    last_source: Literal["rss", "x_api", "twscrape"] | None = None
 
 
 class PluginRunResult(BaseModel):
