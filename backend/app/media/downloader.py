@@ -55,9 +55,7 @@ class SafeMediaDownloader:
         self._timeout = httpx.Timeout(timeout_seconds)
         self._max_redirects = max_redirects
 
-    async def _validate_url(
-        self, url: str
-    ) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    async def _validate_url(self, url: str) -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise UnsafeMediaUrlError("Only absolute HTTP(S) media URLs are accepted")
