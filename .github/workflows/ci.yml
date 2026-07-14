@@ -24,6 +24,8 @@ jobs:
       - name: Lint
         run: ruff check backend plugins
       - name: Type check
+        env:
+          PYTHONPATH: backend
         run: mypy backend/app plugins
       - name: Migrate an empty SQLite database
         env:
