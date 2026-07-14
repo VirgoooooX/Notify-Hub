@@ -25,12 +25,6 @@ notify-hub container
 /opt/notify-hub/
 ├── compose.yml
 ├── .env
-├── secrets/
-│   ├── app_master_key
-│   ├── jwt_secret
-│   ├── wecom_secret
-│   ├── wecom_callback_token
-│   └── wecom_callback_aes_key
 ├── data/
 │   ├── notify-hub.db
 │   ├── plugins/
@@ -39,7 +33,7 @@ notify-hub container
 └── logs/
 ```
 
-目录权限只授予运行容器所需 UID/GID。
+目录权限只授予运行容器所需 UID/GID。敏感凭证直接在 `.env` 中声明，不用创建 `secrets/` 物理目录。
 
 ## 3. Compose 示例
 
@@ -50,37 +44,30 @@ services:
     container_name: notify-hub
     restart: unless-stopped
     environment:
-      APP_HOST: "0.0.0.0"
-      APP_PORT: "8000"
+      # 1. 基础运行与代理
       FORWARDED_ALLOW_IPS: "*"
       NOTIFY_HUB_ENVIRONMENT: "production"
-      NOTIFY_HUB_DATABASE_URL: "sqlite+aiosqlite:////data/notify-hub.db"
-      NOTIFY_HUB_APP_TIMEZONE: "Asia/Shanghai"
       NOTIFY_HUB_PUBLIC_BASE_URL: "${NOTIFY_HUB_PUBLIC_BASE_URL:?set the public HTTPS URL}"
-      NOTIFY_HUB_LOG_LEVEL: "INFO"
-      NOTIFY_HUB_LOG_DIR: "/logs"
+
+      # 2. 企业微信出站
       NOTIFY_HUB_WECOM_CORP_ID: "${NOTIFY_HUB_WECOM_CORP_ID:?set the WeCom Corp ID}"
       NOTIFY_HUB_WECOM_AGENT_ID: "${NOTIFY_HUB_WECOM_AGENT_ID:?set the WeCom Agent ID}"
       NOTIFY_HUB_WECOM_API_BASE_URL: "${NOTIFY_HUB_WECOM_API_BASE_URL:-https://qyapi.weixin.qq.com}"
       NOTIFY_HUB_ALLOW_BROADCAST: "true"
-      NOTIFY_HUB_MEDIA_ROOT: "/media"
-      NOTIFY_HUB_SECRET_ENCRYPTION_KEY_FILE: "/run/secrets/app_master_key"
-      NOTIFY_HUB_JWT_SECRET_FILE: "/run/secrets/jwt_secret"
-      NOTIFY_HUB_WECOM_SECRET_FILE: "/run/secrets/wecom_secret"
-      NOTIFY_HUB_WECOM_CALLBACK_TOKEN_FILE: "/run/secrets/wecom_callback_token"
-      NOTIFY_HUB_WECOM_CALLBACK_AES_KEY_FILE: "/run/secrets/wecom_callback_aes_key"
+
+      # 3. 敏感凭据（直接以环境变量形式注入）
+      NOTIFY_HUB_SECRET_ENCRYPTION_KEY: "${NOTIFY_HUB_SECRET_ENCRYPTION_KEY:?set the encryption key}"
+      NOTIFY_HUB_JWT_SECRET: "${NOTIFY_HUB_JWT_SECRET:?set the JWT secret}"
+      NOTIFY_HUB_WECOM_SECRET: "${NOTIFY_HUB_WECOM_SECRET:-}"
+      NOTIFY_HUB_WECOM_CALLBACK_TOKEN: "${NOTIFY_HUB_WECOM_CALLBACK_TOKEN:-}"
+      NOTIFY_HUB_WECOM_CALLBACK_AES_KEY: "${NOTIFY_HUB_WECOM_CALLBACK_AES_KEY:-}"
     ports:
       - "127.0.0.1:8788:8000"
     volumes:
-      - ./data:/data
-      - ./logs:/logs
-      - ./media:/media
-    secrets:
-      - app_master_key
-      - jwt_secret
-      - wecom_secret
-      - wecom_callback_token
-      - wecom_callback_aes_key
+      # 将宿主机目录挂载到应用相对路径默认值，实现免配置直接持久化
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./media:/app/data/media
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
       interval: 30s
@@ -89,21 +76,9 @@ services:
       start_period: 45s
     security_opt:
       - no-new-privileges:true
-
-secrets:
-  app_master_key:
-    file: ./secrets/app_master_key
-  jwt_secret:
-    file: ./secrets/jwt_secret
-  wecom_secret:
-    file: ./secrets/wecom_secret
-  wecom_callback_token:
-    file: ./secrets/wecom_callback_token
-  wecom_callback_aes_key:
-    file: ./secrets/wecom_callback_aes_key
 ```
 
-正式 Compose 应固定镜像版本，不长期使用不可追踪的 `latest`。仓库中的 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 还显式列出了限流、Worker、媒体和超时等全部运行参数；上面的片段只展示部署边界。Compose 不再使用 `env_file` 向容器整包注入 `.env`，实际 Secret 只通过单文件挂载提供。
+正式 Compose 应固定镜像版本，不长期使用不可追踪的 `latest`。仓库中的 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 还显式列出了核心的运行参数。Compose 通过同级目录的 `.env` 进行环境变量插值传递，不再使用 Docker Secrets 文件挂载，降低单机部署复杂度。
 
 ## 4. 反向代理
 
@@ -162,7 +137,7 @@ secrets:
 - 公网基础 URL；
 - 默认时区；
 - 日志级别；
-- Secret 文件路径。
+- 敏感 Secret 密钥。
 
 ### 数据库配置
 

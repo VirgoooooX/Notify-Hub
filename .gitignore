@@ -45,3 +45,4 @@ secrets/
 .vscode/
 .DS_Store
 Thumbs.db
+.codegraph

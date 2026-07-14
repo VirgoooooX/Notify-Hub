@@ -9,63 +9,30 @@ services:
     container_name: notify-hub
     restart: unless-stopped
     environment:
-      APP_HOST: "0.0.0.0"
-      APP_PORT: "8000"
-      # The published port is loopback-only, so only the trusted host proxy can connect.
+      # 1. 基础运行与代理设置
       FORWARDED_ALLOW_IPS: "*"
       NOTIFY_HUB_ENVIRONMENT: "production"
-      NOTIFY_HUB_DATABASE_URL: "sqlite+aiosqlite:////data/notify-hub.db"
-      NOTIFY_HUB_APP_TIMEZONE: "Asia/Shanghai"
       NOTIFY_HUB_PUBLIC_BASE_URL: "${NOTIFY_HUB_PUBLIC_BASE_URL:?set the public HTTPS URL}"
-      NOTIFY_HUB_LOG_LEVEL: "INFO"
-      NOTIFY_HUB_LOG_DIR: "/logs"
-      NOTIFY_HUB_ACCESS_TOKEN_MINUTES: "15"
-      NOTIFY_HUB_REFRESH_TOKEN_DAYS: "30"
-      NOTIFY_HUB_LOGIN_MAX_ATTEMPTS: "5"
-      NOTIFY_HUB_LOGIN_WINDOW_SECONDS: "300"
-      NOTIFY_HUB_API_RATE_LIMIT_PER_MINUTE: "60"
-      NOTIFY_HUB_SQLITE_BUSY_TIMEOUT_MS: "5000"
-      NOTIFY_HUB_WORKER_HEARTBEAT_TTL_SECONDS: "60"
-      NOTIFY_HUB_DELIVERY_LEASE_SECONDS: "120"
-      NOTIFY_HUB_WORKER_POLL_INTERVAL_SECONDS: "1"
-      NOTIFY_HUB_REMINDER_POLL_SECONDS: "5"
-      # Private deployment identifiers are substituted explicitly and are never
-      # committed. Compose reads them from the shell or the repository's ignored .env.
+
+      # 2. 企业微信出站配置
       NOTIFY_HUB_WECOM_CORP_ID: "${NOTIFY_HUB_WECOM_CORP_ID:?set the WeCom Corp ID}"
       NOTIFY_HUB_WECOM_AGENT_ID: "${NOTIFY_HUB_WECOM_AGENT_ID:?set the WeCom Agent ID}"
       NOTIFY_HUB_WECOM_API_BASE_URL: "${NOTIFY_HUB_WECOM_API_BASE_URL:-https://qyapi.weixin.qq.com}"
-      NOTIFY_HUB_WECOM_REQUEST_TIMEOUT_SECONDS: "10"
-      NOTIFY_HUB_WECOM_TOKEN_REFRESH_SKEW_SECONDS: "120"
-      NOTIFY_HUB_WECOM_CALLBACK_REPLAY_WINDOW_SECONDS: "300"
-      NOTIFY_HUB_WECOM_CALLBACK_MAX_BODY_BYTES: "1048576"
       NOTIFY_HUB_ALLOW_BROADCAST: "true"
-      NOTIFY_HUB_MEDIA_ROOT: "/media"
-      NOTIFY_HUB_MEDIA_IMAGE_MAX_BYTES: "2097152"
-      NOTIFY_HUB_MEDIA_VOICE_MAX_BYTES: "2097152"
-      NOTIFY_HUB_MEDIA_VOICE_MAX_SECONDS: "60"
-      NOTIFY_HUB_MEDIA_DOWNLOAD_TIMEOUT_SECONDS: "20"
-      NOTIFY_HUB_MEDIA_DOWNLOAD_MAX_REDIRECTS: "3"
-      NOTIFY_HUB_MEDIA_RETENTION_SECONDS: "2592000"
-      NOTIFY_HUB_ASR_COMMAND: "[]"
-      NOTIFY_HUB_TTS_COMMAND: "[]"
-      NOTIFY_HUB_TRANSCODE_COMMAND: "[]"
-      NOTIFY_HUB_SECRET_ENCRYPTION_KEY_FILE: "/run/secrets/app_master_key"
-      NOTIFY_HUB_JWT_SECRET_FILE: "/run/secrets/jwt_secret"
-      NOTIFY_HUB_WECOM_SECRET_FILE: "/run/secrets/wecom_secret"
-      NOTIFY_HUB_WECOM_CALLBACK_TOKEN_FILE: "/run/secrets/wecom_callback_token"
-      NOTIFY_HUB_WECOM_CALLBACK_AES_KEY_FILE: "/run/secrets/wecom_callback_aes_key"
+
+      # 3. 敏感凭据（直接通过环境变量输入，不再挂载 Secrets 文件）
+      NOTIFY_HUB_SECRET_ENCRYPTION_KEY: "${NOTIFY_HUB_SECRET_ENCRYPTION_KEY:?set the encryption key}"
+      NOTIFY_HUB_JWT_SECRET: "${NOTIFY_HUB_JWT_SECRET:?set the JWT secret}"
+      NOTIFY_HUB_WECOM_SECRET: "${NOTIFY_HUB_WECOM_SECRET:-}"
+      NOTIFY_HUB_WECOM_CALLBACK_TOKEN: "${NOTIFY_HUB_WECOM_CALLBACK_TOKEN:-}"
+      NOTIFY_HUB_WECOM_CALLBACK_AES_KEY: "${NOTIFY_HUB_WECOM_CALLBACK_AES_KEY:-}"
     ports:
       - "127.0.0.1:8788:8000"
     volumes:
-      - ../data:/data
-      - ../logs:/logs
-      - ../media:/media
-    secrets:
-      - app_master_key
-      - jwt_secret
-      - wecom_secret
-      - wecom_callback_token
-      - wecom_callback_aes_key
+      # 将宿主机目录挂载到应用相对路径默认值，实现免环境变量配置的路径持久化
+      - ../data:/app/data
+      - ../logs:/app/logs
+      - ../media:/app/data/media
     healthcheck:
       test:
         - CMD
@@ -87,15 +54,3 @@ services:
     cap_drop:
       - ALL
     init: true
-
-secrets:
-  app_master_key:
-    file: ../secrets/app_master_key
-  jwt_secret:
-    file: ../secrets/jwt_secret
-  wecom_secret:
-    file: ../secrets/wecom_secret
-  wecom_callback_token:
-    file: ../secrets/wecom_callback_token
-  wecom_callback_aes_key:
-    file: ../secrets/wecom_callback_aes_key
