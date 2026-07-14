@@ -11,6 +11,7 @@ from app.main import create_app
 @pytest_asyncio.fixture
 async def api(tmp_path: Path) -> AsyncIterator[tuple[httpx.AsyncClient, object]]:
     settings = Settings(
+        _env_file=None,
         environment="test",
         database_url=f"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}",
         jwt_secret="test-secret-that-is-long-enough-for-jwt",

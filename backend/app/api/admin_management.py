@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.api.dependencies import require_admin
 from app.application.audit import add_audit
+from app.config import DEFAULT_WECOM_API_BASE_URL
 from app.infrastructure.database.models import (
     Admin,
     Delivery,
@@ -117,6 +118,8 @@ async def get_settings(
         "secret_configured": settings.wecom_secret is not None,
         "callback_token_configured": settings.wecom_callback_token is not None,
         "aes_key_configured": settings.wecom_callback_aes_key is not None,
+        "api_base_url": settings.wecom_api_base_url,
+        "using_proxy": settings.wecom_api_base_url != DEFAULT_WECOM_API_BASE_URL,
     }
     wecom["configured"] = all(
         wecom[key] for key in ("corp_id_configured", "agent_id_configured", "secret_configured")

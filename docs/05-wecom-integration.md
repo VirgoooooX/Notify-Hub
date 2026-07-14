@@ -323,14 +323,16 @@ POST /api/v1/channels/wecom/callback
 若企业微信要求固定出口 IP，可配置：
 
 ```text
-WECOM_API_BASE_URL=https://your-proxy.example.com
+NOTIFY_HUB_WECOM_API_BASE_URL=https://your-proxy.example.com/wecom
 ```
 
 要求：
 
-- 只允许管理员配置；
+- 通过环境变量配置，修改后重启生效；
 - 必须使用 HTTPS；
-- 代理域名进入允许列表；
+- 代理地址不得包含用户名、密码、查询参数或 fragment；
+- 支持路径前缀，代理必须原样转发其下的 `cgi-bin/*` 路径、查询参数和请求体；
+- 代理会接触 CorpID、应用 Secret、Access Token 和消息内容，只能使用完全受信任的服务；
 - 不接受请求级任意代理 URL；
 - 健康测试分别检查 Token 和发送接口；
 - 代理不可用时事件仍可入库并等待重试。

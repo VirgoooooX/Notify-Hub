@@ -1,5 +1,6 @@
 .git
 .github
+.codegraph
 .venv
 .env
 .env.*

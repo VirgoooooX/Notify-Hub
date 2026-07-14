@@ -132,7 +132,29 @@ Notify Hub 负责：
 .\scripts\start-dev.ps1 -NoBrowser
 ```
 
+如需从同一局域网内的其他设备访问，使用 `-Lan` 让前后端监听所有本机网卡：
+
+```powershell
+.\scripts\start-dev.ps1 -Lan
+```
+
+脚本会显示检测到的局域网访问地址。首次使用时，Windows 防火墙可能要求允许专用网络访问 TCP 5173 和 8000；不要在不受信任的公共网络上开放开发服务。`-Lan` 可与 `-NoBrowser` 同时使用。
+
+如需通过反向代理域名访问 Vite 开发服务，显式传入允许的主机名；多个主机名使用逗号分隔。该值只进入当前前端进程，不需要把私人域名提交到 `vite.config.ts`：
+
+```powershell
+.\scripts\start-dev.ps1 -Lan -AllowedHosts notify.example.com
+```
+
+如需在本机安全重置管理员密码，运行以下命令并按提示隐藏输入新密码；重置会同时撤销现有刷新会话：
+
+```powershell
+.\.venv\Scripts\python.exe -m app.cli.reset_admin_password --username admin
+```
+
 首次启动后，在管理后台创建管理员账号，密码至少 12 个字符。本地开发数据库位于 `data/notify-hub.db`。没有配置企业微信凭据时，除真实渠道投递与回调外的页面、API、提醒、插件和持久化流程仍可测试。
+
+如需让企业微信 API 经过自建反向代理，在 `.env` 设置 `NOTIFY_HUB_WECOM_API_BASE_URL=https://proxy.example.com/wecom` 并重启。仅支持 HTTPS；代理可带路径前缀，且必须原样转发其下的 `cgi-bin/*`。代理会接触应用 Secret、Access Token 和消息内容，只能使用完全受信任的地址。
 
 也可以手工初始化。以下命令均在仓库根目录执行；迁移和应用必须使用相同的工作目录，以确保操作同一个 `data/notify-hub.db`：
 
@@ -170,20 +192,21 @@ Pop-Location
 
 v0.3.0 使用单镜像、单容器和 SQLite；不得启动多个共享同一数据库的副本。本机需先安装 Docker，然后：
 
-1. 将 `.env.example` 复制为 `.env`，填写公开配置；不要把 Secret 写入仓库。
+1. `deploy/docker-compose.yml` 已显式声明全部容器环境变量，不再使用 `env_file` 整包注入。仅在仓库根目录的 `.env` 中提供 Compose 需要替换的部署标识：`NOTIFY_HUB_PUBLIC_BASE_URL`、`NOTIFY_HUB_WECOM_CORP_ID`、`NOTIFY_HUB_WECOM_AGENT_ID` 和可选的 `NOTIFY_HUB_WECOM_API_BASE_URL`；该文件已被 Git 忽略。
 2. 创建 `data`、`logs`、`media`、`secrets` 目录。
 3. 在 `secrets` 中创建 `app_master_key`、`jwt_secret`、`wecom_secret`、`wecom_callback_token`、`wecom_callback_aes_key` 文件，并限制宿主机读取权限。生产环境的主密钥和 JWT Secret 均应使用独立的强随机值。
-4. 从仓库根目录构建并启动固定的本地镜像版本：
+4. 先用 `config --quiet` 校验 Compose，再从仓库根目录构建并启动固定的本地镜像版本。不要使用不带 `--quiet` 的配置输出，避免部署变量进入终端日志。
 
 Linux 宿主机还需确保 UID/GID `10001:10001` 可写 `data`、`logs`、`media`，且可只读访问 `secrets`；不要为了绕过权限问题把容器改成 root。
 
 ```powershell
+docker compose -f deploy/docker-compose.yml config --quiet
 docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml up -d
 docker compose -f deploy/docker-compose.yml ps
 ```
 
-容器以非 root 用户运行，启动时先执行 Alembic 升级，迁移成功后才启动 API。服务绑定在 `127.0.0.1:8788`，生产环境应由 HTTPS 反向代理提供公网访问。`data`、`logs`、`media` 均为持久化挂载；升级前应使用 SQLite 在线备份方式备份数据库，并单独离线备份主加密密钥。
+容器以非 root 用户运行，启动时先执行 Alembic 升级，迁移成功后才启动 API。服务绑定在 `127.0.0.1:8788`，生产环境应由同机可信 HTTPS 反向代理提供公网访问。Compose 只把五个 Secret 文件逐个只读挂载到 `/run/secrets`，不会把 Secret 值写进环境配置或镜像。`data`、`logs`、`media` 均为持久化挂载；升级前应使用 SQLite 在线备份方式备份数据库，并单独离线备份主加密密钥。
 
 手工迁移或检查：
 

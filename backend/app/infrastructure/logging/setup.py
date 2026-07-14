@@ -8,7 +8,8 @@ from typing import Any
 import structlog
 
 SENSITIVE_KEYS = re.compile(
-    r"authorization|cookie|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|ciphertext",
+    r"authorization|cookie|api[-_]?key|access[-_]?token|refresh[-_]?token|secret|password|"
+    r"ciphertext|encoding[-_]?aes[-_]?key|master[-_]?key|phone|mobile|corp[-_]?id",
     re.IGNORECASE,
 )
 

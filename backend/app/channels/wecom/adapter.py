@@ -74,12 +74,16 @@ class WeComAdapter:
             action_token = message.payload.get("action_token")
             if not isinstance(action_token, str) or not action_token:
                 return ChannelResult(False, False, "PAYLOAD_INVALID", "Action token is required")
+            task_id = message.payload.get("task_id")
+            if not isinstance(task_id, str) or not task_id:
+                return ChannelResult(False, False, "PAYLOAD_INVALID", "Task ID is required")
             payload = {
                 "touser": touser,
                 "msgtype": "template_card",
                 "agentid": self._settings.wecom_agent_id,
                 "template_card": {
                     "card_type": "button_interaction",
+                    "task_id": task_id,
                     "main_title": {"title": message.title, "desc": message.content},
                     "button_list": [
                         {

@@ -263,6 +263,7 @@ class DeliveryWorker:
             if delivery.recipient_id and isinstance(action_ids, dict):
                 action_id = action_ids.get(delivery.recipient_id)
                 if isinstance(action_id, str) and self._action_token_for_id is not None:
+                    payload["task_id"] = action_id
                     payload["action_token"] = self._action_token_for_id(action_id)
             return ChannelMessage(
                 message_type=(

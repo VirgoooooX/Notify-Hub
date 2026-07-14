@@ -21,10 +21,7 @@ RUN pip install --upgrade pip && pip install .
 FROM python:3.12-slim AS runtime
 ARG APP_UID=10001
 ARG APP_GID=10001
-ENV NOTIFY_HUB_ENVIRONMENT=production \
-    APP_HOST=0.0.0.0 \
-    APP_PORT=8000 \
-    PYTHONDONTWRITEBYTECODE=1 \
+ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app/backend \
     PATH=/opt/venv/bin:$PATH

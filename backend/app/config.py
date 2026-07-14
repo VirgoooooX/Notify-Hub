@@ -1,9 +1,12 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_WECOM_API_BASE_URL = "https://qyapi.weixin.qq.com"
 
 
 class Settings(BaseSettings):
@@ -32,7 +35,7 @@ class Settings(BaseSettings):
     wecom_corp_id: str | None = None
     wecom_agent_id: int | None = None
     wecom_secret: SecretStr | None = None
-    wecom_api_base_url: str = "https://qyapi.weixin.qq.com"
+    wecom_api_base_url: str = DEFAULT_WECOM_API_BASE_URL
     wecom_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     wecom_token_refresh_skew_seconds: int = Field(default=120, ge=0)
     wecom_callback_token: SecretStr | None = None
@@ -61,8 +64,15 @@ class Settings(BaseSettings):
     @field_validator("wecom_api_base_url")
     @classmethod
     def validate_wecom_url(cls, value: str) -> str:
-        if not value.startswith("https://"):
+        parsed = urlsplit(value)
+        if parsed.scheme != "https":
             raise ValueError("WECOM API base URL must use HTTPS")
+        if not parsed.hostname:
+            raise ValueError("WECOM API base URL must include a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("WECOM API base URL must not include credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("WECOM API base URL must not include a query or fragment")
         return value.rstrip("/")
 
     @field_validator("wecom_agent_id", mode="before")
@@ -76,8 +86,28 @@ class Settings(BaseSettings):
             jwt = self.jwt_secret.get_secret_value()
             if len(jwt) < 32 or jwt == "development-only-change-me":
                 raise ValueError("production JWT secret must be at least 32 characters")
-            if self.secret_encryption_key is None:
-                raise ValueError("production secret encryption key is required")
+            encryption_key = (
+                self.secret_encryption_key.get_secret_value()
+                if self.secret_encryption_key is not None
+                else ""
+            )
+            if len(encryption_key) < 32:
+                raise ValueError("production secret encryption key must be at least 32 characters")
+
+        outbound_wecom = (
+            bool(self.wecom_corp_id and self.wecom_corp_id.strip()),
+            self.wecom_agent_id is not None,
+            bool(self.wecom_secret and self.wecom_secret.get_secret_value()),
+        )
+        if any(outbound_wecom) and not all(outbound_wecom):
+            raise ValueError("WeCom Corp ID, Agent ID, and Secret must be configured together")
+
+        callback_wecom = (
+            bool(self.wecom_callback_token and self.wecom_callback_token.get_secret_value()),
+            bool(self.wecom_callback_aes_key and self.wecom_callback_aes_key.get_secret_value()),
+        )
+        if any(callback_wecom) and not all(callback_wecom):
+            raise ValueError("WeCom callback Token and AES key must be configured together")
         return self
 
     def ensure_sqlite_parent(self) -> None:

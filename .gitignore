@@ -32,6 +32,10 @@ data/
 logs/
 media/
 secrets/
+*.key
+*.pem
+*.p12
+*.pfx
 *.db
 *.db-shm
 *.db-wal

@@ -10,9 +10,74 @@ from app.domain.reminders import AckPolicy, ScheduleType, hash_action_token
 from app.infrastructure.database.models import Delivery, Event, Notification
 from app.infrastructure.database.reminder_models import NotificationAction
 from app.workers.delivery_worker import DeliveryWorker
+from app.workers.reminder_worker import ReminderWorker
 from sqlalchemy import select
 
 from tests.test_core_api import initialize_and_login
+
+
+@pytest.mark.integration
+async def test_persisted_reminder_is_recovered_after_worker_restart_without_duplicate(
+    api: tuple[Any, Any],
+) -> None:
+    client, app = api
+    access = await initialize_and_login(client)
+    auth = {"Authorization": f"Bearer {access}"}
+    person = (
+        await client.post("/api/v1/admin/people", headers=auth, json={"name": "Receiver"})
+    ).json()["data"]
+    now = datetime.now(UTC)
+    reminder = (
+        await client.post(
+            "/api/v1/admin/reminders",
+            headers=auth,
+            json={
+                "title": "restart recovery",
+                "schedule": {
+                    "type": "once",
+                    "at": (now - timedelta(seconds=1)).isoformat(),
+                },
+                "recipients": [person["id"]],
+                "require_ack": False,
+            },
+        )
+    ).json()["data"]
+
+    restarted_service = ReminderService(
+        app.state.session_factory,
+        ReminderEventEmitterAdapter(app.state.event_service),
+        "restart-test-secret",
+    )
+    restarted_worker = ReminderWorker(restarted_service, worker_id="reminder-restarted")
+    assert await restarted_worker.run_once(now=now) == 1
+
+    second_service = ReminderService(
+        app.state.session_factory,
+        ReminderEventEmitterAdapter(app.state.event_service),
+        "restart-test-secret",
+    )
+    second_worker = ReminderWorker(second_service, worker_id="reminder-restarted-again")
+    assert await second_worker.run_once(now=now) == 0
+
+    async with app.state.session_factory() as session:
+        events = list(await session.scalars(select(Event).where(Event.source_id == reminder["id"])))
+        notifications = list(
+            await session.scalars(
+                select(Notification).where(Notification.reminder_id == reminder["id"])
+            )
+        )
+        deliveries = list(
+            await session.scalars(
+                select(Delivery)
+                .join(Notification, Notification.id == Delivery.notification_id)
+                .where(Notification.reminder_id == reminder["id"])
+            )
+        )
+
+    assert len(events) == len(notifications) == len(deliveries) == 1
+    assert events[0].payload["occurrence"] == 1
+    assert notifications[0].event_id == events[0].id
+    assert deliveries[0].notification_id == notifications[0].id
 
 
 @pytest.mark.integration
@@ -73,6 +138,7 @@ async def test_reminder_token_is_reconstructed_only_at_delivery(api: tuple[Any, 
     token = fake.messages[0].payload["action_token"]
     assert isinstance(token, str)
     assert hash_action_token(token) == action.token_hash
+    assert fake.messages[0].payload["task_id"] == action.id
 
 
 @pytest.mark.integration

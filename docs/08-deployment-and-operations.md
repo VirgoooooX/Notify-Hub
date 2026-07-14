@@ -27,6 +27,7 @@ notify-hub container
 ├── .env
 ├── secrets/
 │   ├── app_master_key
+│   ├── jwt_secret
 │   ├── wecom_secret
 │   ├── wecom_callback_token
 │   └── wecom_callback_aes_key
@@ -45,37 +46,64 @@ notify-hub container
 ```yaml
 services:
   notify-hub:
-    image: ghcr.io/virgooooox/notify-hub:latest
+    image: notify-hub:0.3.0
     container_name: notify-hub
     restart: unless-stopped
+    environment:
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "8000"
+      FORWARDED_ALLOW_IPS: "*"
+      NOTIFY_HUB_ENVIRONMENT: "production"
+      NOTIFY_HUB_DATABASE_URL: "sqlite+aiosqlite:////data/notify-hub.db"
+      NOTIFY_HUB_APP_TIMEZONE: "Asia/Shanghai"
+      NOTIFY_HUB_PUBLIC_BASE_URL: "${NOTIFY_HUB_PUBLIC_BASE_URL:?set the public HTTPS URL}"
+      NOTIFY_HUB_LOG_LEVEL: "INFO"
+      NOTIFY_HUB_LOG_DIR: "/logs"
+      NOTIFY_HUB_WECOM_CORP_ID: "${NOTIFY_HUB_WECOM_CORP_ID:?set the WeCom Corp ID}"
+      NOTIFY_HUB_WECOM_AGENT_ID: "${NOTIFY_HUB_WECOM_AGENT_ID:?set the WeCom Agent ID}"
+      NOTIFY_HUB_WECOM_API_BASE_URL: "${NOTIFY_HUB_WECOM_API_BASE_URL:-https://qyapi.weixin.qq.com}"
+      NOTIFY_HUB_ALLOW_BROADCAST: "true"
+      NOTIFY_HUB_MEDIA_ROOT: "/media"
+      NOTIFY_HUB_SECRET_ENCRYPTION_KEY_FILE: "/run/secrets/app_master_key"
+      NOTIFY_HUB_JWT_SECRET_FILE: "/run/secrets/jwt_secret"
+      NOTIFY_HUB_WECOM_SECRET_FILE: "/run/secrets/wecom_secret"
+      NOTIFY_HUB_WECOM_CALLBACK_TOKEN_FILE: "/run/secrets/wecom_callback_token"
+      NOTIFY_HUB_WECOM_CALLBACK_AES_KEY_FILE: "/run/secrets/wecom_callback_aes_key"
     ports:
       - "127.0.0.1:8788:8000"
-    environment:
-      APP_ENV: production
-      APP_TIMEZONE: Asia/Shanghai
-      DATABASE_URL: sqlite:////data/notify-hub.db
-      APP_MASTER_KEY_FILE: /run/secrets/app_master_key
-      WECOM_CORP_ID: ${WECOM_CORP_ID}
-      WECOM_AGENT_ID: ${WECOM_AGENT_ID}
-      WECOM_SECRET_FILE: /run/secrets/wecom_secret
-      WECOM_CALLBACK_TOKEN_FILE: /run/secrets/wecom_callback_token
-      WECOM_CALLBACK_AES_KEY_FILE: /run/secrets/wecom_callback_aes_key
-      PUBLIC_BASE_URL: https://notify.example.com
     volumes:
       - ./data:/data
       - ./logs:/logs
-      - ./secrets:/run/secrets:ro
+      - ./media:/media
+    secrets:
+      - app_master_key
+      - jwt_secret
+      - wecom_secret
+      - wecom_callback_token
+      - wecom_callback_aes_key
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 45s
     security_opt:
       - no-new-privileges:true
+
+secrets:
+  app_master_key:
+    file: ./secrets/app_master_key
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  wecom_secret:
+    file: ./secrets/wecom_secret
+  wecom_callback_token:
+    file: ./secrets/wecom_callback_token
+  wecom_callback_aes_key:
+    file: ./secrets/wecom_callback_aes_key
 ```
 
-正式 compose 应固定镜像版本，不长期使用不可追踪的 `latest`。
+正式 Compose 应固定镜像版本，不长期使用不可追踪的 `latest`。仓库中的 [`deploy/docker-compose.yml`](../deploy/docker-compose.yml) 还显式列出了限流、Worker、媒体和超时等全部运行参数；上面的片段只展示部署边界。Compose 不再使用 `env_file` 向容器整包注入 `.env`，实际 Secret 只通过单文件挂载提供。
 
 ## 4. 反向代理
 
@@ -158,6 +186,8 @@ services:
 - 应用主密钥。
 
 环境变量覆盖数据库配置时，应在后台明确显示“由环境变量管理，无法在线修改”。
+
+企业微信 API 可通过 `NOTIFY_HUB_WECOM_API_BASE_URL` 指向受信任的 HTTPS 反向代理，支持路径前缀。该代理必须原样转发 `cgi-bin/*`，并会接触渠道 Secret、Access Token 与消息内容；不要使用不受信任的公共代理。修改地址后必须重启应用，使 Token 缓存和 HTTP 连接池一并重建。
 
 ## 7. 数据库运维
 

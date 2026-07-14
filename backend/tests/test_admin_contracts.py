@@ -34,7 +34,7 @@ async def test_initialize_bootstraps_authenticated_admin_contract(
 async def test_admin_frontend_contracts_require_auth_and_round_trip(
     api: tuple[httpx.AsyncClient, object],
 ) -> None:
-    client, _app = api
+    client, app = api
     unauthenticated = await client.get("/api/v1/admin/plugins")
     assert unauthenticated.status_code == 401
 
@@ -57,6 +57,14 @@ async def test_admin_frontend_contracts_require_auth_and_round_trip(
     assert updated.status_code == 200
     assert updated.json()["data"]["timezone"] == "UTC"
     assert updated.json()["data"]["retention_days"] == 90
+
+    settings_data = updated.json()["data"]["wecom"]
+    assert settings_data["api_base_url"] == "https://qyapi.weixin.qq.com"
+    assert settings_data["using_proxy"] is False
+    app.state.settings.wecom_api_base_url = "https://proxy.example.com/wecom"
+    proxied = await client.get("/api/v1/admin/settings", headers=headers)
+    assert proxied.json()["data"]["wecom"]["api_base_url"] == ("https://proxy.example.com/wecom")
+    assert proxied.json()["data"]["wecom"]["using_proxy"] is True
 
     person_response = await client.post(
         "/api/v1/admin/people",

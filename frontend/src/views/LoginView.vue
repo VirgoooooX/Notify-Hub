@@ -2,7 +2,7 @@
 <template>
   <main class="login-page">
     <section class="login-art">
-      <div><img src="/brand/logo-horizontal-reverse.svg" alt="Notify Hub" class="brand-logo" style="height:48px;" /></div><div>
+      <div><img src="/brand/logo-horizontal-reverse.svg" alt="Notify Hub" class="brand-logo" style="height:48px;"></div><div>
         <p class="eyebrow">
           SELF-HOSTED SIGNAL CONTROL
         </p><h1>每一个信号，<br>都有迹可循。</h1><p>统一接收事件、调度提醒，并追踪每一次企业微信投递。可靠落库，清晰恢复。</p>

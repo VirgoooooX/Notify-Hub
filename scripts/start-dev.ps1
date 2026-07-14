@@ -2,7 +2,9 @@
 param(
     [ValidateSet("all", "backend", "frontend")]
     [string]$Service = "all",
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$Lan,
+    [string]$AllowedHosts = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +14,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 $CacheRoot = Join-Path $RepoRoot ".dev-cache"
 $FrontendRoot = Join-Path $RepoRoot "frontend"
+$BindHost = if ($Lan) { "0.0.0.0" } else { "127.0.0.1" }
 
 function Invoke-Checked {
     param(
@@ -42,6 +45,21 @@ function Get-CombinedHash {
     finally {
         $sha.Dispose()
     }
+}
+
+function Get-LanIPv4Address {
+    try {
+        $configuration = Get-NetIPConfiguration -ErrorAction Stop |
+            Where-Object { $null -ne $_.IPv4DefaultGateway -and $null -ne $_.IPv4Address } |
+            Select-Object -First 1
+        if ($null -ne $configuration) {
+            return @($configuration.IPv4Address)[0].IPAddress
+        }
+    }
+    catch {
+        return $null
+    }
+    return $null
 }
 
 function Sync-Dependencies {
@@ -117,15 +135,16 @@ function Sync-Dependencies {
 Set-Location $RepoRoot
 
 if ($Service -eq "backend") {
-    Write-Host "Notify Hub backend: http://127.0.0.1:8000" -ForegroundColor Green
-    & $VenvPython -m uvicorn app.main:app --app-dir backend --reload --host 127.0.0.1 --port 8000
+    Write-Host "Notify Hub backend listening on ${BindHost}:8000" -ForegroundColor Green
+    & $VenvPython -m uvicorn app.main:app --app-dir backend --reload --host $BindHost --port 8000
     exit $LASTEXITCODE
 }
 
 if ($Service -eq "frontend") {
     Set-Location $FrontendRoot
-    Write-Host "Notify Hub frontend: http://127.0.0.1:5173" -ForegroundColor Green
-    & npm.cmd run dev -- --host 127.0.0.1 --port 5173
+    $env:NOTIFY_HUB_DEV_ALLOWED_HOSTS = $AllowedHosts
+    Write-Host "Notify Hub frontend listening on ${BindHost}:5173" -ForegroundColor Green
+    & npm.cmd run dev -- --host $BindHost --port 5173
     exit $LASTEXITCODE
 }
 
@@ -141,6 +160,12 @@ $commonArguments = @(
     "-ExecutionPolicy", "Bypass",
     "-File", ('"{0}"' -f $PSCommandPath)
 )
+if ($Lan) {
+    $commonArguments += "-Lan"
+}
+if ($AllowedHosts) {
+    $commonArguments += @("-AllowedHosts", ('"{0}"' -f $AllowedHosts))
+}
 
 Start-Process -FilePath $shell -WorkingDirectory $RepoRoot -ArgumentList (
     $commonArguments + @("-Service", "backend")
@@ -154,6 +179,17 @@ Write-Host "Notify Hub development services are starting:" -ForegroundColor Gree
 Write-Host "  Frontend  http://127.0.0.1:5173"
 Write-Host "  Backend   http://127.0.0.1:8000"
 Write-Host "  API docs  http://127.0.0.1:8000/docs"
+if ($Lan) {
+    $lanAddress = Get-LanIPv4Address
+    if ($null -ne $lanAddress) {
+        Write-Host "  LAN web   http://${lanAddress}:5173" -ForegroundColor Yellow
+        Write-Host "  LAN API   http://${lanAddress}:8000" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "  LAN mode is enabled; use this computer's IPv4 address." -ForegroundColor Yellow
+    }
+    Write-Host "  Windows Firewall must allow private-network TCP ports 5173 and 8000." -ForegroundColor Yellow
+}
 Write-Host "Close the two service windows to stop development servers."
 
 if (-not $NoBrowser) {

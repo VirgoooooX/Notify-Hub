@@ -58,7 +58,7 @@ class WeComClient:
             if not self._settings.wecom_corp_id or not self._settings.wecom_secret:
                 raise RuntimeError("WeCom credentials are not configured")
             response = await self._http.get(
-                "/cgi-bin/gettoken",
+                "cgi-bin/gettoken",
                 params={
                     "corpid": self._settings.wecom_corp_id,
                     "corpsecret": self._settings.wecom_secret.get_secret_value(),
@@ -101,7 +101,7 @@ class WeComClient:
     ) -> str:
         token = await self.get_access_token()
         response = await self._http.post(
-            "/cgi-bin/media/upload",
+            "cgi-bin/media/upload",
             params={"access_token": token, "type": media_type},
             files={"media": (filename, content, mime_type)},
         )
@@ -116,7 +116,7 @@ class WeComClient:
         output = bytearray()
         async with self._http.stream(
             "GET",
-            "/cgi-bin/media/get",
+            "cgi-bin/media/get",
             params={"access_token": token, "media_id": media_id},
         ) as response:
             response.raise_for_status()
@@ -128,7 +128,7 @@ class WeComClient:
 
     async def _post_message(self, token: str, payload: dict[str, Any]) -> ChannelResult:
         response = await self._http.post(
-            "/cgi-bin/message/send", params={"access_token": token}, json=payload
+            "cgi-bin/message/send", params={"access_token": token}, json=payload
         )
         response.raise_for_status()
         data = response.json()
