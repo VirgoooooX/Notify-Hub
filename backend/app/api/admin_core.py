@@ -25,7 +25,7 @@ from app.infrastructure.database.models import (
 )
 from app.infrastructure.security.tokens import create_api_key, hash_token
 from fastapi import APIRouter, Depends, Query, Request, status
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
 
 router = APIRouter(tags=["admin"])
@@ -592,3 +592,31 @@ async def delete_identity(
         if identity is None or identity.person_id != person_id:
             raise AppError("not_found", "WeCom identity not found", 404)
         await session.delete(identity)
+
+
+@router.delete("/people/{person_id}", status_code=204)
+async def delete_person(
+    person_id: str, request: Request, admin: Admin = Depends(require_admin)
+) -> None:
+    async with request.app.state.session_factory() as session, session.begin():
+        person = await session.get(Person, person_id)
+        if person is None:
+            raise AppError("not_found", "Person not found", 404)
+        
+        # 解绑所有企业微信绑定
+        await session.execute(
+            delete(WeComIdentity).where(WeComIdentity.person_id == person_id)
+        )
+        # 删除接收人
+        await session.delete(person)
+        
+        add_audit(
+            session,
+            request.app.state.clock,
+            actor_type="admin",
+            actor_id=admin.id,
+            action="person.delete",
+            resource_type="person",
+            resource_id=person_id,
+            request_id=request.state.request_id,
+        )
