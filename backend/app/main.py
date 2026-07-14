@@ -258,7 +258,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await media_http.aclose()
         await engine.dispose()
 
-    app = FastAPI(title="Notify Hub", version="0.4.5", lifespan=lifespan)
+    app = FastAPI(title="Notify Hub", version="0.4.6", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory
