@@ -120,16 +120,27 @@ Notify Hub 负责：
 
 ## 本地开发与测试
 
-后端要求 Python 3.12，前端要求 Node.js 22。以下命令均在仓库根目录执行：
+后端要求 Python 3.12，前端要求 Node.js 22。Windows 上可直接双击仓库根目录的 `start-dev.cmd`，或在 PowerShell 中执行：
+
+```powershell
+.\scripts\start-dev.ps1
+```
+
+脚本会自动创建 `.venv`、按锁文件变化安装前后端依赖、升级本地 SQLite 数据库，并分别打开后端和前端开发窗口。默认浏览器会打开 `http://127.0.0.1:5173`；关闭两个开发窗口即可停止服务。若不需要自动打开浏览器：
+
+```powershell
+.\scripts\start-dev.ps1 -NoBrowser
+```
+
+首次启动后，在管理后台创建管理员账号，密码至少 12 个字符。本地开发数据库位于 `data/notify-hub.db`。没有配置企业微信凭据时，除真实渠道投递与回调外的页面、API、提醒、插件和持久化流程仍可测试。
+
+也可以手工初始化。以下命令均在仓库根目录执行；迁移和应用必须使用相同的工作目录，以确保操作同一个 `data/notify-hub.db`：
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-Push-Location backend
-alembic upgrade head
-Pop-Location
-uvicorn app.main:app --app-dir backend --reload
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
 ```
 
 另开终端启动前端：
@@ -143,15 +154,16 @@ npm run dev
 运行质量检查和测试：
 
 ```powershell
-ruff format --check backend plugins
-ruff check backend plugins
-mypy backend/app plugins
-pytest
-Set-Location frontend
+.\.venv\Scripts\ruff.exe format --check backend plugins
+.\.venv\Scripts\ruff.exe check backend plugins
+.\.venv\Scripts\mypy.exe backend/app plugins
+.\.venv\Scripts\pytest.exe
+Push-Location frontend
 npm run lint
 npm run typecheck
 npm run test
 npm run build
+Pop-Location
 ```
 
 ## Docker 单实例部署
