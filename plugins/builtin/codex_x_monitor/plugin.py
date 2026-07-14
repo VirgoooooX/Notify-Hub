@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -107,6 +108,13 @@ class CodexXMonitorPlugin:
             if result.matched:
                 matched += 1
                 summary = format_post_summary(post)
+
+                cover_url = config.cover_image_url
+                if cover_url is None:
+                    public_base = os.environ.get("NOTIFY_HUB_PUBLIC_BASE_URL")
+                    if public_base:
+                        cover_url = f"{public_base.rstrip('/')}/codex_wechat_cover.png"  # type: ignore[assignment]
+
                 receipt = await context.emit_event(
                     EventDraft(
                         event_type="codex.usage_reset",
@@ -116,7 +124,7 @@ class CodexXMonitorPlugin:
                         level=config.notification_level,
                         occurred_at=post.published_at,
                         url=post.url,
-                        image_url=config.cover_image_url,
+                        image_url=cover_url,
                         recipients=config.recipients or None,
                         payload={
                             "post_id": post.id,
@@ -128,7 +136,7 @@ class CodexXMonitorPlugin:
                             title="Codex 用量可能已重置",
                             description=summary,
                             url=post.url,
-                            image_url=config.cover_image_url,
+                            image_url=cover_url,
                         ),
                     )
                 )

@@ -4,12 +4,14 @@ import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from twscrape.accounts_pool import NoAccountError
 
 from plugins.builtin.codex_x_monitor.matcher import match_post
 from plugins.builtin.codex_x_monitor.plugin import CodexXMonitorPlugin
@@ -25,6 +27,7 @@ from plugins.builtin.codex_x_monitor.sources import (
     SourceError,
     SourceParseError,
     SourceRateLimited,
+    TwscrapeSource,
     XApiSource,
     parse_feed,
 )
@@ -271,14 +274,12 @@ def test_source_timeout_propagates_without_cursor_change() -> None:
 
 # --- twscrape tests with mock ---
 
-from unittest.mock import MagicMock, AsyncMock, patch
-from plugins.builtin.codex_x_monitor.sources import TwscrapeSource, SourceError, SourceParseError, SourceRateLimited
-from twscrape.accounts_pool import NoAccountError
 
 @dataclass
 class FakeTweetUser:
     username: str
     displayname: str
+
 
 @dataclass
 class FakeTweet:
@@ -290,6 +291,7 @@ class FakeTweet:
     retweetedTweet: Any = None
     inReplyToTweetId: Any = None
 
+
 def make_fake_tweet(
     id_str: str,
     username: str = "thsottiaux",
@@ -298,15 +300,21 @@ def make_fake_tweet(
     is_reply: bool = False,
 ) -> FakeTweet:
     from datetime import UTC, datetime
+
     return FakeTweet(
         id_str=id_str,
         user=FakeTweetUser(username=username, displayname="Thsottiaux"),
         rawContent=text,
         url=f"https://x.com/{username}/status/{id_str}",
         date=datetime(2026, 7, 14, 12, 0, 0, tzinfo=UTC),
-        retweetedTweet=FakeTweet("999", FakeTweetUser("other", "Other"), "repost", "url", datetime.now(UTC)) if is_repost else None,
+        retweetedTweet=FakeTweet(
+            "999", FakeTweetUser("other", "Other"), "repost", "url", datetime.now(UTC)
+        )
+        if is_repost
+        else None,
         inReplyToTweetId="888" if is_reply else None,
     )
+
 
 @patch("plugins.builtin.codex_x_monitor.sources.API")
 @patch("plugins.builtin.codex_x_monitor.sources.gather")
@@ -325,20 +333,22 @@ def test_twscrape_fetch_with_replies(mock_gather: MagicMock, mock_api_cls: Magic
     ]
     mock_gather.return_value = tweets
 
-    config = CodexXMonitorConfig.model_validate({
-        "source": "twscrape",
-        "include_replies": True,
-        "include_reposts": True,
-    })
+    config = CodexXMonitorConfig.model_validate(
+        {
+            "source": "twscrape",
+            "include_replies": True,
+            "include_reposts": True,
+        }
+    )
     context = FakeContext(config.model_dump(), [])
-    
+
     posts = asyncio.run(TwscrapeSource().fetch(context, config))
-    
+
     assert len(posts) == 3
     assert posts[0].id == "1"
     assert posts[1].is_reply is True
     assert posts[2].is_repost is True
-    
+
     mock_api.user_tweets_and_replies.assert_called_once_with("12345", limit=40)
     mock_api.pool.add_account_cookies.assert_called_once()
 
@@ -351,30 +361,32 @@ def test_twscrape_fetch_without_replies(mock_gather: MagicMock, mock_api_cls: Ma
     mock_api.user_by_login = AsyncMock(return_value=MagicMock(id="12345"))
     mock_api.user_tweets = MagicMock()
     mock_api.pool.add_account_cookies = AsyncMock()
-    
+
     mock_gather.return_value = [make_fake_tweet("1")]
 
-    config = CodexXMonitorConfig.model_validate({
-        "source": "twscrape",
-        "include_replies": False,
-    })
+    config = CodexXMonitorConfig.model_validate(
+        {
+            "source": "twscrape",
+            "include_replies": False,
+        }
+    )
     context = FakeContext(config.model_dump(), [])
-    
+
     posts = asyncio.run(TwscrapeSource().fetch(context, config))
-    
+
     assert len(posts) == 1
     mock_api.user_tweets.assert_called_once_with("12345", limit=40)
 
 
 def test_twscrape_cookie_validation() -> None:
     config = CodexXMonitorConfig.model_validate({"source": "twscrape"})
-    
+
     # Missing auth_token
     context_no_auth = FakeContext(config.model_dump(), [], secret="ct0=abc")
     context_no_auth.secret = "ct0=abc"  # Override
     with pytest.raises(SourceError, match="does not contain auth_token"):
         asyncio.run(TwscrapeSource().fetch(context_no_auth, config))
-        
+
     # Missing ct0
     context_no_ct0 = FakeContext(config.model_dump(), [], secret="auth_token=abc")
     context_no_ct0.secret = "auth_token=abc"  # Override
@@ -391,7 +403,7 @@ def test_twscrape_no_account_error_mapping(mock_api_cls: MagicMock) -> None:
 
     config = CodexXMonitorConfig.model_validate({"source": "twscrape"})
     context = FakeContext(config.model_dump(), [])
-    
+
     with pytest.raises(SourceRateLimited, match="source rate limited"):
         asyncio.run(TwscrapeSource().fetch(context, config))
 
@@ -401,14 +413,16 @@ def test_twscrape_general_exception_masking(mock_api_cls: MagicMock) -> None:
     mock_api = MagicMock()
     mock_api_cls.return_value = mock_api
     mock_api.pool.add_account_cookies = AsyncMock()
-    mock_api.user_by_login = AsyncMock(side_effect=RuntimeError("Some X details with cookie values"))
+    mock_api.user_by_login = AsyncMock(
+        side_effect=RuntimeError("Some X details with cookie values")
+    )
 
     config = CodexXMonitorConfig.model_validate({"source": "twscrape"})
     context = FakeContext(config.model_dump(), [])
-    
+
     with pytest.raises(SourceError) as caught:
         asyncio.run(TwscrapeSource().fetch(context, config))
-    
+
     # Verify the original exception message that might contain cookie details is masked
     assert "Some X details" not in str(caught.value)
     assert "twscrape request failed" in str(caught.value)
@@ -426,14 +440,12 @@ def test_twscrape_temp_dir_deleted(mock_gather: MagicMock, mock_api_cls: MagicMo
 
     config = CodexXMonitorConfig.model_validate({"source": "twscrape"})
     context = FakeContext(config.model_dump(), [])
-    
+
     # We will patch Path.exists to check temporary accounts.db deletion behavior
     with patch("plugins.builtin.codex_x_monitor.sources.TemporaryDirectory") as mock_temp_dir:
-        mock_temp_dir_obj = MagicMock()
         mock_temp_dir.return_value.__enter__.return_value = "/mock/temp/dir"
-        
+
         asyncio.run(TwscrapeSource().fetch(context, config))
-        
+
         # Verify the context manager cleanup was called
         mock_temp_dir.return_value.__exit__.assert_called_once()
-

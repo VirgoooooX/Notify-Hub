@@ -73,7 +73,7 @@ jobs:
           load: true
           tags: notify-hub:0.3.0
       - name: Scan image
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.28.0
         with:
           image-ref: notify-hub:0.3.0
           severity: CRITICAL,HIGH

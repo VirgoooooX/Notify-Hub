@@ -245,9 +245,7 @@ class TwscrapeSource:
 
                 user = await api.user_by_login(config.username)
                 if user is None:
-                    raise SourceParseError(
-                        f"X user @{config.username} was not found"
-                    )
+                    raise SourceParseError(f"X user @{config.username} was not found")
 
                 if config.include_replies:
                     iterator = api.user_tweets_and_replies(
@@ -269,9 +267,7 @@ class TwscrapeSource:
         except Exception as exc:
             # Do not persist third-party exception bodies that might contain
             # account details or response data.
-            raise SourceError(
-                f"twscrape request failed: {type(exc).__name__}"
-            ) from exc
+            raise SourceError(f"twscrape request failed: {type(exc).__name__}") from exc
 
         posts: list[XPost] = []
 
@@ -300,11 +296,7 @@ class TwscrapeSource:
         normalized = cookie.casefold()
 
         if "auth_token=" not in normalized:
-            raise SourceError(
-                "twscrape_cookie does not contain auth_token"
-            )
+            raise SourceError("twscrape_cookie does not contain auth_token")
 
         if "ct0=" not in normalized:
-            raise SourceError(
-                "twscrape_cookie does not contain ct0"
-            )
+            raise SourceError("twscrape_cookie does not contain ct0")

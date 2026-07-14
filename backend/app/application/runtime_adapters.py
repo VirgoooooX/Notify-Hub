@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from app.application.event_service import EventService
 from app.application.reminder_service import EventAcceptance, ReminderEventDraft
 from app.infrastructure.database.models import WeComIdentity
@@ -67,6 +69,12 @@ class PluginSecretResolverAdapter:
         self._store = store
 
     async def resolve(self, plugin_id: str, name: str) -> str:
+        # Try loading from env first for cloud-native Docker environments
+        env_key = f"NOTIFY_HUB_PLUGIN_{plugin_id.upper()}_SECRET_{name.upper()}"
+        env_val = os.environ.get(env_key)
+        if env_val is not None:
+            return env_val
+
         if self._store is None:
             raise RuntimeError("plugin secret storage is not configured")
         value = await self._store.get("plugin", plugin_id, name)
