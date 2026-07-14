@@ -4,6 +4,8 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from app.application.media_service import MediaService
+from app.config import Settings
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.plugin_models import (
     PluginConfig,
@@ -26,8 +28,6 @@ from app.plugin_runtime.registry import PluginRegistry
 from app.plugin_runtime.runner import PluginRunner, RunOutcome
 from app.plugin_runtime.schedule import next_run_at
 from app.plugin_runtime.schema import validate_json_schema
-from app.application.media_service import MediaService
-from app.config import Settings
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -198,9 +198,9 @@ class PluginService:
                     old_manifest = row.manifest
                     if isinstance(old_manifest, dict):
                         old_default = old_manifest.get("default_schedule")
-                        # NOTE: Dict comparison is order-independent in Python. We assume that row.schedule
-                        # matches old_default if the user never customized it. If a custom schedule matches the
-                        # old default exactly, it gets updated to the new default. This once-off behavior is expected.
+                        # Dict comparison is order-independent. Treat row.schedule as unchanged
+                        # when it matches the old default. A custom schedule identical to that
+                        # default is intentionally migrated once.
                         if old_default is not None and row.schedule == old_default:
                             row.schedule = manifest.default_schedule.model_dump(mode="json")
                             if row.enabled and not row.circuit_open:
@@ -436,10 +436,11 @@ class PluginService:
             allowed_private_networks=manifest.permissions.private_network,
         )
         from app.plugin_runtime.context import PluginMediaPublisher
+
         key_str = "development-only-change-me-public-media-signing-key"
         if self._settings and self._settings.public_media_signing_key:
             key_str = self._settings.public_media_signing_key.get_secret_value()
-        
+
         media_publisher = PluginMediaPublisher(
             plugin_id=plugin_id,
             media_write_allowed=manifest.permissions.media_write,

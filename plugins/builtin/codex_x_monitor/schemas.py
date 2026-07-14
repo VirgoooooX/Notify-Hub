@@ -8,6 +8,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from plugins.shared.x_monitor.models import XPost as XPost
+
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
 PLUGIN_VERSION = "0.2.0"
@@ -81,10 +83,6 @@ class CodexXMonitorConfig(BaseModel):
         if self.source == "rss" and self.feed_url is None:
             raise ValueError("feed_url is required when source is rss")
         return self
-
-
-from plugins.shared.x_monitor.models import XPost as XPost
-
 
 
 class ArticleDraft(BaseModel):

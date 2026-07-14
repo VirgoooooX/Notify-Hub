@@ -130,7 +130,7 @@ async def get_settings(
             "retention_days": await _setting(
                 request, "retention_days", settings.media_retention_seconds // 86400
             ),
-            "version": "0.3.0",
+            "version": request.app.version,
             "wecom": wecom,
         },
         "request_id": request.state.request_id,

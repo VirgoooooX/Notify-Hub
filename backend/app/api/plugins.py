@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from app.api.dependencies import require_admin
@@ -9,18 +10,18 @@ from app.application.plugin_service import (
     PluginRunConflictError,
     PluginService,
 )
+from app.application.runtime_adapters import _read_env_key_manually
 from app.infrastructure.database.models import Secret
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
-import os
-from app.application.runtime_adapters import _read_env_key_manually
+
 
 async def check_secret_status(plugin_id: str, name: str, store: Any) -> dict[str, Any]:
     env_key = f"NOTIFY_HUB_PLUGIN_{plugin_id.upper()}_SECRET_{name.upper()}"
     if os.environ.get(env_key) is not None or _read_env_key_manually(env_key) is not None:
         return {"configured": True, "source": "env"}
-    
+
     global_key = f"NOTIFY_HUB_GLOBAL_SECRET_{name.upper()}"
     if os.environ.get(global_key) is not None or _read_env_key_manually(global_key) is not None:
         return {"configured": True, "source": "env"}
@@ -28,6 +29,7 @@ async def check_secret_status(plugin_id: str, name: str, store: Any) -> dict[str
     if store is not None and await store.configured("plugin", plugin_id, name):
         return {"configured": True, "source": "db"}
     return {"configured": False, "source": None}
+
 
 router = APIRouter(prefix="/plugins", tags=["plugins"], dependencies=[Depends(require_admin)])
 
@@ -82,11 +84,13 @@ async def list_plugins(request: Request) -> DataResponse:
         secrets_status = []
         for name in names:
             status_info = await check_secret_status(item["id"], name, store)
-            secrets_status.append({
-                "name": name,
-                "configured": status_info["configured"],
-                "source": status_info["source"],
-            })
+            secrets_status.append(
+                {
+                    "name": name,
+                    "configured": status_info["configured"],
+                    "source": status_info["source"],
+                }
+            )
         item["secrets"] = secrets_status
     return DataResponse(data=items)
 
@@ -162,7 +166,7 @@ def _secret_names(request: Request, plugin_id: str) -> list[str]:
 async def list_secrets(plugin_id: str, request: Request) -> DataResponse:
     names = _secret_names(request, plugin_id)
     store = request.app.state.secret_store
-    
+
     data = []
     for name in names:
         status_info = await check_secret_status(plugin_id, name, store)
@@ -178,12 +182,14 @@ async def list_secrets(plugin_id: str, request: Request) -> DataResponse:
                 )
                 if row:
                     updated_at = row.updated_at
-        data.append({
-            "name": name,
-            "configured": status_info["configured"],
-            "source": status_info["source"],
-            "updated_at": updated_at,
-        })
+        data.append(
+            {
+                "name": name,
+                "configured": status_info["configured"],
+                "source": status_info["source"],
+                "updated_at": updated_at,
+            }
+        )
     return DataResponse(data=data)
 
 

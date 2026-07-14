@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
-from plugins.shared.x_monitor.models import XPost
 from plugins.shared.x_monitor.media import select_cover_image
+from plugins.shared.x_monitor.models import XPost
 from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource
 
 
@@ -91,7 +92,7 @@ async def test_twscrape_timeline_source_fetches_and_parses() -> None:
     mock_tweet_1.date = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     mock_tweet_1.retweetedTweet = None
     mock_tweet_1.inReplyToTweetId = None
-    
+
     mock_photo = MagicMock()
     mock_photo.url = "https://pbs.twimg.com/media/photo.jpg"
     mock_tweet_1.media.photos = [mock_photo]
@@ -99,18 +100,20 @@ async def test_twscrape_timeline_source_fetches_and_parses() -> None:
     mock_tweet_1.media.animated = []
     mock_tweet_1.quotedTweet = None
 
-    mock_iterator = MagicMock()
-    
-    with patch("plugins.shared.x_monitor.twscrape_source.API", return_value=mock_api_instance), \
-         patch("plugins.shared.x_monitor.twscrape_source.gather", AsyncMock(return_value=[mock_tweet_1])):
-         
-         posts = await source.fetch(mock_context, "testuser", 10, False)
-         
-         assert len(posts) == 1
-         p = posts[0]
-         assert p.id == "1001"
-         assert p.author_username == "testuser"
-         assert p.text == "First tweet #HWG"
-         assert str(p.photo_urls[0]) == "https://pbs.twimg.com/media/photo.jpg"
-         assert p.is_repost is False
-         assert p.is_reply is False
+    with (
+        patch("plugins.shared.x_monitor.twscrape_source.API", return_value=mock_api_instance),
+        patch(
+            "plugins.shared.x_monitor.twscrape_source.gather",
+            AsyncMock(return_value=[mock_tweet_1]),
+        ),
+    ):
+        posts = await source.fetch(mock_context, "testuser", 10, False)
+
+        assert len(posts) == 1
+        p = posts[0]
+        assert p.id == "1001"
+        assert p.author_username == "testuser"
+        assert p.text == "First tweet #HWG"
+        assert str(p.photo_urls[0]) == "https://pbs.twimg.com/media/photo.jpg"
+        assert p.is_repost is False
+        assert p.is_reply is False

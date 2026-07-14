@@ -1,20 +1,19 @@
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from plugins.shared.x_monitor.media import select_cover_image
-from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource
 from plugins.shared.x_monitor.models import XPost
+from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource
 
 from .matcher import match_hwg
 from .schemas import (
     STATE_KEY,
     ArticleDraft,
-    FabrizioHwgConfig,
     EventDraft,
+    FabrizioHwgConfig,
     MonitorState,
     PluginContext,
     PluginRunResult,
@@ -74,7 +73,7 @@ class FabrizioHwgPlugin:
                 config.twscrape_fetch_limit,
                 config.include_replies,
             ),
-            key=_post_sort_key
+            key=_post_sort_key,
         )
         raw_state = await context.get_state(STATE_KEY, None)
         state = MonitorState.model_validate(raw_state or {})
@@ -117,11 +116,11 @@ class FabrizioHwgPlugin:
                     cover_url = await context.media.publish_image_url(original_cover)
                 except Exception as exc:
                     context.logger.warning(
-                        "tweet_cover_proxy_failed",
-                        post_id=post.id,
-                        error=str(exc)
+                        "tweet_cover_proxy_failed", post_id=post.id, error=str(exc)
                     )
-                    cover_url = str(config.fallback_cover_url) if config.fallback_cover_url else None
+                    cover_url = (
+                        str(config.fallback_cover_url) if config.fallback_cover_url else None
+                    )
             else:
                 cover_url = str(config.fallback_cover_url) if config.fallback_cover_url else None
 

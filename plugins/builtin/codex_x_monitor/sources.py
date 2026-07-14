@@ -2,20 +2,21 @@
 
 from __future__ import annotations
 
-import os
 import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any, Protocol
 from xml.etree.ElementTree import Element
 
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
-from twscrape import API, gather
-from twscrape.accounts_pool import NoAccountError
+
+from plugins.shared.x_monitor.twscrape_source import (
+    TwscrapeTimelineSource,
+    XMonitorError,
+    XMonitorRateLimitedError,
+)
 
 from .schemas import CodexXMonitorConfig, PluginContext, XPost
 
@@ -214,9 +215,6 @@ class XApiSource:
             raise SourceError(f"X API returned HTTP {response.status_code}")
 
 
-from plugins.shared.x_monitor.twscrape_source import XMonitorError, XMonitorRateLimitedError, TwscrapeTimelineSource
-
-
 class TwscrapeSource:
     """Use a temporary twscrape account pool seeded from an encrypted plugin secret."""
 
@@ -239,4 +237,3 @@ class TwscrapeSource:
             raise SourceRateLimited() from exc
         except XMonitorError as exc:
             raise SourceError(str(exc)) from exc
-

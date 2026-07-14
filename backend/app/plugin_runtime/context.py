@@ -2,17 +2,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
 from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.http import RestrictedHttpClient
 
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
-    from app.application.media_service import MediaService
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.application.media_service import MediaService
 
 
 @dataclass(frozen=True)
@@ -51,9 +51,9 @@ class PluginContext:
         "_state",
         "http",
         "logger",
+        "media",
         "plugin_id",
         "run_id",
-        "media",
     )
 
     def __init__(
@@ -143,18 +143,24 @@ class PluginMediaPublisher:
         downloader = self._media_service.downloader
         if downloader is None:
             from app.media.errors import MediaError
+
             raise MediaError("media_download_disabled", "External media download is disabled")
 
         from app.media.validation import MediaKind
-        data = await downloader.download(source_url, max_bytes=self._media_service.limit_for(MediaKind.IMAGE))
 
-        try:
-            from app.media.processing import make_blurred_background_cover
-            data = make_blurred_background_cover(data)
-        except Exception:
-            pass
+        data = await downloader.download(
+            source_url, max_bytes=self._media_service.limit_for(MediaKind.IMAGE)
+        )
 
-        duration = retention_seconds if retention_seconds is not None else self._media_service.retention_seconds
+        from app.media.processing import make_blurred_background_cover
+
+        data = make_blurred_background_cover(data)
+
+        duration = (
+            retention_seconds
+            if retention_seconds is not None
+            else self._media_service.retention_seconds
+        )
 
         async with self._factory() as session:
             asset = await self._media_service.create(
@@ -167,10 +173,11 @@ class PluginMediaPublisher:
             )
 
         import time
+
         expires = int(time.time()) + duration
 
         from app.infrastructure.security.tokens import generate_media_signature
+
         sig = generate_media_signature(asset.id, expires, self._signing_key.decode("utf-8"))
         base_url = self._public_base_url or "http://localhost:8000"
         return f"{base_url.rstrip('/')}/public/media/{asset.id}?expires={expires}&sig={sig}"
-

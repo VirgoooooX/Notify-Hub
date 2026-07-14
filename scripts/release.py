@@ -103,6 +103,43 @@ def update_frontend_package(project_root: Path, new_version: str) -> None:
             print(f"Warning: Failed to format package-lock.json with npm: {exc}")
 
 
+def update_frontend_files_version(project_root: Path, new_version: str) -> None:
+    # 1. Update LoginView.vue
+    login_path = project_root / "frontend" / "src" / "views" / "LoginView.vue"
+    if login_path.is_file():
+        content = login_path.read_text(encoding="utf-8")
+        new_content = re.sub(
+            r'(NOTIFY HUB / RELEASE\s+)([0-9.]+)',
+            f"\\g<1>{new_version}",
+            content
+        )
+        login_path.write_text(new_content, encoding="utf-8")
+        print(f"Updated: frontend/src/views/LoginView.vue")
+
+    # 2. Update SettingsView.vue
+    settings_path = project_root / "frontend" / "src" / "views" / "SettingsView.vue"
+    if settings_path.is_file():
+        content = settings_path.read_text(encoding="utf-8")
+        new_content = re.sub(
+            r"(version:\s*')([0-9.]+)(')",
+            f"\\g<1>{new_version}\\g<3>",
+            content
+        )
+        settings_path.write_text(new_content, encoding="utf-8")
+        print(f"Updated: frontend/src/views/SettingsView.vue")
+
+    # 3. Update AppLayout.vue
+    layout_path = project_root / "frontend" / "src" / "layouts" / "AppLayout.vue"
+    if layout_path.is_file():
+        content = layout_path.read_text(encoding="utf-8")
+        new_content = re.sub(
+            r'(OPERATIONS\s+/\s+)([0-9.]+)',
+            f"\\g<1>{new_version}",
+            content
+        )
+        layout_path.write_text(new_content, encoding="utf-8")
+        print(f"Updated: frontend/src/layouts/AppLayout.vue")
+
 def git_operations(project_root: Path, new_version: str, auto_push: bool) -> None:
     tag_name = f"v{new_version}"
     commit_msg = f"bump: release {tag_name}"
@@ -114,30 +151,35 @@ def git_operations(project_root: Path, new_version: str, auto_push: bool) -> Non
         print("Warning: git is not installed or not in PATH. Skipping git commits.")
         return
 
-    # Add modified files
-    subprocess.run(["git", "add", "pyproject.toml"], cwd=str(project_root), check=True)
-    if (project_root / "backend" / "app" / "main.py").is_file():
-        subprocess.run(["git", "add", "backend/app/main.py"], cwd=str(project_root), check=True)
-    if (project_root / "frontend" / "package.json").is_file():
-        subprocess.run(
-            ["git", "add", "frontend/package.json", "frontend/package-lock.json"],
-            cwd=str(project_root),
-            check=True,
-        )
-
-    # Format backend using ruff
+    # 1. Format backend using ruff BEFORE staging
     subprocess.run(
         ["uv", "run", "ruff", "format", "backend/app/main.py"],
         cwd=str(project_root),
         check=False,
         stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
 
-    # Commit
+    # 2. Stage all version-modified files together
+    files_to_stage = [
+        "pyproject.toml",
+        "backend/app/main.py",
+        "frontend/package.json",
+        "frontend/package-lock.json",
+        "frontend/src/views/LoginView.vue",
+        "frontend/src/views/SettingsView.vue",
+        "frontend/src/layouts/AppLayout.vue",
+    ]
+    for rel_path in files_to_stage:
+        file_path = project_root / rel_path
+        if file_path.is_file():
+            subprocess.run(["git", "add", rel_path], cwd=str(project_root), check=True)
+
+    # 3. Create the unified commit
     subprocess.run(["git", "commit", "-m", commit_msg], cwd=str(project_root), check=True)
     print(f"\nCreated Git Commit: {commit_msg}")
 
-    # Tag
+    # 4. Tag the commit
     subprocess.run(
         ["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"],
         cwd=str(project_root),
@@ -218,6 +260,7 @@ def main() -> None:
     update_pyproject(project_root, new_version)
     update_backend_main(project_root, new_version)
     update_frontend_package(project_root, new_version)
+    update_frontend_files_version(project_root, new_version)
 
     # Commit and tag
     auto_push = args.push

@@ -21,7 +21,9 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     log_dir: Path = Path("./logs")
     jwt_secret: SecretStr = Field(default=SecretStr("development-only-change-me"))
-    public_media_signing_key: SecretStr = Field(default=SecretStr("development-only-change-me-public-media-signing-key"))
+    public_media_signing_key: SecretStr = Field(
+        default=SecretStr("development-only-change-me-public-media-signing-key")
+    )
     secret_encryption_key: SecretStr | None = None
     access_token_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_days: int = Field(default=30, ge=1, le=365)
@@ -95,9 +97,13 @@ class Settings(BaseSettings):
             if len(encryption_key) < 32:
                 raise ValueError("production secret encryption key must be at least 32 characters")
             signing_key = self.public_media_signing_key.get_secret_value()
-            if len(signing_key) < 32 or signing_key == "development-only-change-me-public-media-signing-key":
-                raise ValueError("production public media signing key must be at least 32 characters")
-
+            if (
+                len(signing_key) < 32
+                or signing_key == "development-only-change-me-public-media-signing-key"
+            ):
+                raise ValueError(
+                    "production public media signing key must be at least 32 characters"
+                )
 
         outbound_wecom = (
             bool(self.wecom_corp_id and self.wecom_corp_id.strip()),

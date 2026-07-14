@@ -8,3 +8,37 @@ export interface Person{id:string;name:string;is_default?:boolean;enabled?:boole
 export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allow_broadcast?:boolean;rate_limit_per_minute?:number;last_used_at?:string}
 export interface Plugin{id:string;name:string;version?:string;description?:string;status:Status;enabled:boolean;schedule?:string;last_run_at?:string;next_run_at?:string;consecutive_failures?:number;secrets?:Array<{name:string;configured:boolean;source?:string;updated_at?:string}>}
 export interface Reminder{id:string;title:string;content?:string;status:Status;schedule_type:'once'|'recurring'|string;next_run_at?:string;timezone?:string;require_ack:boolean;ack_policy?:'any'|'all'|'each';repeat_interval_seconds?:number;max_attempts?:number;attempt_count?:number;stop_at?:string;recipients?:Array<{id:string;name?:string;acknowledged_at?:string}>;timeline?:Array<{id:string;type:string;message:string;occurred_at:string}>}
+
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue }
+
+export interface PluginConfigSchema {
+  type?: 'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean'
+  title?: string
+  description?: string
+  default?: JsonValue
+  enum?: JsonPrimitive[]
+  properties?: Record<string, PluginConfigSchema>
+  items?: PluginConfigSchema
+  required?: string[]
+  minimum?: number
+  maximum?: number
+}
+
+export interface PluginDetailsResponse {
+  timezone?: string
+  config?: Record<string, JsonValue>
+  config_schema?: PluginConfigSchema
+  schedule?: {
+    type?: string
+    seconds?: number
+  }
+}
+
+export interface PluginSecret {
+  name: string
+  configured: boolean
+  source?: string
+  updated_at?: string
+}
+

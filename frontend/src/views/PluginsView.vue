@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { api } from '@/lib/api';
-import type { Plugin, Person } from '@/types';
+import type { Plugin, Person, JsonValue, PluginDetailsResponse, PluginSecret } from '@/types';
 import PageHeader from '@/components/PageHeader.vue';
 import StatusBadge from '@/components/StatusBadge.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -13,7 +13,7 @@ const items = ref<Plugin[]>([]);
 const people = ref<Person[]>([]);
 const running = ref(new Set<string>());
 const target = ref<Plugin>();
-const editing = ref<any | null>(null);
+const editing = ref<(Plugin & { secrets?: PluginSecret[] }) | null>(null);
 const busy = ref(false);
 
 const editForm = reactive({
@@ -80,26 +80,26 @@ async function toggle() {
 async function configure(item: Plugin) {
   try {
     const [details, secretsData] = await Promise.all([
-      api.get<any>(`/admin/plugins/${item.id}`),
-      api.get<any[]>(`/admin/plugins/${item.id}/secrets`),
+      api.get<PluginDetailsResponse>(`/admin/plugins/${item.id}`),
+      api.get<PluginSecret[]>(`/admin/plugins/${item.id}/secrets`),
     ]);
 
     editing.value = { ...item, secrets: secretsData };
 
     const conf = details.config || {};
-    editForm.username = conf.username || '';
-    editForm.twscrape_fetch_limit = conf.twscrape_fetch_limit || 40;
+    editForm.username = (conf.username as string) || '';
+    editForm.twscrape_fetch_limit = (conf.twscrape_fetch_limit as number) || 40;
 
-    const sched = details.schedule || item.schedule || {};
-    editForm.interval_seconds = sched.seconds || 180;
+    const sched = details.schedule && typeof details.schedule === 'object' ? details.schedule : null;
+    editForm.interval_seconds = sched?.seconds || 180;
 
     editForm.include_replies = conf.include_replies !== false;
     editForm.include_reposts = !!conf.include_reposts;
-    editForm.source = conf.source || 'twscrape';
-    editForm.feed_url = conf.feed_url || '';
-    editForm.cover_image_url = conf.cover_image_url || '';
-    editForm.fallback_cover_url = conf.fallback_cover_url || '';
-    editForm.recipients = conf.recipients || [];
+    editForm.source = (conf.source as string) || 'twscrape';
+    editForm.feed_url = (conf.feed_url as string) || '';
+    editForm.cover_image_url = (conf.cover_image_url as string) || '';
+    editForm.fallback_cover_url = (conf.fallback_cover_url as string) || '';
+    editForm.recipients = (conf.recipients as string[]) || [];
 
     editForm.secrets = {};
   } catch (e) {
@@ -112,7 +112,7 @@ async function saveConfig() {
   busy.value = true;
   try {
     const pluginId = editing.value.id;
-    const configData: Record<string, any> = {
+    const configData: Record<string, JsonValue> = {
       username: editForm.username,
       include_replies: editForm.include_replies,
       include_reposts: editForm.include_reposts,
@@ -188,11 +188,11 @@ const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: '
         <label>抓取周期（分钟）</label>
         <input 
           :value="Math.round(editForm.interval_seconds / 60)" 
-          @input="editForm.interval_seconds = Number(($event.target as HTMLInputElement).value) * 60" 
           class="input" 
           type="number" 
           min="1" 
-          required
+          required 
+          @input="editForm.interval_seconds = Number(($event.target as HTMLInputElement).value) * 60"
         >
       </div>
 
@@ -200,9 +200,15 @@ const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: '
         <div class="field">
           <label>数据源</label>
           <select v-model="editForm.source" class="select">
-            <option value="rss">RSS</option>
-            <option value="x_api">X API</option>
-            <option value="twscrape">twscrape</option>
+            <option value="rss">
+              RSS
+            </option>
+            <option value="x_api">
+              X API
+            </option>
+            <option value="twscrape">
+              twscrape
+            </option>
           </select>
         </div>
 
@@ -246,7 +252,7 @@ const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: '
         <label>接收人</label>
         <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-top: 8px;">
           <label v-for="person in people" :key="person.id" style="display: flex; align-items: center; gap: 6px; font-weight: normal; cursor: pointer;">
-            <input type="checkbox" :value="person.id" v-model="editForm.recipients">
+            <input v-model="editForm.recipients" type="checkbox" :value="person.id">
             {{ person.name }}
           </label>
         </div>
@@ -262,9 +268,9 @@ const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: '
             </span>
           </div>
           <input 
+            v-model="editForm.secrets[sec.name]" 
             type="password" 
             class="input" 
-            v-model="editForm.secrets[sec.name]" 
             :placeholder="sec.source === 'env' ? '已通过环境变量配置' : (sec.configured ? '若要更新，在此输入新值；留空不修改' : '请输入值')"
             :disabled="sec.source === 'env'"
           >

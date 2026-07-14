@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import secrets
 from datetime import timedelta
 from typing import Any
@@ -50,14 +51,11 @@ def create_api_key() -> str:
     return f"nfy_{secrets.token_urlsafe(32)}"
 
 
-import hmac
-
 def generate_media_signature(asset_id: str, expires: int, key: str) -> str:
-    message = f"{asset_id}:{expires}".encode("utf-8")
+    message = f"{asset_id}:{expires}".encode()
     return hmac.new(key.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 
 def verify_media_signature(asset_id: str, expires: int, sig: str, key: str) -> bool:
     expected = generate_media_signature(asset_id, expires, key)
     return hmac.compare_digest(expected, sig)
-

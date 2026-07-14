@@ -88,9 +88,13 @@ class TwscrapeTimelineSource:
                 if getattr(media, "photos", None):
                     photos = [p.url for p in media.photos if getattr(p, "url", None)]
                 if getattr(media, "videos", None):
-                    videos = [v.thumbnailUrl for v in media.videos if getattr(v, "thumbnailUrl", None)]
+                    videos = [
+                        v.thumbnailUrl for v in media.videos if getattr(v, "thumbnailUrl", None)
+                    ]
                 if getattr(media, "animated", None):
-                    animated = [a.thumbnailUrl for a in media.animated if getattr(a, "thumbnailUrl", None)]
+                    animated = [
+                        a.thumbnailUrl for a in media.animated if getattr(a, "thumbnailUrl", None)
+                    ]
 
             quoted_photos = []
             quoted = getattr(tweet, "quotedTweet", None)

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from plugins.builtin.fabrizio_hwg_monitor.plugin import FabrizioHwgPlugin, EmitEventError
-from plugins.builtin.fabrizio_hwg_monitor.schemas import STATE_KEY, FabrizioHwgConfig, EventDraft
+
+from plugins.builtin.fabrizio_hwg_monitor.plugin import FabrizioHwgPlugin
+from plugins.builtin.fabrizio_hwg_monitor.schemas import STATE_KEY, EventDraft
 from plugins.shared.x_monitor.models import XPost
 
 
@@ -15,7 +16,9 @@ class FakeMedia:
     def __init__(self) -> None:
         self.published: list[str] = []
 
-    async def publish_image_url(self, source_url: str, *, retention_seconds: int | None = None) -> str:
+    async def publish_image_url(
+        self, source_url: str, *, retention_seconds: int | None = None
+    ) -> str:
         self.published.append(source_url)
         if "fail" in source_url:
             raise RuntimeError("Download failed")
@@ -143,7 +146,7 @@ async def test_plugin_incremental_run_matches_and_emits() -> None:
 
     # Should have published the cover image
     assert "https://pbs.twimg.com/media/player.jpg" in context.media.published
-    
+
     # Check emitted event content
     assert len(context.events) == 1
     event = context.events[0]
@@ -189,7 +192,7 @@ async def test_plugin_cover_proxy_failure_falls_back() -> None:
     result = await plugin.run(context)
     assert result.status == "success"
     assert result.emitted_events == 1
-    
+
     # Check emitted event falls back to fallback cover
     assert len(context.events) == 1
     event = context.events[0]

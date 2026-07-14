@@ -310,7 +310,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
     from app.api.events import router as events_router
-    from app.api.media import router as media_router, public_router
+    from app.api.media import public_router
+    from app.api.media import router as media_router
     from app.api.plugins import router as plugins_router
     from app.api.reminders import router as reminders_router
     from app.api.wecom_callback import router as callback_router

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from datetime import datetime, UTC
-from typing import Annotated
 import re
 import time
+from datetime import UTC, datetime
+from typing import Annotated
 
 from app.api.dependencies import get_session, require_admin
 from app.api.errors import AppError
 from app.application.media_service import MediaService
 from app.infrastructure.database.models import Admin
+from app.infrastructure.security.tokens import verify_media_signature
 from app.media.errors import MediaError
 from app.media.validation import MediaKind
-from app.infrastructure.security.tokens import verify_media_signature
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -193,7 +193,7 @@ async def get_public_media(
     try:
         content = await service.read(asset)
     except Exception as exc:
-        raise AppError("read_failed", "Failed to read media asset", 500)
+        raise AppError("read_failed", "Failed to read media asset", 500) from exc
 
     headers = {
         "Content-Type": asset.mime_type,
@@ -202,4 +202,3 @@ async def get_public_media(
         "ETag": asset.checksum_sha256,
     }
     return Response(content=content, headers=headers)
-

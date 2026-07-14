@@ -157,7 +157,6 @@ async def test_plugin_state_optimistic_lock(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_plugin_service_updates_schedule_on_initialize(tmp_path: Path) -> None:
     from app.infrastructure.database.plugin_models import PluginRecord
-    from sqlalchemy import select
 
     plugin_root = tmp_path / "builtin"
     plugin_dir = plugin_root / "fake_monitor"

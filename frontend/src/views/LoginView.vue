@@ -6,7 +6,7 @@
         <p class="eyebrow">
           SELF-HOSTED SIGNAL CONTROL
         </p><h1>每一个信号，<br>都有迹可循。</h1><p>统一接收事件、调度提醒，并追踪每一次企业微信投递。可靠落库，清晰恢复。</p>
-      </div><small class="mono">NOTIFY HUB / RELEASE 0.3.0</small>
+      </div><small class="mono">NOTIFY HUB / RELEASE 0.4.14</small>
     </section><section class="login-form-wrap">
       <form class="login-form" @submit.prevent="submit">
         <p class="eyebrow">

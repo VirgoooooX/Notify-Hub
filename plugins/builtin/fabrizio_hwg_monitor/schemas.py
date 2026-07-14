@@ -6,8 +6,6 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
 
-from plugins.shared.x_monitor.models import XPost
-
 STATE_KEY = "monitor_state"
 
 
@@ -97,7 +95,7 @@ class RestrictedHttpClient(Protocol):
         *,
         params: Mapping[str, str] | None = None,
         headers: Mapping[str, str] | None = None,
-        timeout: float,
+        timeout: float,  # noqa: ASYNC109 - mirrors the runtime HTTP client contract.
     ) -> HttpResponse: ...
 
 

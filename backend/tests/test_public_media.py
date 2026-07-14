@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import struct
-import zlib
 import time
+import zlib
 from typing import Any
 
 import httpx
 import pytest
-from app.media.validation import MediaKind
-from app.infrastructure.security.tokens import generate_media_signature
 from app.infrastructure.database.media_models import MediaAsset
+from app.infrastructure.security.tokens import generate_media_signature
+from app.media.validation import MediaKind
 from sqlalchemy import update
 
 
@@ -72,7 +72,9 @@ async def test_public_media_retrieval_success_and_errors(
     # 4. Request with an expired signature (URL parameter expired)
     past_expires = int(time.time()) - 10
     expired_sig = generate_media_signature(image_id, past_expires, key)
-    expired_response = await client.get(f"/public/media/{image_id}?expires={past_expires}&sig={expired_sig}")
+    expired_response = await client.get(
+        f"/public/media/{image_id}?expires={past_expires}&sig={expired_sig}"
+    )
     assert expired_response.status_code == 403
     assert "Signature has expired" in expired_response.text
 
@@ -86,7 +88,9 @@ async def test_public_media_retrieval_success_and_errors(
     traversal_id = "invalid-id-with-dot.png"
     # Even if signature was generated for it
     traversal_sig = generate_media_signature(traversal_id, expires, key)
-    traversal_response = await client.get(f"/public/media/{traversal_id}?expires={expires}&sig={traversal_sig}")
+    traversal_response = await client.get(
+        f"/public/media/{traversal_id}?expires={expires}&sig={traversal_sig}"
+    )
     assert traversal_response.status_code == 422
 
 
@@ -133,6 +137,7 @@ async def test_public_media_types_and_lifecycle(
         )
         expired_image_id = expired_image_asset.id
         from datetime import timedelta
+
         await session.execute(
             update(MediaAsset)
             .where(MediaAsset.id == expired_image_id)

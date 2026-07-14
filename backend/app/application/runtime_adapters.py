@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import functools
+import os
 from pathlib import Path
 
 from app.application.event_service import EventService
