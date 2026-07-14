@@ -96,6 +96,7 @@ plugins = ["pydantic.mypy"]
 strict = true
 warn_unreachable = true
 exclude = ["backend/migrations/versions", "(^|/)tests/"]
+mypy_path = "backend"
 
 [[tool.mypy.overrides]]
 module = ["feedparser", "filetype", "dateutil.*", "twscrape", "twscrape.*"]
