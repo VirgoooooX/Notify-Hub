@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <entry><id>tag:example,no-stable-id</id><title>Codex quota reset</title><updated>2026-07-13T10:00:00Z</updated><link href="https://example.com/no-id" /></entry>
+  <entry><id>2061106703446450396</id><title>Codex quota reset</title><updated>2026-07-13T14:00:00Z</updated><link href="https://x.com/thsottiaux/status/2061106703446450396" /></entry>
+  <entry><id>2061106703446450396</id><title>duplicate</title><updated>2026-07-13T14:00:00Z</updated><link href="https://x.com/thsottiaux/status/2061106703446450396" /></entry>
+</feed>

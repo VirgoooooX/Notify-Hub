@@ -1,0 +1,22 @@
+{
+  "id": "codex_x_monitor",
+  "name": "Codex X Monitor",
+  "version": "0.1.0",
+  "description": "监控指定 X 账号中的 Codex 用量重置消息",
+  "entrypoint": "plugin:CodexXMonitorPlugin",
+  "api_version": "1",
+  "kind": "monitor",
+  "trusted": true,
+  "default_schedule": {
+    "type": "interval",
+    "seconds": 600
+  },
+  "max_concurrency": 1,
+  "timeout_seconds": 60,
+  "permissions": {
+    "network": ["x.com", "api.x.com", "rss.example.com"],
+    "secrets": ["x_api_bearer_token"],
+    "broadcast": false,
+    "media_write": false
+  }
+}

@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "notify-hub"
+version = "0.3.0"
+description = "Self-hosted WeCom notification, reminder, and monitoring hub"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "aiosqlite>=0.21,<1",
+  "alembic>=1.16,<2",
+  "cryptography>=45,<47",
+  "defusedxml>=0.7.1,<1",
+  "fastapi>=0.116,<1",
+  "feedparser>=6.0.11,<7",
+  "filetype>=1.2,<2",
+  "httpx>=0.28,<1",
+  "pwdlib[argon2]>=0.2,<1",
+  "pydantic-settings>=2.10,<3",
+  "PyJWT>=2.10,<3",
+  "python-dateutil>=2.9,<3",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy[asyncio]>=2.0.41,<3",
+  "structlog>=25.4,<26",
+  "tzdata>=2026.1,<2027",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[project.optional-dependencies]
+# ASR/TTS providers are adapters. The built-in HTTP adapters use httpx from the
+# core dependencies; provider SDKs or local model runtimes belong in deployments.
+speech = []
+dev = [
+  "mypy>=1.16,<2",
+  "pytest>=8.4,<9",
+  "pytest-asyncio>=1.0,<2",
+  "pytest-cov>=6.2,<7",
+  "respx>=0.22,<1",
+  "ruff>=0.12,<1",
+  "types-defusedxml>=0.7.0,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/app"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers --cov=app --cov-report=term-missing --cov-report=xml"
+asyncio_mode = "auto"
+testpaths = ["backend/tests", "plugins"]
+markers = [
+  "integration: exercises database, HTTP, or application boundaries",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["backend/app"]
+
+[tool.coverage.report]
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  '\.\.\.',
+]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["backend/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC", "S", "SIM", "RUF"]
+ignore = [
+  "B008", # FastAPI's Depends(...) default is the documented DI pattern.
+  "S101", # Assertions are expected in pytest and domain invariants.
+  "RUF001", # Chinese user-facing copy intentionally uses full-width punctuation.
+  "UP042", # SQLAlchemy persists enum values; migrations must make enum changes explicit.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/**/*.py" = ["S105", "S106", "S107"]
+"backend/app/api/schemas.py" = ["S105"]
+"plugins/**/tests/**/*.py" = ["S105", "S106", "S107"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.mypy]
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unreachable = true
+exclude = ["backend/migrations/versions", "(^|/)tests/"]
+
+[[tool.mypy.overrides]]
+module = ["feedparser", "filetype", "dateutil.*"]
+ignore_missing_imports = true

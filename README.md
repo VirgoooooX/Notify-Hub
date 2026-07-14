@@ -114,12 +114,70 @@ Notify Hub 负责：
 
 ## 当前状态
 
-项目处于架构与开发规划阶段。
+当前代码已完成 `v0.3.0` 的 Phase 0～9 累计范围，包括可靠事件投递、企业微信渠道、插件运行时与 Codex X Monitor、管理后台、提醒/持续催办、回调交互及受控图片/语音能力。冻结后的发布边界和门禁见 [`docs/12-v0.3.0-release-contract.md`](docs/12-v0.3.0-release-contract.md)。
 
-进入编码后的第一项工作是：
+真实企业微信文本、交互卡片、图片、语音和回调仍需在配置有效凭据的部署环境完成手工验收；ASR/TTS 依赖部署方配置本地 Adapter，不在基础镜像内置模型。
 
-```text
-Phase 0 / PR 1：初始化后端、配置、结构化日志、SQLAlchemy、Alembic、健康检查、pytest 和 Docker 开发环境。
+## 本地开发与测试
+
+后端要求 Python 3.12，前端要求 Node.js 22。以下命令均在仓库根目录执行：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+Push-Location backend
+alembic upgrade head
+Pop-Location
+uvicorn app.main:app --app-dir backend --reload
 ```
 
-实现工作必须按照 [`docs/06-development-roadmap.md`](docs/06-development-roadmap.md) 的阶段和验收标准推进。
+另开终端启动前端：
+
+```powershell
+Set-Location frontend
+npm ci
+npm run dev
+```
+
+运行质量检查和测试：
+
+```powershell
+ruff format --check backend plugins
+ruff check backend plugins
+mypy backend/app plugins
+pytest
+Set-Location frontend
+npm run lint
+npm run typecheck
+npm run test
+npm run build
+```
+
+## Docker 单实例部署
+
+v0.3.0 使用单镜像、单容器和 SQLite；不得启动多个共享同一数据库的副本。本机需先安装 Docker，然后：
+
+1. 将 `.env.example` 复制为 `.env`，填写公开配置；不要把 Secret 写入仓库。
+2. 创建 `data`、`logs`、`media`、`secrets` 目录。
+3. 在 `secrets` 中创建 `app_master_key`、`jwt_secret`、`wecom_secret`、`wecom_callback_token`、`wecom_callback_aes_key` 文件，并限制宿主机读取权限。生产环境的主密钥和 JWT Secret 均应使用独立的强随机值。
+4. 从仓库根目录构建并启动固定的本地镜像版本：
+
+Linux 宿主机还需确保 UID/GID `10001:10001` 可写 `data`、`logs`、`media`，且可只读访问 `secrets`；不要为了绕过权限问题把容器改成 root。
+
+```powershell
+docker compose -f deploy/docker-compose.yml build
+docker compose -f deploy/docker-compose.yml up -d
+docker compose -f deploy/docker-compose.yml ps
+```
+
+容器以非 root 用户运行，启动时先执行 Alembic 升级，迁移成功后才启动 API。服务绑定在 `127.0.0.1:8788`，生产环境应由 HTTPS 反向代理提供公网访问。`data`、`logs`、`media` 均为持久化挂载；升级前应使用 SQLite 在线备份方式备份数据库，并单独离线备份主加密密钥。
+
+手工迁移或检查：
+
+```powershell
+docker compose -f deploy/docker-compose.yml run --rm notify-hub migrate
+docker compose -f deploy/docker-compose.yml logs --tail 200 notify-hub
+```
+
+升级时先备份，记录当前镜像标签，再修改 Compose 中的固定版本并重建。若新版本迁移可向后兼容，可切回旧镜像；若迁移不可逆，必须同时停止容器、恢复升级前数据库备份，再用旧镜像启动。不要对生产数据库自动执行 Alembic downgrade。

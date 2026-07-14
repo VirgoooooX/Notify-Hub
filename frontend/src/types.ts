@@ -1,0 +1,10 @@
+export type Status='active'|'disabled'|'pending'|'processing'|'succeeded'|'retry_wait'|'dead'|'cancelled'|'paused'|'completed'|'failed'|'degraded'|string
+export interface Page<T>{items:T[];page:number;page_size:number;total:number}
+export interface Dashboard{today_events:number;succeeded_deliveries:number;failed_deliveries:number;retry_wait:number;failed_plugins:number;recent_errors:Array<{id:string;message:string;occurred_at:string;type?:string}>}
+export interface Notification{id:string;title:string;content:string;message_type:string;priority:string;status?:Status;created_at:string;event?:Record<string,unknown>;deliveries?:Delivery[]}
+export interface Delivery{id:string;recipient_name?:string;recipient_id?:string;status:Status;attempts_count?:number;next_attempt_at?:string;last_error_code?:string;last_error_message?:string;attempts?:Attempt[]}
+export interface Attempt{id:string;attempt_no:number;status:Status;started_at:string;finished_at?:string;error_code?:string;error_message?:string}
+export interface Person{id:string;name:string;is_default?:boolean;enabled?:boolean;wecom_identities?:Array<{id:string;user_id:string;verified?:boolean}>}
+export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allow_broadcast?:boolean;rate_limit_per_minute?:number;last_used_at?:string}
+export interface Plugin{id:string;name:string;version?:string;description?:string;status:Status;enabled:boolean;schedule?:string;last_run_at?:string;next_run_at?:string;consecutive_failures?:number;secrets?:Array<{name:string;configured:boolean;updated_at?:string}>}
+export interface Reminder{id:string;title:string;content?:string;status:Status;schedule_type:'once'|'recurring'|string;next_run_at?:string;timezone?:string;require_ack:boolean;ack_policy?:'any'|'all'|'each';repeat_interval_seconds?:number;max_attempts?:number;attempt_count?:number;stop_at?:string;recipients?:Array<{id:string;name?:string;acknowledged_at?:string}>;timeline?:Array<{id:string;type:string;message:string;occurred_at:string}>}
