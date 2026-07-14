@@ -28,10 +28,10 @@ frontend/.vite/
 .env
 .env.*
 !.env.example
-data/
-logs/
-media/
-secrets/
+/data/
+/logs/
+/media/
+/secrets/
 *.key
 *.pem
 *.p12
