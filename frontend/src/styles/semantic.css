@@ -1,0 +1,35 @@
+:root {
+  /* Surfaces */
+  --surface-app: var(--color-neutral-50);
+  --surface-sidebar: #1d211e; /* Deep grey-black instead of pure black */
+  --surface-panel: #ffffff;    /* Clean white panel surfaces */
+  --surface-elevated: #ffffff; /* Modal/dialog surface */
+  --surface-hover: #faf9f5;
+  --surface-selected: #f4f3ed;
+
+  /* Typography Colors */
+  --text-primary: var(--color-neutral-900);
+  --text-secondary: var(--color-neutral-500);
+  --text-tertiary: #92978f;
+  --text-inverse: #f5f2e8;
+  --text-link: var(--color-neutral-900);
+
+  /* Borders & Focus outlines */
+  --border-default: var(--color-neutral-300);
+  --border-strong: var(--color-neutral-700);
+  --border-subtle: #deded4;
+  --border-focus: var(--color-blue-500);
+
+  /* Actions */
+  --action-primary: var(--color-blue-500);
+  --action-primary-hover: var(--color-blue-600);
+  --action-danger: var(--color-red-500);
+  --action-danger-hover: #9c3328;
+
+  /* Status Colors */
+  --status-success: var(--color-green-500);
+  --status-warning: var(--color-amber-500);
+  --status-danger: var(--color-red-500);
+  --status-info: #3d6ca0;
+  --status-neutral: var(--color-neutral-500);
+}

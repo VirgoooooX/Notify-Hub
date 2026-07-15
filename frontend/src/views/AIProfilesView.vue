@@ -11,10 +11,14 @@ import type {
   AIReasoningEffort,
   AIVerbosity,
 } from '@/types'
+import PageHeader from '@/components/PageHeader.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import AppButton from '@/components/ui/AppButton.vue'
+import AppCard from '@/components/ui/AppCard.vue'
+import AppAlert from '@/components/ui/AppAlert.vue'
+import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
 
 const capabilityLabels: Record<AICapability, string> = {
@@ -50,6 +54,7 @@ const busy = ref(false)
 const modelsLoading = ref(false)
 const deleteTarget = ref<AIProfile>()
 const deleteBusy = ref(false)
+
 const form = reactive({
   id: '',
   name: '',
@@ -72,9 +77,11 @@ const form = reactive({
   daily_token_limit: 1000000 as number | '',
   enabled: true,
 })
+
 const allowedModels = computed(() =>
   providerModels.value.filter((model) => model.available && model.enabled),
 )
+
 const deleteDescription = computed(() => {
   const name = deleteTarget.value?.name ?? '这个 Profile'
   return `将删除“${name}”的运行策略。历史调用记录会继续保留；如果启用中的插件正在使用它，删除会被拒绝，请先修改或停用相关插件。`
@@ -94,13 +101,17 @@ async function loadProviderModels(providerId: string) {
     )
     if (form.provider_id !== requestedProviderId) return
     providerModels.value = result.models
-    if (!allowedModels.value.some((model) => model.model_id === form.model)) form.model = ''
+    if (!allowedModels.value.some((model) => model.model_id === form.model)) {
+      form.model = ''
+    }
   } catch (error) {
     if (form.provider_id !== requestedProviderId) return
     form.model = ''
     ui.toast(error instanceof Error ? error.message : 'Provider 模型加载失败', 'danger')
   } finally {
-    if (form.provider_id === requestedProviderId) modelsLoading.value = false
+    if (form.provider_id === requestedProviderId) {
+      modelsLoading.value = false
+    }
   }
 }
 
@@ -118,7 +129,9 @@ async function load() {
       api.get<AIProvider[]>('/admin/ai/providers'),
       api.get<AIInvocation[]>('/admin/ai/invocations?limit=50'),
     ])
-    if (!form.provider_id && providers.value[0]) form.provider_id = providers.value[0].id
+    if (!form.provider_id && providers.value[0]) {
+      form.provider_id = providers.value[0].id
+    }
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : 'AI Profile 加载失败', 'danger')
   }
@@ -274,16 +287,16 @@ onMounted(load)
     title="AI Profiles"
     description="可复用的模型运行方案：统一管理模型路由、输出风格、预算与可靠性；业务 Prompt 仍由插件提供。"
   >
-    <button class="btn btn--primary" :disabled="!providers.length" @click="openCreate">
+    <AppButton variant="primary" class="btn--primary" :disabled="!providers.length" @click="openCreate">
       新增 Profile
-    </button>
+    </AppButton>
   </PageHeader>
 
-  <div v-if="!providers.length" class="warning-box profile-warning">
+  <AppAlert v-if="!providers.length" variant="warning" class="profile-warning">
     请先创建 AI Provider，同步远端模型并明确授权可用模型。
-  </div>
+  </AppAlert>
 
-  <section v-if="show" class="panel profile-builder">
+  <AppCard v-if="show" padding="none" class="profile-builder">
     <form @submit.prevent="saveProfile">
       <div class="profile-builder__intro">
         <div>
@@ -292,7 +305,9 @@ onMounted(load)
           </p>
           <h2>{{ editingId ? '编辑模型运行方案' : '创建模型运行方案' }}</h2>
         </div>
-        <p>Profile 决定“怎么调用”；插件决定“调用来做什么”。平台安全约束和结构化校验始终生效。</p>
+        <p class="intro-desc">
+          Profile 决定“怎么调用”；插件决定“调用来做什么”。平台安全约束和结构化校验始终生效。
+        </p>
       </div>
 
       <fieldset class="policy-section">
@@ -300,20 +315,37 @@ onMounted(load)
         <div class="policy-grid">
           <div class="field">
             <label for="profile-id">稳定 ID{{ editingId ? '' : '（可选）' }}</label>
-            <input id="profile-id" v-model="form.id" class="input mono" :disabled="Boolean(editingId)" placeholder="semantic_classifier_fast">
-            <small>{{ editingId ? '插件授权与调用通过此 ID 绑定，编辑时不可更改。' : '插件通过这个 ID 引用 Profile；创建后不可更改。' }}</small>
+            <input
+              id="profile-id"
+              v-model="form.id"
+              class="input mono"
+              :disabled="Boolean(editingId)"
+              placeholder="semantic_classifier_fast"
+            >
+            <small class="help-text">{{ editingId ? '插件授权与调用通过此 ID 绑定，编辑时不可更改。' : '插件通过这个 ID 引用 Profile；创建后不可更改。' }}</small>
           </div>
           <div class="field">
             <label for="profile-name">名称</label>
             <input id="profile-name" v-model="form.name" class="input" required placeholder="快速语义分类">
           </div>
-          <div class="field field--wide">
+          <div class="field field--full">
             <label for="profile-description">用途说明</label>
-            <textarea id="profile-description" v-model="form.description" class="input textarea" rows="2" placeholder="用于低延迟、低成本的文本分类任务。" />
+            <textarea
+              id="profile-description"
+              v-model="form.description"
+              class="input textarea"
+              rows="2"
+              placeholder="用于低延迟、低成本的文本分类任务。"
+            />
           </div>
           <div class="field">
             <label for="profile-capability">能力类型</label>
-            <select id="profile-capability" v-model="form.capability" class="select" :disabled="Boolean(editingId)">
+            <select
+              id="profile-capability"
+              v-model="form.capability"
+              class="select"
+              :disabled="Boolean(editingId)"
+            >
               <option value="classify">
                 分类
               </option>
@@ -324,12 +356,17 @@ onMounted(load)
                 摘要
               </option>
             </select>
-            <small>{{ editingId ? '能力是插件调用契约的一部分；如需变更，请创建新 Profile。' : '决定插件可使用的 Gateway 方法和结构化输出协议。' }}</small>
+            <small class="help-text">{{ editingId ? '能力是插件调用契约的一部分；如需变更，请创建新 Profile。' : '决定插件可使用的 Gateway 方法 and 结构化输出协议。' }}</small>
           </div>
-          <label class="check-card">
-            <input v-model="form.enabled" type="checkbox">
-            <span><strong>{{ editingId ? '启用此 Profile' : '创建后立即启用' }}</strong><small>停用的 Profile 不接受新的模型调用。</small></span>
-          </label>
+          <div class="checkbox-wrapper">
+            <label class="check-card">
+              <input v-model="form.enabled" type="checkbox">
+              <span>
+                <strong>{{ editingId ? '启用此 Profile' : '创建后立即启用' }}</strong>
+                <small>停动的 Profile 不接受新的模型调用。</small>
+              </span>
+            </label>
+          </div>
         </div>
       </fieldset>
 
@@ -366,15 +403,37 @@ onMounted(load)
           </div>
           <div class="field">
             <label for="profile-temperature">Temperature</label>
-            <input id="profile-temperature" v-model.number="form.temperature" class="input" type="number" min="0" max="2" step="0.1">
+            <input
+              id="profile-temperature"
+              v-model.number="form.temperature"
+              class="input"
+              type="number"
+              min="0"
+              max="2"
+              step="0.1"
+            >
           </div>
           <div class="field">
             <label for="profile-max-output">最大输出 Token</label>
-            <input id="profile-max-output" v-model.number="form.max_output_tokens" class="input" type="number" min="1" max="100000">
+            <input
+              id="profile-max-output"
+              v-model.number="form.max_output_tokens"
+              class="input"
+              type="number"
+              min="1"
+              max="100000"
+            >
           </div>
           <div class="field">
             <label for="profile-timeout">调用超时（秒）</label>
-            <input id="profile-timeout" v-model.number="form.timeout_seconds" class="input" type="number" min="1" max="300">
+            <input
+              id="profile-timeout"
+              v-model.number="form.timeout_seconds"
+              class="input"
+              type="number"
+              min="1"
+              max="300"
+            >
           </div>
           <div class="field">
             <label for="profile-response-format">结构化输出策略</label>
@@ -444,10 +503,15 @@ onMounted(load)
               </option>
             </select>
           </div>
-          <label class="check-card">
-            <input v-model="form.include_reason" type="checkbox">
-            <span><strong>返回判断理由</strong><small>让插件获得简短、可审计的 reason 字段。</small></span>
-          </label>
+          <div class="checkbox-wrapper">
+            <label class="check-card">
+              <input v-model="form.include_reason" type="checkbox">
+              <span>
+                <strong>返回判断理由</strong>
+                <small>让插件获得简短、可审计的 reason 字段。</small>
+              </span>
+            </label>
+          </div>
           <div class="field">
             <label for="profile-reason-limit">理由最大字符数</label>
             <input
@@ -459,7 +523,7 @@ onMounted(load)
               :disabled="!form.include_reason"
             >
           </div>
-          <div class="field field--wide field--full">
+          <div class="field field--full">
             <label for="profile-system-instructions">系统补充指令</label>
             <textarea
               id="profile-system-instructions"
@@ -481,102 +545,174 @@ onMounted(load)
         <div class="policy-grid policy-grid--three">
           <div class="field">
             <label for="profile-cache">缓存 TTL（秒）</label>
-            <input id="profile-cache" v-model.number="form.cache_ttl_seconds" class="input" type="number" min="0" max="31536000">
-            <small>设置为 0 可关闭持久化结果缓存。</small>
+            <input
+              id="profile-cache"
+              v-model.number="form.cache_ttl_seconds"
+              class="input"
+              type="number"
+              min="0"
+              max="31536000"
+            >
+            <small class="help-text">设置为 0 可关闭持久化结果缓存。</small>
           </div>
           <div class="field">
             <label for="profile-request-limit">每日请求上限</label>
-            <input id="profile-request-limit" v-model.number="form.daily_request_limit" class="input" type="number" min="1" max="1000000">
-            <small>留空表示无限制。</small>
+            <input
+              id="profile-request-limit"
+              v-model.number="form.daily_request_limit"
+              class="input"
+              type="number"
+              min="1"
+              max="1000000"
+            >
+            <small class="help-text">留空表示无限制。</small>
           </div>
           <div class="field">
             <label for="profile-token-limit">每日 Token 上限</label>
-            <input id="profile-token-limit" v-model.number="form.daily_token_limit" class="input" type="number" min="1" max="1000000000">
-            <small>留空表示无限制。</small>
+            <input
+              id="profile-token-limit"
+              v-model.number="form.daily_token_limit"
+              class="input"
+              type="number"
+              min="1"
+              max="1000000000"
+            >
+            <small class="help-text">留空表示无限制。</small>
           </div>
         </div>
       </fieldset>
 
       <div class="profile-builder__footer">
-        <span class="muted">{{ editingId ? '保存后新调用立即使用更新后的策略；稳定 ID、能力与历史调用记录保持不变。' : '创建后插件只需要引用稳定 Profile ID，不会接触 Provider 地址、API Key 或模型参数。' }}</span>
-        <div>
-          <button type="button" class="btn btn--ghost" :disabled="busy" @click="closeEditor">
+        <span class="muted footer-note">{{ editingId ? '保存后新调用立即使用更新后的策略；稳定 ID、能力与历史调用记录保持不变。' : '创建后插件只需要引用稳定 Profile ID，不会接触 Provider 地址、API Key 或模型参数。' }}</span>
+        <div class="footer-actions">
+          <AppButton :disabled="busy" @click="closeEditor">
             取消
-          </button>
-          <button class="btn btn--primary" :disabled="busy || modelsLoading || !form.model">
-            {{ busy ? (editingId ? '正在保存…' : '正在创建…') : (editingId ? '保存更改' : '创建 Profile') }}
-          </button>
+          </AppButton>
+          <AppButton
+            variant="primary"
+            type="submit"
+            :loading="busy"
+            :disabled="busy || modelsLoading || !form.model"
+          >
+            {{ editingId ? '保存更改' : '创建 Profile' }}
+          </AppButton>
         </div>
       </div>
     </form>
-  </section>
+  </AppCard>
 
   <EmptyState v-if="!items.length" />
-  <div v-else class="table-wrap profile-table">
-    <table>
-      <thead>
-        <tr><th>Profile</th><th>能力</th><th>模型路由</th><th>输出策略</th><th>成本策略</th><th>状态</th><th>操作</th></tr>
-      </thead>
-      <tbody>
+  
+  <AppCard v-else padding="none" class="table-card">
+    <div class="table-wrap profile-table">
+      <DataTable>
+        <template #headers>
+          <th>Profile</th>
+          <th>能力</th>
+          <th>模型路由</th>
+          <th>输出策略</th>
+          <th>成本策略</th>
+          <th>状态</th>
+          <th>操作</th>
+        </template>
         <tr v-for="item in items" :key="item.id">
           <td>
-            <strong>{{ item.name }}</strong><br>
-            <span class="mono muted">{{ item.id }}</span>
-            <small v-if="item.description" class="table-description">{{ item.description }}</small>
-          </td>
-          <td><span class="policy-tag">{{ capabilityLabels[item.capability] }}</span></td>
-          <td>
-            {{ providerName(item.provider_id) }}<br>
-            <span class="mono muted">{{ item.model }}</span>
+            <div class="profile-cell">
+              <strong>{{ item.name }}</strong>
+              <span class="mono muted item-id">{{ item.id }}</span>
+              <small v-if="item.description" class="table-description">{{ item.description }}</small>
+            </div>
           </td>
           <td>
-            {{ languageLabels[item.output_language] }} · {{ verbosityLabels[item.verbosity] }}<br>
-            <span class="muted">推理 {{ reasoningLabels[item.reasoning_effort] }} · {{ item.include_reason ? `理由 ≤ ${item.max_reason_characters} 字` : '无理由' }}</span>
+            <span class="policy-tag">{{ capabilityLabels[item.capability] }}</span>
           </td>
           <td>
-            {{ item.daily_request_limit ?? '无限制' }} 次 / 天<br>
-            <span class="muted">{{ item.daily_token_limit ?? '无限制' }} Token · 缓存 {{ days(item.cache_ttl_seconds) }}</span>
+            <div class="route-cell">
+              <span>{{ providerName(item.provider_id) }}</span>
+              <span class="mono muted item-model">{{ item.model }}</span>
+            </div>
           </td>
-          <td><StatusBadge :status="item.enabled ? 'active' : 'disabled'" /><br><span class="muted">r{{ item.revision }}</span></td>
           <td>
-            <button class="btn btn--ghost btn--small" @click="openEdit(item)">
-              编辑
-            </button>
-            <button class="btn btn--danger btn--small" @click="deleteTarget = item">
-              删除
-            </button>
+            <div class="policy-detail-cell">
+              <span>{{ languageLabels[item.output_language] }} · {{ verbosityLabels[item.verbosity] }}</span>
+              <span class="muted font-xs">推理 {{ reasoningLabels[item.reasoning_effort] }} · {{ item.include_reason ? `理由 ≤ ${item.max_reason_characters} 字` : '无理由' }}</span>
+            </div>
+          </td>
+          <td>
+            <div class="budget-cell">
+              <span>{{ item.daily_request_limit ?? '无限制' }} 次 / 天</span>
+              <span class="muted font-xs">{{ item.daily_token_limit ?? '无限制' }} Token · 缓存 {{ days(item.cache_ttl_seconds) }}</span>
+            </div>
+          </td>
+          <td>
+            <div class="status-cell">
+              <StatusBadge :status="item.enabled ? 'active' : 'disabled'" />
+              <span class="muted font-xs">r{{ item.revision }}</span>
+            </div>
+          </td>
+          <td>
+            <div class="actions-cell">
+              <AppButton size="sm" @click="openEdit(item)">
+                编辑
+              </AppButton>
+              <AppButton variant="danger" size="sm" class="btn--danger" @click="deleteTarget = item">
+                删除
+              </AppButton>
+            </div>
           </td>
         </tr>
-      </tbody>
-    </table>
-  </div>
+      </DataTable>
+    </div>
+  </AppCard>
 
-  <section class="panel invocation-panel">
-    <div class="panel-title">
-      <h2>最近调用</h2><span class="muted">删除 Profile 后仍保留历史记录；不保存正文、Prompt 或凭据</span>
-    </div>
+  <AppCard padding="md" class="invocation-panel">
+    <template #header>
+      <div class="panel-header-wrap">
+        <h3 class="panel-title">
+          最近调用
+        </h3>
+        <span class="muted font-xs">删除 Profile 后仍保留历史记录；不保存正文、Prompt 或凭据</span>
+      </div>
+    </template>
+    
     <div v-if="invocations.length" class="table-wrap">
-      <table>
-        <thead><tr><th>时间</th><th>Profile</th><th>插件 / 用途</th><th>缓存</th><th>Token</th><th>延迟</th><th>状态</th></tr></thead>
-        <tbody>
-          <tr v-for="invocation in invocations" :key="invocation.id">
-            <td>{{ new Date(invocation.created_at).toLocaleString() }}</td>
-            <td class="mono">
-              {{ invocation.profile_id }}
-            </td>
-            <td>{{ invocation.plugin_id ?? 'platform' }} · {{ invocation.use_case }}</td>
-            <td>{{ invocation.cache_hit ? 'hit' : 'miss' }}</td>
-            <td>{{ (invocation.input_tokens ?? 0) + (invocation.output_tokens ?? 0) }}</td>
-            <td>{{ invocation.latency_ms ?? 0 }} ms</td>
-            <td><StatusBadge :status="invocation.status" /></td>
-          </tr>
-        </tbody>
-      </table>
+      <DataTable>
+        <template #headers>
+          <th>时间</th>
+          <th>Profile</th>
+          <th>插件 / 用途</th>
+          <th>缓存</th>
+          <th>Token</th>
+          <th>延迟</th>
+          <th>状态</th>
+        </template>
+        <tr v-for="invocation in invocations" :key="invocation.id">
+          <td>{{ new Date(invocation.created_at).toLocaleString() }}</td>
+          <td>
+            <span class="mono">{{ invocation.profile_id }}</span>
+          </td>
+          <td>
+            <span>{{ invocation.plugin_id ?? 'platform' }} · {{ invocation.use_case }}</span>
+          </td>
+          <td>
+            <span class="mono">{{ invocation.cache_hit ? 'hit' : 'miss' }}</span>
+          </td>
+          <td>
+            <span class="mono">{{ (invocation.input_tokens ?? 0) + (invocation.output_tokens ?? 0) }}</span>
+          </td>
+          <td>
+            <span class="mono">{{ invocation.latency_ms ?? 0 }} ms</span>
+          </td>
+          <td>
+            <StatusBadge :status="invocation.status" />
+          </td>
+        </tr>
+      </DataTable>
     </div>
-    <div v-else class="muted">
+    <div v-else class="muted no-invocations">
       暂无调用记录。
     </div>
-  </section>
+  </AppCard>
 
   <ConfirmDialog
     :open="Boolean(deleteTarget)"
@@ -591,30 +727,295 @@ onMounted(load)
 </template>
 
 <style scoped>
-.profile-warning,.profile-builder{margin-bottom:16px}
-.profile-builder{padding:0;border-top:3px solid var(--accent);overflow:hidden}
-.profile-builder__intro,.profile-builder__footer{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:20px 22px;background:#efeee8;border-bottom:1px solid var(--line)}
-.profile-builder__intro h2{margin:0;font-size:19px}
-.profile-builder__intro p:last-child{max-width:620px;margin:0;color:var(--muted);font-size:12px;line-height:1.7}
-.policy-section{margin:0;padding:21px 22px 24px;border:0;border-bottom:1px solid var(--line)}
-.policy-section legend{width:100%;padding:0 0 14px;font-weight:700;font-size:14px}
-.policy-section legend span{display:inline-grid;place-items:center;width:26px;height:20px;margin-right:8px;background:var(--ink);color:white;font:10px var(--mono)}
-.policy-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px 18px}
-.policy-grid--three{grid-template-columns:repeat(3,minmax(0,1fr))}
-.field--wide{grid-column:span 1}.field--span-two{grid-column:span 2}.field--full{grid-column:1/-1}
-.field small{display:block;margin-top:5px;color:var(--muted);font-size:10px;line-height:1.5}
-.field small.danger{color:var(--red)}
-.textarea{height:auto;min-height:unset;resize:vertical;line-height:1.6}
-.check-card{display:flex;align-items:flex-start;gap:10px;padding:11px 12px;border:1px solid var(--line);background:#f7f6f1;cursor:pointer}
-.check-card input{margin-top:3px}.check-card span{display:grid;gap:3px}.check-card strong{font-size:12px}.check-card small{color:var(--muted);font-size:10px;line-height:1.5}
-.constraint-note{margin-top:7px;padding:9px 11px;border-left:3px solid var(--accent);background:#fff6ee;color:var(--muted);font-size:11px;line-height:1.6}
-.constraint-note strong{color:var(--ink)}
-.profile-builder__footer{align-items:center;border:0;background:#f7f6f1;font-size:11px}
-.profile-builder__footer>div{display:flex;gap:8px;flex:none}
-.profile-table{overflow-x:auto}.profile-table table{min-width:1120px}.profile-table td{vertical-align:top}
-.table-description{display:block;max-width:240px;margin-top:7px;color:var(--muted);font-size:10px;line-height:1.5}
-.policy-tag{display:inline-block;padding:4px 7px;border:1px solid var(--line);background:#efeee8;font:10px var(--mono)}
-.invocation-panel{margin-top:20px}
-@media(max-width:1000px){.policy-grid--three{grid-template-columns:repeat(2,minmax(0,1fr))}.field--span-two{grid-column:span 1}}
-@media(max-width:760px){.profile-builder__intro,.profile-builder__footer{align-items:stretch;flex-direction:column}.profile-builder__footer>div{justify-content:flex-end}.policy-grid,.policy-grid--three{grid-template-columns:1fr}.field--wide,.field--span-two,.field--full{grid-column:auto}.policy-section{padding-inline:16px}}
+.profile-warning,
+.profile-builder {
+  margin-bottom: var(--space-4);
+}
+
+.profile-builder {
+  border-top: 3px solid var(--action-primary);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.profile-builder__intro {
+  padding: var(--space-5) var(--space-6);
+  background-color: var(--color-neutral-100);
+  border-bottom: 1px solid var(--border-default);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.profile-builder__intro h2 {
+  font-size: var(--text-xl);
+  font-weight: 700;
+  margin: 0;
+}
+
+.intro-desc {
+  max-width: 620px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.policy-section {
+  margin: 0;
+  padding: var(--space-5) var(--space-6) var(--space-6);
+  border: 0;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.policy-section legend {
+  width: 100%;
+  padding: 0 0 var(--space-3);
+  font-weight: 700;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: var(--space-4);
+}
+
+.policy-section legend span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  margin-right: var(--space-2);
+  background-color: var(--color-neutral-900);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.policy-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4) var(--space-5);
+}
+
+.policy-grid--three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.field--span-two {
+  grid-column: span 2;
+}
+
+.field--full {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.help-text {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: var(--leading-tight);
+}
+
+.help-text.danger {
+  color: var(--status-danger);
+}
+
+.checkbox-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.check-card {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  background-color: var(--surface-hover);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  width: 100%;
+}
+
+.check-card input {
+  margin-top: 3px;
+}
+
+.check-card span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.check-card strong {
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.check-card small {
+  color: var(--text-secondary);
+  font-size: 10px;
+}
+
+.constraint-note {
+  margin-top: var(--space-2);
+  padding: var(--space-3);
+  border-left: 3px solid var(--action-primary);
+  background-color: #fff6ee;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.constraint-note strong {
+  color: var(--text-primary);
+}
+
+.profile-builder__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--space-4) var(--space-6);
+  background-color: var(--surface-hover);
+  border: 0;
+  font-size: var(--text-xs);
+  gap: var(--space-4);
+}
+
+.footer-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex: none;
+}
+
+.profile-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item-id {
+  font-size: 11px;
+}
+
+.table-description {
+  display: block;
+  max-width: 240px;
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: 10px;
+  line-height: var(--leading-normal);
+}
+
+.policy-tag {
+  display: inline-block;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-default);
+  background-color: var(--color-neutral-100);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  border-radius: var(--radius-sm);
+}
+
+.route-cell,
+.policy-detail-cell,
+.budget-cell,
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.font-xs {
+  font-size: var(--text-xs);
+}
+
+.item-model {
+  font-size: var(--text-xs);
+}
+
+.actions-cell {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.table-card {
+  margin-bottom: var(--space-5);
+}
+
+.invocation-panel {
+  margin-top: var(--space-5);
+}
+
+.panel-header-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.panel-title {
+  font-size: var(--text-md);
+  font-weight: 700;
+  margin: 0;
+}
+
+.no-invocations {
+  padding: var(--space-5) 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+@media (max-width: 1000px) {
+  .policy-grid--three {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .field--span-two {
+    grid-column: span 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .profile-builder__intro {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+  
+  .profile-builder__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .footer-actions {
+    justify-content: flex-end;
+  }
+  
+  .policy-grid,
+  .policy-grid--three {
+    grid-template-columns: 1fr;
+  }
+  
+  .field--span-two,
+  .field--full {
+    grid-column: auto;
+  }
+  
+  .policy-section {
+    padding-inline: var(--space-4);
+  }
+}
 </style>

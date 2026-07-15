@@ -6,6 +6,13 @@ import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import AppButton from '@/components/ui/AppButton.vue'
+import AppInput from '@/components/ui/AppInput.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
+import AppCheckbox from '@/components/ui/AppCheckbox.vue'
+import AppCard from '@/components/ui/AppCard.vue'
+import AppAlert from '@/components/ui/AppAlert.vue'
+import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
 
 const presetUrls: Record<string, string> = {
@@ -32,6 +39,7 @@ const selectedModelIds = ref<string[]>([])
 const modelsLoading = ref(false)
 const modelsSyncing = ref(false)
 const modelsSaving = ref(false)
+
 const form = reactive({
   name: '',
   preset: 'custom',
@@ -44,6 +52,7 @@ const form = reactive({
   verify_tls: true,
   structured_output_mode: 'auto',
 })
+
 const keyForm = reactive({ value: '' })
 const modelProvider = computed(() => items.value.find((item) => item.id === modelTarget.value))
 const availableCount = computed(() => models.value.filter((model) => model.available).length)
@@ -51,7 +60,9 @@ const availableCount = computed(() => models.value.filter((model) => model.avail
 watch(
   () => form.preset,
   (preset) => {
-    if (presetUrls[preset]) form.base_url = presetUrls[preset]
+    if (presetUrls[preset]) {
+      form.base_url = presetUrls[preset]
+    }
   },
 )
 
@@ -259,125 +270,196 @@ function closeModels() {
 
 onMounted(load)
 </script>
+
 <template>
   <PageHeader title="AI Providers" description="平台统一维护端点与凭据；插件无法读取 API 地址、Key 或模型。">
-    <button class="btn btn--primary" @click="openCreate">
+    <AppButton variant="primary" @click="openCreate">
       {{ show && !editingId ? '收起' : '新增 Provider' }}
-    </button>
+    </AppButton>
   </PageHeader>
-  <section v-if="show" class="panel" style="margin-bottom:16px">
-    <div class="provider-form__heading">
-      <div>
-        <p class="eyebrow">
-          {{ editingId ? 'EDIT PROVIDER' : 'NEW PROVIDER' }}
-        </p>
-        <h2>{{ editingId ? '编辑 Provider' : '新增 Provider' }}</h2>
+
+  <AppCard v-if="show" padding="md" class="create-card">
+    <template #header>
+      <div class="provider-form__heading">
+        <div>
+          <p class="eyebrow">
+            {{ editingId ? 'EDIT PROVIDER' : 'NEW PROVIDER' }}
+          </p>
+          <h3 class="panel-title">
+            {{ editingId ? '编辑 Provider' : '新增 Provider' }}
+          </h3>
+        </div>
+        <AppButton size="sm" @click="closeForm">
+          取消
+        </AppButton>
       </div>
-      <button type="button" class="btn btn--ghost" @click="closeForm">
-        取消
-      </button>
-    </div>
-    <form class="grid split" @submit.prevent="saveProvider">
+    </template>
+    <form class="grid form-grid" @submit.prevent="saveProvider">
       <div class="field">
-        <label>名称</label><input v-model="form.name" class="input" required>
-      </div><div class="field">
-        <label>预置</label><select v-model="form.preset" class="select">
+        <label>名称</label>
+        <AppInput v-model="form.name" required />
+      </div>
+      
+      <div class="field">
+        <label>预置</label>
+        <AppSelect v-model="form.preset">
           <option value="custom">
             自定义 OpenAI 兼容
-          </option><option value="openai">
+          </option>
+          <option value="openai">
             OpenAI
-          </option><option value="azure_openai">
+          </option>
+          <option value="azure_openai">
             Azure OpenAI（填写资源地址）
-          </option><option value="deepseek">
+          </option>
+          <option value="deepseek">
             DeepSeek
-          </option><option value="openrouter">
+          </option>
+          <option value="openrouter">
             OpenRouter
-          </option><option value="gemini">
+          </option>
+          <option value="gemini">
             Gemini
-          </option><option value="kimi">
+          </option>
+          <option value="kimi">
             Kimi
-          </option><option value="zhipu">
+          </option>
+          <option value="zhipu">
             智谱 GLM
-          </option><option value="siliconflow">
+          </option>
+          <option value="siliconflow">
             SiliconFlow
-          </option><option value="dashscope">
+          </option>
+          <option value="dashscope">
             阿里云百炼（填写地域 / Workspace 地址）
           </option>
-        </select>
-      </div><div class="field">
-        <label>Base URL</label><input v-model="form.base_url" class="input" required>
-      </div><div v-if="!editingId" class="field">
-        <label>API Key（可选，保存后不再回显）</label><input v-model="form.api_key" class="input" type="password" autocomplete="new-password" placeholder="sk-...">
-      </div><div v-else class="field provider-form__key-note">
-        <label>API Key</label><span>凭据不会回显；如需更换，请使用列表中的“设置 Key”。</span>
-      </div><div class="field">
-        <label>请求超时（秒）</label><input v-model.number="form.timeout_seconds" class="input" type="number" min="1" max="300" required>
-      </div><div class="field">
-        <label>最大重试次数</label><input v-model.number="form.max_retries" class="input" type="number" min="0" max="5" required>
-      </div><div class="field">
-        <label>结构化输出模式</label><select v-model="form.structured_output_mode" class="select">
+        </AppSelect>
+      </div>
+
+      <div class="field">
+        <label>Base URL</label>
+        <AppInput v-model="form.base_url" required />
+      </div>
+
+      <div v-if="!editingId" class="field">
+        <label>API Key（可选，保存后不再回显）</label>
+        <AppInput v-model="form.api_key" type="password" autocomplete="new-password" placeholder="sk-..." />
+      </div>
+      <div v-else class="field provider-form__key-note">
+        <label>API Key</label>
+        <span class="muted">凭据不会回显；如需更换，请使用列表中的“设置 Key”。</span>
+      </div>
+
+      <div class="field">
+        <label>请求超时（秒）</label>
+        <AppInput v-model.number="form.timeout_seconds" type="number" min="1" max="300" required />
+      </div>
+
+      <div class="field">
+        <label>最大重试次数</label>
+        <AppInput v-model.number="form.max_retries" type="number" min="0" max="5" required />
+      </div>
+
+      <div class="field">
+        <label>结构化输出模式</label>
+        <AppSelect v-model="form.structured_output_mode">
           <option value="auto">
             自动协商
-          </option><option value="json_schema">
+          </option>
+          <option value="json_schema">
             JSON Schema
-          </option><option value="json_object">
+          </option>
+          <option value="json_object">
             JSON Object
-          </option><option value="prompt_json">
+          </option>
+          <option value="prompt_json">
             Prompt JSON
           </option>
-        </select>
-      </div><div class="provider-form__checks">
-        <label><input v-model="form.enabled" type="checkbox"> 启用 Provider</label>
-        <label><input v-model="form.allow_private_network" type="checkbox"> 允许私网端点（高风险）</label>
-        <label><input v-model="form.verify_tls" type="checkbox"> 校验 TLS 证书</label>
-      </div><button class="btn btn--primary" :disabled="busy">
-        {{ busy ? '正在保存…' : editingId ? '保存修改' : '创建并安全保存' }}
-      </button>
-    </form>
-  </section>
-  <section v-if="keyTarget" class="panel" style="margin-bottom:16px">
-    <form class="filters" @submit.prevent="saveKey">
-      <div class="field">
-        <label>API Key（保存后不再回显）</label><input v-model="keyForm.value" class="input" type="password" autocomplete="new-password" required>
-      </div><button class="btn btn--primary" :disabled="busy">
-        安全保存
-      </button><button type="button" class="btn btn--ghost" @click="keyTarget=undefined;keyForm.value=''">
-        取消
-      </button>
-    </form>
-  </section>
-  <section v-if="modelTarget" class="panel model-control" style="margin-bottom:16px">
-    <div class="panel-title model-control__header">
-      <div>
-        <p class="eyebrow">
-          MODEL ACCESS
-        </p>
-        <h2>{{ modelProvider?.name ?? modelTarget }}</h2>
-        <p class="model-control__description">
-          同步只负责发现远端模型；新发现的模型默认禁用。仅勾选并保存的模型可用于创建 AI Profile。
-        </p>
+        </AppSelect>
       </div>
-      <div class="model-control__actions">
-        <button type="button" class="btn btn--ghost" :disabled="modelsSyncing" @click="syncModels">
-          {{ modelsSyncing ? '正在同步…' : '从远端同步' }}
-        </button>
-        <button type="button" class="btn btn--ghost" @click="closeModels">
-          关闭
-        </button>
+
+      <div class="provider-form__checks full-width">
+        <AppCheckbox v-model="form.enabled">
+          启用 Provider
+        </AppCheckbox>
+        <AppCheckbox v-model="form.allow_private_network">
+          允许私网端点（高风险）
+        </AppCheckbox>
+        <AppCheckbox v-model="form.verify_tls">
+          校验 TLS 证书
+        </AppCheckbox>
       </div>
-    </div>
+
+      <div class="form-submit-row full-width">
+        <AppButton type="submit" variant="primary" :loading="busy">
+          {{ busy ? '正在保存…' : editingId ? '保存修改' : '创建并安全保存' }}
+        </AppButton>
+      </div>
+    </form>
+  </AppCard>
+
+  <AppCard v-if="keyTarget" padding="md" class="key-card">
+    <template #header>
+      <h3 class="panel-title">
+        更换 API Key
+      </h3>
+    </template>
+    <form class="key-form" @submit.prevent="saveKey">
+      <div class="field flex-1">
+        <label>API Key（保存后不再回显）</label>
+        <AppInput v-model="keyForm.value" type="password" autocomplete="new-password" required />
+      </div>
+      <div class="form-actions">
+        <AppButton type="submit" variant="primary" :loading="busy">
+          安全保存
+        </AppButton>
+        <AppButton @click="keyTarget=undefined; keyForm.value=''">
+          取消
+        </AppButton>
+      </div>
+    </form>
+  </AppCard>
+
+  <AppCard v-if="modelTarget" padding="md" class="model-control">
+    <template #header>
+      <div class="panel-header-wrap">
+        <div>
+          <p class="eyebrow">
+            MODEL ACCESS
+          </p>
+          <h3 class="panel-title">
+            {{ modelProvider?.name ?? modelTarget }}
+          </h3>
+          <p class="model-control__description">
+            同步只负责发现远端模型；新发现的模型默认禁用。仅勾选并保存的模型可用于创建 AI Profile。
+          </p>
+        </div>
+        <div class="model-control__actions">
+          <AppButton size="sm" :loading="modelsSyncing" @click="syncModels">
+            {{ modelsSyncing ? '正在同步…' : '从远端同步' }}
+          </AppButton>
+          <AppButton size="sm" @click="closeModels">
+            关闭
+          </AppButton>
+        </div>
+      </div>
+    </template>
+
     <div v-if="modelsLoading" class="loading">
       正在读取模型清单…
     </div>
-    <div v-else-if="!models.length" class="warning-box">
+    
+    <AppAlert v-else-if="!models.length" variant="warning">
       尚未发现模型。请先确认 Provider 凭据和连接测试正常，然后点击“从远端同步”。
-    </div>
+    </AppAlert>
+
     <template v-else>
       <div class="model-summary" aria-live="polite">
         <span><strong>{{ models.length }}</strong> 个已发现</span>
         <span><strong>{{ availableCount }}</strong> 个远端可用</span>
         <span><strong>{{ selectedModelIds.length }}</strong> 个已选择</span>
       </div>
+
       <fieldset class="model-list">
         <legend class="sr-only">
           允许 AI Profile 使用的模型
@@ -398,51 +480,75 @@ onMounted(load)
           <span v-if="model.available" class="model-option__state">
             {{ model.enabled ? '已允许' : '待授权' }}
           </span>
-          <span v-else class="model-option__state danger">远端已不可用</span>
+          <span v-else class="model-option__state text-danger">远端已不可用</span>
         </label>
       </fieldset>
+
       <div class="model-control__footer">
         <span class="muted">取消勾选后，新 Profile 无法选择该模型，引用它的现有 Profile 也会停止调用。</span>
-        <button
-          type="button"
-          class="btn btn--primary"
-          :disabled="modelsSaving"
+        <AppButton
+          variant="primary"
+          :loading="modelsSaving"
           @click="saveAllowedModels"
         >
-          {{ modelsSaving ? '正在保存…' : '保存允许范围' }}
-        </button>
+          保存允许范围
+        </AppButton>
       </div>
     </template>
-  </section>
-  <EmptyState v-if="!items.length" /><div v-else class="table-wrap provider-table">
-    <table>
-      <thead><tr><th>名称</th><th>预置</th><th>端点</th><th>凭据</th><th>状态</th><th>操作</th></tr></thead><tbody>
+  </AppCard>
+
+  <EmptyState v-if="!items.length" />
+
+  <AppCard v-else padding="none" class="provider-table-card">
+    <div class="table-wrap provider-table">
+      <DataTable>
+        <template #headers>
+          <th>名称</th>
+          <th>预置</th>
+          <th>端点</th>
+          <th>凭据</th>
+          <th>状态</th>
+          <th>操作</th>
+        </template>
         <tr v-for="item in items" :key="item.id">
-          <td><strong>{{ item.name }}</strong><br><span class="mono muted">{{ item.id }}</span></td><td>{{ item.preset }}</td><td class="mono">
-            {{ item.base_url }}
-          </td><td>{{ item.api_key_configured?'已配置':'未配置' }}</td><td><StatusBadge :status="item.enabled?'active':'disabled'" /></td><td>
+          <td>
+            <div class="provider-cell">
+              <strong>{{ item.name }}</strong>
+              <span class="mono muted item-id">{{ item.id }}</span>
+            </div>
+          </td>
+          <td>{{ item.preset }}</td>
+          <td>
+            <span class="mono text-url">{{ item.base_url }}</span>
+          </td>
+          <td>{{ item.api_key_configured ? '已配置' : '未配置' }}</td>
+          <td>
+            <StatusBadge :status="item.enabled ? 'active' : 'disabled'" />
+          </td>
+          <td>
             <div class="provider-actions">
-              <button class="btn btn--ghost btn--small" @click="testProvider(item.id)">
+              <AppButton size="sm" @click="testProvider(item.id)">
                 连接测试
-              </button>
-              <button class="btn btn--ghost btn--small" @click="configureModels(item)">
+              </AppButton>
+              <AppButton size="sm" @click="configureModels(item)">
                 同步 / 配置模型
-              </button>
-              <button class="btn btn--ghost btn--small" @click="keyTarget=item.id">
+              </AppButton>
+              <AppButton size="sm" @click="keyTarget=item.id">
                 设置 Key
-              </button>
-              <button class="btn btn--ghost btn--small" @click="startEdit(item)">
+              </AppButton>
+              <AppButton size="sm" @click="startEdit(item)">
                 编辑
-              </button>
-              <button class="btn btn--danger btn--small" @click="deleteTarget=item">
+              </AppButton>
+              <AppButton variant="danger" size="sm" class="btn--danger" @click="deleteTarget=item">
                 删除
-              </button>
+              </AppButton>
             </div>
           </td>
         </tr>
-      </tbody>
-    </table>
-  </div>
+      </DataTable>
+    </div>
+  </AppCard>
+
   <ConfirmDialog
     :open="Boolean(deleteTarget)"
     title="删除 AI Provider？"
@@ -456,21 +562,235 @@ onMounted(load)
 </template>
 
 <style scoped>
-.model-control{border-top:3px solid var(--accent)}
-.provider-form__heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px}.provider-form__heading h2{margin:0;font-size:18px}.provider-form__checks{display:flex;flex-wrap:wrap;align-items:center;gap:18px}.provider-form__key-note span{min-height:40px;display:flex;align-items:center;color:var(--muted);font-size:12px}.provider-table table{min-width:1120px}.provider-actions{display:flex;flex-wrap:wrap;gap:6px}
-.model-control__header{align-items:flex-start;gap:24px}
-.model-control__header h2{margin:0;font-size:18px}
-.model-control__description{max-width:720px;margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.7}
-.model-control__actions,.model-control__footer{display:flex;align-items:center;justify-content:flex-end;gap:8px}
-.model-summary{display:flex;flex-wrap:wrap;gap:20px;padding:12px 14px;border:1px solid var(--line);background:#efeee8;font:11px var(--mono)}
-.model-summary strong{font-size:16px;color:var(--ink)}
-.model-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0;margin:14px 0 0;padding:0;border:1px solid var(--line)}
-.model-option{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line);background:var(--paper);font-size:12px}
-.model-option:hover{background:#fffdf6}
-.model-option--unavailable{background:#f0efea;color:var(--muted)}
-.model-option__id{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.model-option__state{color:var(--muted);font-size:11px}
-.model-control__footer{justify-content:space-between;margin-top:14px;font-size:11px}
-.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-@media(max-width:760px){.model-control__header,.model-control__footer{align-items:stretch;flex-direction:column}.model-control__actions{justify-content:flex-start}.model-list{grid-template-columns:1fr}}
+.create-card, .key-card, .model-control {
+  margin-bottom: var(--space-4);
+}
+
+.panel-header-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.provider-form__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  width: 100%;
+}
+
+.panel-title {
+  font-size: var(--text-md);
+  font-weight: 700;
+  margin: 0;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field label {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.provider-form__checks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+}
+
+.provider-form__key-note {
+  justify-content: center;
+}
+
+.provider-form__key-note span {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.form-submit-row {
+  margin-top: var(--space-2);
+}
+
+.key-form {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-4);
+}
+
+.form-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.model-control {
+  border-top: 3px solid var(--action-primary);
+}
+
+.model-control__description {
+  max-width: 720px;
+  margin: var(--space-1) 0 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.model-control__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.model-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-default);
+  background-color: var(--color-neutral-100);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.model-summary strong {
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+.model-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.model-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-default);
+  background-color: var(--surface-panel);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.model-option:last-child {
+  border-bottom: none;
+}
+
+.model-option:hover {
+  background-color: var(--surface-hover);
+}
+
+.model-option--unavailable {
+  background-color: var(--color-neutral-100);
+  color: var(--text-secondary);
+  cursor: not-allowed;
+}
+
+.model-option__id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-option__state {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
+.model-option__state.text-danger {
+  color: var(--status-danger);
+}
+
+.model-control__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: var(--space-4);
+  font-size: var(--text-xs);
+  gap: var(--space-4);
+}
+
+.provider-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.item-id {
+  font-size: 11px;
+}
+
+.text-url {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+.provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (max-width: 760px) {
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .key-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .model-control__header {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+  
+  .model-control__footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .model-list {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

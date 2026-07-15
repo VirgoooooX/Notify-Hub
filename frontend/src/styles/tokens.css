@@ -1,0 +1,64 @@
+:root {
+  /* Raw Color Palette: Neutral */
+  --color-neutral-0: #ffffff;
+  --color-neutral-50: #eeeee8; /* default app bg */
+  --color-neutral-100: #efeee8; /* th bg / light gray surface */
+  --color-neutral-200: #e5e5dd;
+  --color-neutral-300: #d9d9d0; /* default border */
+  --color-neutral-500: #71756d; /* muted text */
+  --color-neutral-700: #3d453e; /* sidebar active border */
+  --color-neutral-800: #292f2a; /* sidebar active bg / select focus */
+  --color-neutral-900: #171b18; /* ink / dark text */
+
+  /* Raw Color Palette: Accent/Brand & Semantic Colors */
+  --color-blue-500: #0873f9;
+  --color-blue-600: #065ecb;
+  --color-green-500: #2d7551;
+  --color-amber-500: #aa6b18;
+  --color-red-500: #b43e32;
+
+  /* Size & Spacing (4px grid system) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+
+  /* Border Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* Typography Scales */
+  --font-sans: 'Inter', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: 'DM Mono', SFMono-Regular, Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 18px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.7;
+
+  /* Shadows & Depth */
+  --shadow-panel: 0 10px 30px rgba(48, 53, 46, 0.04);
+  --shadow-dropdown: 0 4px 12px rgba(23, 27, 24, 0.08);
+  --shadow-dialog: 0 30px 80px rgba(0, 0, 0, 0.4);
+
+  /* Z-Index Hierarchy */
+  --z-sidebar: 30;
+  --z-header: 20;
+  --z-dropdown: 50;
+  --z-dialog: 100;
+  --z-toast: 200;
+}

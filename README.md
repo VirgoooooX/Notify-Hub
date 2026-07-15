@@ -1,167 +1,170 @@
 # Notify Hub
 
-Notify Hub 是一个面向个人与家庭场景的企业微信通知、提醒和监控插件平台。
+> **面向个人与家庭场景的自托管企业微信通知、提醒与 AI 监控插件平台**
 
-项目采用**模块化单体**架构：核心通知平台与监控插件位于同一仓库、同一部署单元和同一管理后台中，但通过稳定的插件契约、事件模型和权限边界进行隔离。
+<div align="center">
 
-## 项目定位
+[![Version](https://img.shields.io/badge/Version-v0.6.0-emerald?style=flat-square)](https://github.com/VirgoooooX/Notify-Hub)
+[![Python](https://img.shields.io/badge/Python-3.12-blue?style=flat-square)](https://www.python.org/)
+[![Frontend](https://img.shields.io/badge/Frontend-Vue%203%20%7C%20TS%20%7C%20Vite-blueviolet?style=flat-square)](https://vuejs.org/)
+[![Deployment](https://img.shields.io/badge/Deployment-Docker%20%7C%20SQLite-darkgreen?style=flat-square)](https://www.docker.com/)
+[![License](https://img.shields.io/badge/License-AGPL--3.0-orange?style=flat-square)](./LICENSE)
 
-Notify Hub 负责：
+</div>
 
-- 接收外部系统提交的结构化事件；
-- 通过企业微信应用向指定成员或全部成员发送通知；
-- 管理文本、图文、图片和语音通知；
-- 管理单次提醒、周期提醒和需要确认的持续催办；
-- 接收企业微信文字、语音、菜单和交互卡片回调；
-- 通过自然语言创建、查询、延后、完成或取消提醒；
-- 安装、配置、启停和调度监控插件；
-- 统一处理去重、重试、发送记录、权限和审计。
-- 通过 AI Gateway 统一管理兼容 Provider、模型 Profile、缓存、预算和调用审计。
+Notify Hub 是一个采用**模块化单体**（Modular Monolith）架构的轻量化自托管通知中心。它旨在将散落的监控源、提醒事项、AI 语义判定及企业微信投递，聚合在同一个安全自治的部署单元中。
 
-其中企业微信入站对话、语音和持续催办属于后续版本；首个 MVP 先建立可靠事件投递和插件平台。
+---
 
-监控插件负责：
+## 目录
 
-- 连接特定数据源；
-- 保存采集游标和来源状态；
-- 判断是否发生值得通知的事件；
-- 向 Notify Hub 核心提交标准化事件。
+- [一、项目定位](#一项目定位)
+- [二、核心特性](#二核心特性)
+- [三、架构与流转逻辑](#三架构与流转逻辑)
+- [四、目录结构索引](#四目录结构索引)
+- [五、本地开发与测试](#五本地开发与测试)
+- [六、Docker 生产部署](#六docker-生产部署)
+- [七、数据安全与网络边界](#七数据安全与网络边界)
+- [八、开发路线图与非目标](#八开发路线图与非目标)
+- [九、开源许可](#九开源许可)
 
-插件不得直接调用企业微信接口，也不得绕过核心通知服务写入投递记录。
+---
 
-## 首个落地场景
+## 一、项目定位
 
-第一阶段内置 `Codex X Monitor` 插件：
+* **核心平台**：负责敏感凭据隔离、外部事件接收、消息去重、任务调度、优先级投递及失败重试。
+* **监控插件**：作为相对隔离的子模块，连接推特、RSS 等特定数据源，判定增量变化并向核心提交标准化事件。
+* **AI 决策网关**：统一维护 LLM API 凭据、运行 Profile、Token 预算及持久化缓存。插件仅通过 Manifest 授权的 Profile 接口进行低成本判定。
 
-1. 定期检查指定 X 账号的新内容；
-2. 判断是否出现 Codex 用量重置相关信息；
-3. 使用推文 ID 生成稳定的 `event_key`；
-4. 向核心提交标准化事件；
-5. 由核心完成去重、指定人员投递和发送日志记录。
+> [!IMPORTANT]
+> **代码隔离原则**：
+> 监控插件无权读取企业微信 Token 或 API 密钥，亦不能直接绕过平台执行出站网络请求或数据库写入。
 
-## 推荐技术形态
+---
 
-- 后端：Python、FastAPI、Pydantic、SQLAlchemy、Alembic；
-- 前端：Vue 3、TypeScript、Vite；
-- 初始数据库：SQLite；
-- 调度：持久化任务调度器；
-- HTTP 客户端：支持超时、连接池和受控重试的异步客户端；
-- 部署：单仓库、单镜像、单容器，后续可拆分 API 与 Worker；
-- 默认时区：可配置，所有数据库时间统一存储为 UTC。
+## 二、核心特性
 
-## `v0.1.0` MVP 范围
+1. **可靠投递**：采用“先落库再投递”的队列机制，确保消息即使网络波动也绝不丢失。
+2. **端到端幂等**：基于 `event_key` 和全局唯一约束，从源头过滤重复事件。
+3. **AI 辅助网关**：利用 LLM 语义模式（AI Profiles）进行推文/消息分类、预筛选和摘要，防止频繁触发无效通知。
+4. **轻量自研 UI**：拒绝臃肿的第三方 UI 框架，基于原生 CSS Design Tokens 构建极致响应、防泄露的现代化后台。
+5. **部署极其简单**：单镜像、单容器、内置 SQLite 与 Alembic，没有 Redis 或 RabbitMQ 等复杂基础设施负担。
 
-首个可用版本必须完成：
+---
 
-- 管理员登录；
-- 企业微信应用配置与连通性测试；
-- 指定企业微信 UserID 的文本通知；
-- 图文通知；
-- 通知事件 API；
-- API Client 与独立 API Key；
-- 事件去重；
-- 持久化发送队列；
-- 发送日志和失败重试；
-- 插件注册、配置、启停、立即运行和定时执行；
-- 插件健康状态；
-- Codex X Monitor 插件；
-- 管理后台；
-- Docker 部署与数据持久化。
+## 三、架构与流转逻辑
 
-`v0.1.0` 不做：
+### 3.1 消息流转链路
 
-- 企业微信文字/语音创建提醒；
-- 周期提醒和持续催办；
-- 独立图片和语音消息；
-- 多租户 SaaS；
-- 在线安装任意第三方代码；
-- 无限制执行用户上传脚本；
-- Redis、RabbitMQ 或微服务拆分；
-- Telegram、短信、邮件等额外渠道；
-- 复杂 AI Agent；
-- 未经确认直接由大模型写入提醒数据库。
+以下是事件从外部监控源到投递至企业微信成员的完整生命周期：
 
-企业微信入站文字提醒和持续催办计划进入 `v0.2.0`。持续催办采用企业微信交互式模板卡片：每次提醒包含“已完成”按钮，点击回调后原子停止后续提醒。语音输入、ASR、TTS 和语音投递计划进入 `v0.3.0`。
+```mermaid
+graph TD
+    A[监控源 X/RSS] -->|检测到增量| B(监控插件)
+    B -->|规则/AI Classifier| C{值得发送?}
+    C -->|是| D[标准化 Event]
+    D -->|校验 event_key 唯一性| E[核心数据库 SQLite]
+    E -->|202 Accepted| F[投递队列 Task Queue]
+    F -->|Delivery Worker| G[企业微信 Adapter]
+    G -->|出站 HTTPS| H[企业微信 App]
+    H -->|推送消息| I[接收人 UserID]
+```
 
-## 文档
+### 3.2 AI 网关调用契约
 
-详细设计文档位于 [`docs/`](docs/)：
+插件必须通过安全的 `context.ai` 代理，无权获取明文 API 密钥与远端模型直连地址：
 
-- [产品边界与用例](docs/00-product-scope.md)
-- [系统架构](docs/01-architecture.md)
-- [领域模型与数据库设计](docs/02-domain-model.md)
-- [插件开发规范](docs/03-plugin-development.md)
-- [API 契约](docs/04-api-contracts.md)
-- [企业微信接入](docs/05-wecom-integration.md)
-- [开发路线图](docs/06-development-roadmap.md)
-- [安全与可靠性](docs/07-security-and-reliability.md)
-- [部署与运维](docs/08-deployment-and-operations.md)
-- [Codex X Monitor 插件设计](docs/09-codex-x-monitor-plugin.md)
-- [测试策略](docs/10-testing-strategy.md)
-- [可交互持续提醒设计](docs/11-interactive-continuous-reminders.md)
-- [AI Gateway](docs/13-ai-gateway.md)
-- [架构决策记录](docs/DECISIONS.md)
-- [编码 Agent 与开发约束](AGENTS.md)
+```mermaid
+sequenceDiagram
+    participant P as Plugin Runtime
+    participant C as AI Gateway (Core)
+    participant E as Database (Cache)
+    participant A as LLM Provider (Remote)
+    
+    P->>C: context.ai.classify(profile_id, content)
+    C->>C: 验证 Profile 授权状态与每日预算
+    alt 缓存命中 (Cache Hit)
+        C->>E: 查询最近缓存 (TTL)
+        E-->>C: 返回历史判定结果
+        C-->>P: 返回结果
+    else 缓存未命中 (Cache Miss)
+        C->>A: 携带 API Key 调用 (带 Timeout)
+        A-->>C: 返回结构化 JSON
+        C->>E: 写入持久化缓存
+        C-->>P: 返回结果
+    </div>
+```
 
-## 核心原则
+---
 
-1. **核心与插件解耦**：插件只负责发现事件，核心负责通知投递。
-2. **事件先落库再投递**：避免请求成功但消息丢失。
-3. **至少一次接收，效果上只发送一次**：依靠 `event_key` 与幂等约束实现。
-4. **默认安全**：所有外部 API 必须鉴权，密钥不得明文入库或写入日志。
-5. **可恢复**：服务重启后，待执行任务、提醒、插件状态和待投递消息必须继续工作。
-6. **先做可信内置插件**：第三方插件隔离和市场机制放到后续阶段。
-7. **企业微信只是渠道，不是业务核心**：提醒、事件和插件模型不依赖企业微信字段命名。
-8. **交互回调只改变业务状态一次**：按钮重复点击、旧卡片点击和回调重试必须幂等。
+## 四、目录结构索引
 
-## 当前状态
+```text
+.
+├── backend/                 # 后端 Python 应用 (FastAPI)
+│   ├── app/
+│   │   ├── api/             # 路由与控制器 (管理接口与 Client 接口分离)
+│   │   ├── core/            # 核心机制 (加密、调度、任务队列、AI 网关)
+│   │   ├── db/              # SQLAlchemy 数据库模型与 Alembic 配置
+│   │   ├── domain/          # 领域边界 (通知、提醒、接收人实体逻辑)
+│   │   └── services/        # 业务逻辑服务 (微信投递、AI 请求、安全机制)
+│   └── alembic/             # 数据库结构演进迁移脚本
+├── frontend/                # 前端 Vue 3 单页应用
+│   ├── src/
+│   │   ├── components/      # 重用展示及控制层包装组件
+│   │   ├── features/        # 功能切片组件 (插件、AI 管理面板)
+│   │   ├── styles/          # 模块化 CSS 设计系统 (Tokens, Reset, Semantic)
+│   │   └── views/           # 后台主页面 (工作台、提醒、消息、设置)
+│   └── tests/               # 前端 Vitest 单元测试
+├── plugins/                 # 核心内置插件模块 (如 Codex X Monitor)
+├── deploy/                  # Docker 容器化构建与部署脚本
+├── data/                    # 本地持久化挂载数据存储 (SQLite/Media/Logs)
+├── scripts/                 # 本地多平台一键开发运行脚本
+├── README.md                # 本文档
+└── pyproject.toml           # 依赖定义与打包配置文件
+```
 
-当前代码已完成 `v0.3.0` 的 Phase 0～9 累计范围，包括可靠事件投递、企业微信渠道、插件运行时与 Codex X Monitor、管理后台、提醒/持续催办、回调交互及受控图片/语音能力。冻结后的发布边界和门禁见 [`docs/12-v0.3.0-release-contract.md`](docs/12-v0.3.0-release-contract.md)。
+---
 
-真实企业微信文本、交互卡片、图片、语音和回调仍需在配置有效凭据的部署环境完成手工验收；ASR/TTS 依赖部署方配置本地 Adapter，不在基础镜像内置模型。
+## 五、本地开发与测试
 
-`v0.6.0` 正在增加平台级 AI Gateway。Provider、API Key、模型、缓存和预算由核心统一管理；插件只能调用 Manifest 明确授权的 `context.ai` Profile。未配置 AI Provider 或 Key 时，现有事件、提醒、投递和纯规则插件仍正常运行，也不会在启动时发起外部 AI 请求。
+### 5.1 环境要求
+* 后端：Python 3.12+ (不推荐 3.13+)
+* 前端：Node.js 22+ & npm 10+
 
-## 本地开发与测试
+### 5.2 极速一键启动 (推荐)
 
-后端要求 Python 3.12，前端要求 Node.js 22。Windows 上可直接双击仓库根目录的 `start-dev.cmd`，或在 PowerShell 中执行：
-
+在 Windows 系统的 PowerShell 中，可以直接运行：
 ```powershell
 .\scripts\start-dev.ps1
 ```
+该脚本会自动创建 Python 虚拟环境 `.venv`、安装前后端依赖、执行 SQLite 迁移、监听本地端口并打开浏览器 `http://127.0.0.1:5173`。
 
-脚本会自动创建 `.venv`、按锁文件变化安装前后端依赖、升级本地 SQLite 数据库，并分别打开后端和前端开发窗口。默认浏览器会打开 `http://127.0.0.1:5173`；关闭两个开发窗口即可停止服务。若不需要自动打开浏览器：
+* **只运行服务，不自动打开浏览器**：
+  ```powershell
+  .\scripts\start-dev.ps1 -NoBrowser
+  ```
+* **允许同局域网内其他设备访问 (监听 0.0.0.0)**：
+  ```powershell
+  .\scripts\start-dev.ps1 -Lan
+  ```
+* **绑定反向代理自定义测试域名**：
+  ```powershell
+  .\scripts\start-dev.ps1 -Lan -AllowedHosts notify.example.com
+  ```
 
-```powershell
-.\scripts\start-dev.ps1 -NoBrowser
-```
+### 5.3 管理员账号初始化
 
-如需从同一局域网内的其他设备访问，使用 `-Lan` 让前后端监听所有本机网卡：
-
-```powershell
-.\scripts\start-dev.ps1 -Lan
-```
-
-脚本会显示检测到的局域网访问地址。首次使用时，Windows 防火墙可能要求允许专用网络访问 TCP 5173 和 8000；不要在不受信任的公共网络上开放开发服务。`-Lan` 可与 `-NoBrowser` 同时使用。
-
-如需通过反向代理域名访问 Vite 开发服务，显式传入允许的主机名；多个主机名使用逗号分隔。该值只进入当前前端进程，不需要把私人域名提交到 `vite.config.ts`：
-
-```powershell
-.\scripts\start-dev.ps1 -Lan -AllowedHosts notify.example.com
-```
-
-如需在本机安全重置管理员密码，运行以下命令并按提示隐藏输入新密码；重置会同时撤销现有刷新会话：
-
+首次运行服务，需在本地命令行重置或创建你的管理员密码（至少 12 位）：
 ```powershell
 .\.venv\Scripts\python.exe -m app.cli.reset_admin_password --username admin
 ```
 
-首次启动后，在管理后台创建管理员账号，密码至少 12 个字符。本地开发数据库位于 `data/notify-hub.db`。没有配置企业微信凭据时，除真实渠道投递与回调外的页面、API、提醒、插件和持久化流程仍可测试。
+### 5.4 手动按步骤开发
 
-如需让企业微信 API 经过自建反向代理，在 `.env` 设置 `NOTIFY_HUB_WECOM_API_BASE_URL=https://proxy.example.com/wecom` 并重启。仅支持 HTTPS；代理可带路径前缀，且必须原样转发其下的 `cgi-bin/*`。代理会接触应用 Secret、Access Token 和消息内容，只能使用完全受信任的地址。
+如果希望手动控制，请在不同终端窗口依次执行：
 
-也可以手工初始化。以下命令均在仓库根目录执行；迁移和应用必须使用相同的工作目录，以确保操作同一个 `data/notify-hub.db`：
-
+**后端服务：**
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
@@ -169,54 +172,105 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
 ```
 
-另开终端启动前端：
-
+**前端服务：**
 ```powershell
-Set-Location frontend
+cd frontend
 npm ci
 npm run dev
 ```
 
-运行质量检查和测试：
+### 5.5 本地质量门禁与测试
+
+在提交代码前，请确保以下自动化校验全部通过：
 
 ```powershell
+# 1. 后端 Ruff 格式化与静态检查
 .\.venv\Scripts\ruff.exe format --check backend plugins
 .\.venv\Scripts\ruff.exe check backend plugins
 .\.venv\Scripts\mypy.exe backend/app plugins
+
+# 2. 后端 Pytest 测试
 .\.venv\Scripts\pytest.exe
-Push-Location frontend
+
+# 3. 前端测试与打包
+cd frontend
 npm run lint
 npm run typecheck
 npm run test
 npm run build
-Pop-Location
 ```
 
-## Docker 单实例部署
+---
 
-v0.3.0 使用单镜像、单容器和 SQLite；不得启动多个共享同一数据库的副本。本机需先安装 Docker，然后：
+## 六、Docker 生产部署
 
-1. `deploy/docker-compose.yml` 已显式声明全部容器环境变量，不再使用 `env_file` 整包注入。仅在仓库根目录的 `.env` 中提供 Compose 需要替换的部署标识：`NOTIFY_HUB_PUBLIC_BASE_URL`、`NOTIFY_HUB_WECOM_CORP_ID`、`NOTIFY_HUB_WECOM_AGENT_ID` 和可选的 `NOTIFY_HUB_WECOM_API_BASE_URL`；该文件已被 Git 忽略。
-2. 创建 `data`、`logs`、`media`、`secrets` 目录。
-3. 在 `secrets` 中创建 `app_master_key`、`jwt_secret`、`wecom_secret`、`wecom_callback_token`、`wecom_callback_aes_key` 文件，并限制宿主机读取权限。生产环境的主密钥和 JWT Secret 均应使用独立的强随机值。
-4. 先用 `config --quiet` 校验 Compose，再从仓库根目录构建并启动固定的本地镜像版本。不要使用不带 `--quiet` 的配置输出，避免部署变量进入终端日志。
+Notify Hub 采用单镜像部署。在生产环境中，**请确保只运行一个容器副本**以防止 SQLite 并发写入冲突。
 
-Linux 宿主机还需确保 UID/GID `10001:10001` 可写 `data`、`logs`、`media`，且可只读访问 `secrets`；不要为了绕过权限问题把容器改成 root。
+### 6.1 配置环境变量
 
-```powershell
+复制并修改本地配置，在仓库根目录新建 `.env` 文件（已默认加入 `.gitignore`）：
+
+```ini
+# 基础配置
+NOTIFY_HUB_PUBLIC_BASE_URL=https://notify.yourdomain.com
+NOTIFY_HUB_SECRET_ENCRYPTION_KEY=your-32-byte-hex-encryption-key
+NOTIFY_HUB_JWT_SECRET=your-secure-jwt-secret-string
+
+# 企业微信出站配置
+NOTIFY_HUB_WECOM_CORP_ID=ww123456789abc
+NOTIFY_HUB_WECOM_AGENT_ID=1000002
+NOTIFY_HUB_WECOM_SECRET=wecom-application-secret
+NOTIFY_HUB_WECOM_CALLBACK_TOKEN=callback-token-defined-in-wecom
+NOTIFY_HUB_WECOM_CALLBACK_AES_KEY=callback-aes-key-defined-in-wecom
+```
+
+### 6.2 容器一键启动
+
+从仓库根目录构建镜像并后台启动：
+
+```bash
+# 校验 Compose 配置
 docker compose -f deploy/docker-compose.yml config --quiet
+
+# 构建与运行
 docker compose -f deploy/docker-compose.yml build
 docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml ps
 ```
 
-容器以非 root 用户运行，启动时先执行 Alembic 升级，迁移成功后才启动 API。服务绑定在 `127.0.0.1:8788`，生产环境应由同机可信 HTTPS 反向代理提供公网访问。Compose 只把五个 Secret 文件逐个只读挂载到 `/run/secrets`，不会把 Secret 值写进环境配置或镜像。`data`、`logs`、`media` 均为持久化挂载；升级前应使用 SQLite 在线备份方式备份数据库，并单独离线备份主加密密钥。
+### 6.3 运维常用命令
 
-手工迁移或检查：
+* **查看日志**：
+  ```bash
+  docker compose -f deploy/docker-compose.yml logs -f --tail 200
+  ```
+* **手动触发迁移**：
+  ```bash
+  docker compose -f deploy/docker-compose.yml run --rm notify-hub migrate
+  ```
 
-```powershell
-docker compose -f deploy/docker-compose.yml run --rm notify-hub migrate
-docker compose -f deploy/docker-compose.yml logs --tail 200 notify-hub
-```
+---
 
-升级时先备份，记录当前镜像标签，再修改 Compose 中的固定版本并重建。若新版本迁移可向后兼容，可切回旧镜像；若迁移不可逆，必须同时停止容器、恢复升级前数据库备份，再用旧镜像启动。不要对生产数据库自动执行 Alembic downgrade。
+## 七、数据安全与网络边界
+
+* **凭据机密防护**：敏感设置（如 API Key）在 SQLite 数据库中经过 `AES-256-GCM` 进行字段级加密存储，密钥派生于宿主机环境变量 `NOTIFY_HUB_SECRET_ENCRYPTION_KEY`。
+* **安全网络约束**：除非显式启用“允许私网端点”，否则 AI Provider 出站网络请求只允许连通公网，防止服务端请求伪造（SSRF）对局域网其他服务发起攻击。
+* **自建 HTTPS 代理**：若企业微信 API 或 OpenAI 请求需要通过中转，可在 `Settings` 中独立指定出站 proxy 地址，保障核心通道机密安全性。
+
+---
+
+## 八、开发路线图与非目标
+
+### 8.1 规划中特性 (Roadmap)
+* **v0.7.x**：接入企业微信交互卡片回调，点击按钮可直接延后、取消或完成特定提醒。
+* **v0.8.x**：支持语音投递与回调接收，提供本地 ASR/TTS 插件适配。
+
+### 8.2 非目标 (Non-Goals)
+* 不提供无界多租户 SaaS 托管服务。
+* 不允许在后台上传、在线修改或任意执行不可信的 Python 脚本。
+* 核心平台不依赖 Redis、RabbitMQ 等多节点服务，始终保持简单的单机部署能力。
+
+---
+
+## 九、开源许可
+
+本项目基于 **[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE)** 协议开源。凡是通过网络与该服务交互的修改版，均必须向社区公开其修改版的完整源代码。

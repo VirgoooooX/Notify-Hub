@@ -1,0 +1,92 @@
+/* Layout Utility Helpers */
+.flex {
+  display: flex;
+}
+
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.justify-end {
+  justify-content: flex-end;
+}
+
+.grid {
+  display: grid;
+  gap: var(--space-4);
+}
+
+/* Grids from legacy stylesheet */
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+}
+
+.split {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+}
+
+.detail-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1.15fr) minmax(320px, 0.85fr);
+}
+
+.entity-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+}
+
+/* Common sizing & padding classes */
+.content-width {
+  max-width: 1480px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.w-full {
+  width: 100%;
+}
+
+.h-full {
+  height: 100%;
+}
+
+/* Screen widths & responsive hide/show */
+.mobile-only {
+  display: none;
+}
+
+@media (max-width: 1000px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .split, .detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .mobile-only {
+    display: inline-flex;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .entity-grid {
+    grid-template-columns: 1fr;
+  }
+}

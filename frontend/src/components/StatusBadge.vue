@@ -1,2 +1,11 @@
-<script setup lang="ts">defineProps<{status:string}>();const labels:Record<string,string>={active:'正常',enabled:'已启用',disabled:'已停用',pending:'待处理',processing:'处理中',succeeded:'成功',retry_wait:'等待重试',dead:'已终止',cancelled:'已取消',paused:'已暂停',completed:'已完成',failed:'失败',degraded:'降级',awaiting_ack:'待确认'}</script>
-<template><span class="status" :class="`status--${status}`"><i />{{ labels[status]??status }}</span></template>
+<script setup lang="ts">
+import AppStatus from '@/components/ui/AppStatus.vue'
+
+defineProps<{
+  status: string
+}>()
+</script>
+
+<template>
+  <AppStatus :class="['status', `status--${status}`]" :status="status" />
+</template>
