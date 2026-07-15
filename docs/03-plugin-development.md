@@ -69,7 +69,8 @@ plugins/private/<plugin_id>/
     "network": ["x.com", "nitter.example.com"],
     "secrets": ["x_api_bearer_token"],
     "broadcast": false,
-    "media_write": false
+    "media_write": false,
+    "ai_profiles": ["semantic_classifier_fast"]
   }
 }
 ```
@@ -144,6 +145,7 @@ class PluginContext:
     run_id: str
     logger: PluginLogger
     http: RestrictedHttpClient
+    ai: PluginAIClient
 
     async def emit_event(self, event: EventDraft) -> EventReceipt: ...
     async def get_state(self, key: str, default: Any = None) -> Any: ...
@@ -161,6 +163,10 @@ class PluginContext:
 - 主加密密钥；
 - 管理员 JWT；
 - 其他插件状态。
+
+`context.ai` 每次调用都检查 Manifest 中的 `ai_profiles`，配置页面选中 Profile 不能替代运行时授权。插件提供具体业务 instruction、内容、标签/字段和缓存键；平台 Profile 决定能力类型、Provider、模型、Key、输出策略、预算、超时与缓存。调用方法必须与 Profile 能力一致，例如 `context.ai.classify()` 只能使用 classify Profile。通用防提示注入、禁用工具和结构化校验由 Gateway 强制执行，插件无需重复声明，也不能关闭。AI 只返回建议，插件仍通过确定性代码决定是否 emit 和何时 checkpoint。
+
+Manifest 的 `permissions.ai_profiles` 同时是插件对 Profile 的依赖声明。平台会从已校验配置中解析实际选择；没有显式选择器的插件按依赖全部获授权 Profile 处理。保存配置和启用插件时都会验证依赖仍可用，防止软删除后重新产生悬空引用。
 
 ## 6. EventDraft
 

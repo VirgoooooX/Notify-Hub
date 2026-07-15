@@ -41,8 +41,9 @@ class PluginPermissions(BaseModel):
     broadcast: bool = False
     media_write: bool = False
     private_network: list[str] = Field(default_factory=list)
+    ai_profiles: list[str] = Field(default_factory=list)
 
-    @field_validator("network", "secrets", "private_network")
+    @field_validator("network", "secrets", "private_network", "ai_profiles")
     @classmethod
     def unique_nonempty_values(cls, value: list[str]) -> list[str]:
         cleaned = [item.strip().lower() for item in value]

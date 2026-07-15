@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { api } from '@/lib/api';
-import type { Plugin, Person, JsonValue, PluginDetailsResponse, PluginSecret } from '@/types';
+import type { AIProfile, Plugin, Person, JsonValue, PluginDetailsResponse, PluginSecret } from '@/types';
 import PageHeader from '@/components/PageHeader.vue';
 import StatusBadge from '@/components/StatusBadge.vue';
 import EmptyState from '@/components/EmptyState.vue';
@@ -11,6 +11,7 @@ import { useUiStore } from '@/stores/ui';
 const ui = useUiStore();
 const items = ref<Plugin[]>([]);
 const people = ref<Person[]>([]);
+const aiProfiles = ref<AIProfile[]>([]);
 const running = ref(new Set<string>());
 const target = ref<Plugin>();
 const editing = ref<(Plugin & { secrets?: PluginSecret[] }) | null>(null);
@@ -20,8 +21,11 @@ const editForm = reactive({
   username: '',
   twscrape_fetch_limit: 40,
   interval_seconds: 180,
-  include_replies: true,
+  include_replies: false,
   include_reposts: false,
+  decision_mode: 'rules',
+  ai_profile: 'semantic_classifier_fast',
+  ai_min_confidence: 0.8,
   source: 'twscrape',
   feed_url: '',
   cover_image_url: '',
@@ -45,6 +49,14 @@ async function loadPeople() {
     people.value = Array.isArray(data) ? data : data.items;
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '接收人加载失败', 'danger');
+  }
+}
+
+async function loadAiProfiles() {
+  try {
+    aiProfiles.value = await api.get<AIProfile[]>('/admin/ai/profiles');
+  } catch {
+    aiProfiles.value = [];
   }
 }
 
@@ -93,8 +105,11 @@ async function configure(item: Plugin) {
     const sched = details.schedule && typeof details.schedule === 'object' ? details.schedule : null;
     editForm.interval_seconds = sched?.seconds || 180;
 
-    editForm.include_replies = conf.include_replies !== false;
+    editForm.include_replies = false;
     editForm.include_reposts = !!conf.include_reposts;
+    editForm.decision_mode = (conf.decision_mode as string) || 'rules';
+    editForm.ai_profile = (conf.ai_profile as string) || 'semantic_classifier_fast';
+    editForm.ai_min_confidence = (conf.ai_min_confidence as number) ?? 0.8;
     editForm.source = (conf.source as string) || 'twscrape';
     editForm.feed_url = (conf.feed_url as string) || '';
     editForm.cover_image_url = (conf.cover_image_url as string) || '';
@@ -116,11 +131,15 @@ async function saveConfig() {
       username: editForm.username,
       include_replies: editForm.include_replies,
       include_reposts: editForm.include_reposts,
+      original_posts_only: true,
       recipients: editForm.recipients,
     };
 
     if (pluginId === 'codex_x_monitor') {
       configData.source = editForm.source;
+      configData.decision_mode = editForm.decision_mode;
+      configData.ai_profile = editForm.ai_profile;
+      configData.ai_min_confidence = editForm.ai_min_confidence;
       if (editForm.source === 'rss') {
         configData.feed_url = editForm.feed_url;
       } else if (editForm.source === 'twscrape') {
@@ -166,9 +185,14 @@ async function saveConfig() {
 onMounted(() => {
   load();
   loadPeople();
+  loadAiProfiles();
 });
 
 const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(v)) : '—';
+const allowedAiProfiles = () => {
+  const allowed = editing.value?.manifest?.permissions?.ai_profiles ?? [];
+  return aiProfiles.value.filter((profile) => allowed.includes(profile.id));
+};
 </script>
 
 <template>
@@ -230,14 +254,44 @@ const time = (v?: string) => v ? new Intl.DateTimeFormat('zh-CN', { dateStyle: '
         </div>
       </template>
 
-      <div class="field" style="grid-column: 1 / -1; display: flex; gap: 24px; align-items: center; margin-top: 8px;">
-        <label style="display: flex; align-items: center; gap: 6px; font-weight: normal; cursor: pointer;">
-          <input v-model="editForm.include_replies" type="checkbox"> 包含回复
-        </label>
-        <label style="display: flex; align-items: center; gap: 6px; font-weight: normal; cursor: pointer;">
-          <input v-model="editForm.include_reposts" type="checkbox"> 包含转推
-        </label>
+      <div class="warning-box" style="grid-column: 1 / -1;">
+        仅处理增量原创帖子；回复和转推会在规则与 AI 判定前过滤。
       </div>
+
+      <template v-if="editing.id === 'codex_x_monitor'">
+        <div class="field">
+          <label>语义判定模式</label>
+          <select v-model="editForm.decision_mode" class="select">
+            <option value="rules">
+              仅规则
+            </option>
+            <option value="rules_then_ai">
+              规则预筛选 + AI
+            </option>
+            <option value="ai">
+              仅 AI
+            </option>
+            <option value="rules_or_ai">
+              规则命中或 AI
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label>AI Profile</label>
+          <select v-model="editForm.ai_profile" class="select" :disabled="editForm.decision_mode === 'rules'">
+            <option v-if="!allowedAiProfiles().length" value="semantic_classifier_fast">
+              semantic_classifier_fast（尚未创建）
+            </option>
+            <option v-for="profile in allowedAiProfiles()" :key="profile.id" :value="profile.id">
+              {{ profile.name }} · {{ profile.id }}
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label>最低通知置信度</label>
+          <input v-model.number="editForm.ai_min_confidence" class="input" type="number" min="0" max="1" step="0.05" :disabled="editForm.decision_mode === 'rules'">
+        </div>
+      </template>
 
       <div v-if="editing.id === 'codex_x_monitor'" class="field" style="grid-column: 1 / -1;">
         <label>封面图片 URL (可选)</label>

@@ -4,8 +4,10 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
 from app.config import Settings
+from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.plugin_models import (
     PluginConfig,
@@ -17,6 +19,7 @@ from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.context import (
     ConfigStore,
     EventEmitter,
+    PluginAIClient,
     PluginContext,
     SecretResolver,
     StateStore,
@@ -41,6 +44,10 @@ class PluginStateConflictError(RuntimeError):
 
 
 class PluginRunConflictError(RuntimeError):
+    pass
+
+
+class PluginAIProfileUnavailableError(RuntimeError):
     pass
 
 
@@ -154,6 +161,7 @@ class PluginService:
         clock: Callable[[], datetime] = utcnow,
         media_service: MediaService | None = None,
         settings: Settings | None = None,
+        ai_service: Any = None,
     ) -> None:
         self._factory = session_factory
         self.registry = registry
@@ -165,6 +173,7 @@ class PluginService:
         self._config = _DatabaseConfigStore(session_factory)
         self._media_service = media_service
         self._settings = settings
+        self._ai_service = ai_service
 
     async def initialize(self) -> None:
         self.registry.discover()
@@ -283,6 +292,7 @@ class PluginService:
             plugin = await session.get(PluginRecord, plugin_id)
             if plugin is None:
                 raise PluginNotFoundError(plugin_id)
+            await self._ensure_ai_profiles_available(session, registered.manifest, validated)
             row = await session.get(PluginConfig, plugin_id)
             if row is None:
                 session.add(
@@ -308,6 +318,12 @@ class PluginService:
             row = await session.get(PluginRecord, plugin_id)
             if row is None:
                 raise PluginNotFoundError(plugin_id)
+            config_row = await session.get(PluginConfig, plugin_id)
+            await self._ensure_ai_profiles_available(
+                session,
+                PluginManifest.model_validate(row.manifest),
+                {} if config_row is None else config_row.config,
+            )
             row.enabled = True
             row.status = "healthy"
             row.circuit_open = False
@@ -315,6 +331,30 @@ class PluginService:
             row.last_error = None
             row.next_run_at = next_run_at(self._schedule(row), now)
             row.updated_at = now
+
+    @staticmethod
+    async def _ensure_ai_profiles_available(
+        session: AsyncSession,
+        manifest: PluginManifest,
+        config: Mapping[str, Any],
+    ) -> None:
+        referenced = referenced_ai_profiles(manifest, config)
+        if not referenced:
+            return
+        available = set(
+            await session.scalars(
+                select(AIProfile.id).where(
+                    AIProfile.id.in_(referenced),
+                    AIProfile.enabled.is_(True),
+                    AIProfile.deleted_at.is_(None),
+                )
+            )
+        )
+        missing = sorted(referenced - available)
+        if missing:
+            raise PluginAIProfileUnavailableError(
+                f"AI profiles are unavailable: {', '.join(missing)}"
+            )
 
     async def disable(self, plugin_id: str) -> None:
         async with self._factory() as session, session.begin():
@@ -460,6 +500,12 @@ class PluginService:
             ),
             http=http,
             media=media_publisher,
+            ai=PluginAIClient(
+                plugin_id=plugin_id,
+                run_id=run_id,
+                allowed_profiles=set(manifest.permissions.ai_profiles),
+                service=self._ai_service,
+            ),
         )
         try:
             outcome = await self._runner.run(

@@ -6,6 +6,7 @@ from typing import Any
 from app.api.dependencies import require_admin
 from app.application.audit import add_audit
 from app.application.plugin_service import (
+    PluginAIProfileUnavailableError,
     PluginNotFoundError,
     PluginRunConflictError,
     PluginService,
@@ -99,6 +100,9 @@ async def list_plugins(request: Request) -> DataResponse:
 async def get_plugin(plugin_id: str, request: Request) -> DataResponse:
     try:
         result = await _service(request).get_plugin(plugin_id)
+        result["config_schema"] = (
+            _service(request).registry.get(plugin_id).plugin_class.config_schema()
+        )
     except PluginNotFoundError as exc:
         raise _not_found(exc) from exc
     return DataResponse(data=result)
@@ -114,6 +118,8 @@ async def update_config(plugin_id: str, body: PluginConfigUpdate, request: Reque
         raise _not_found(exc) from exc
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    except PluginAIProfileUnavailableError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     await _audit(request, "plugin.config.update", plugin_id)
     return DataResponse(data={"config": result})
 
@@ -124,6 +130,8 @@ async def enable_plugin(plugin_id: str, request: Request) -> None:
         await _service(request).enable(plugin_id)
     except PluginNotFoundError as exc:
         raise _not_found(exc) from exc
+    except PluginAIProfileUnavailableError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     await _audit(request, "plugin.enable", plugin_id)
 
 

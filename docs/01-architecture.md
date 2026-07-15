@@ -30,7 +30,7 @@ Notify Hub 第一阶段采用**模块化单体**：
 ┌──────────────────────────────────────────────────┐
 │                Application Services              │
 │ EventService | ReminderService | PluginService   │
-│ ConversationService | DeliveryService            │
+│ ConversationService | DeliveryService | AIService│
 └──────────────┬──────────────────────┬────────────┘
                │                      │
                ▼                      ▼
@@ -225,6 +225,12 @@ class NotificationChannel:
 - 网络超时和可重试错误分类。
 
 核心领域模型不得依赖 `touser`、`agentid`、`media_id` 等企业微信字段。
+
+### 4.8 AI Gateway
+
+AI Gateway 是平台能力，不属于任何具体监控插件。它负责 Provider、Provider 模型发现与允许列表、Profile 能力与运行策略、SSRF 检查、强制安全约束、结构化输出降级、持久化缓存、请求与 Token 预算、调用日志和稳定错误类型。插件只能通过 `context.ai` 提交具体业务 instruction 与待分析数据，不能指定 Base URL、API Key、请求头或模型；调用方法必须与 Profile 能力匹配。
+
+第一版使用 OpenAI-compatible Chat Completions 作为最低公共协议。外部网络请求在数据库事务外执行；调用前的预算预留、调用后的缓存和日志分别使用短事务。
 
 ## 5. 事件流
 

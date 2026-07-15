@@ -328,3 +328,12 @@ DNS 解析和重定向后都要重新校验，避免 DNS rebinding。
 - [ ] Docker 非 root；
 - [ ] HTTPS 和反向代理配置正确；
 - [ ] 依赖安全扫描无已知高危问题。
+
+## 16. AI Gateway 安全边界
+
+- Provider URL 禁止凭据和 fragment，默认只允许 HTTPS；HTTP 仅用于管理员显式允许的私网端点。
+- DNS 解析结果与实际连接 peer 必须一致；云元数据地址始终禁止；Provider 重定向默认拒绝。
+- API Key 使用 SecretStore，管理 API 只返回 configured 状态；调用日志不保存正文、Prompt、Authorization 或 Provider 响应正文。
+- 外部内容被视为不可信数据，系统 Prompt 明确忽略其中的指令；模型不获得工具、通知能力或配置写权限。
+- 结构化输出必须经 Pydantic 校验；不得从任意自然语言中猜测业务结论。
+- 插件未获 Profile 权限、预算耗尽、超时或结构化输出失败时返回稳定错误；监控插件默认 fail-closed 且不推进当前游标。

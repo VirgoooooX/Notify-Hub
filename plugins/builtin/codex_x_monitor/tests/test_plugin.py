@@ -74,6 +74,35 @@ class FakeHttp:
         return self.responses.pop(0)
 
 
+@dataclass
+class FakeAIDecision:
+    id: str
+    label: str = "notify"
+    confidence: float = 0.95
+    reason: str = "matched"
+
+
+class FakeAI:
+    def __init__(self, *, label: str = "notify", error: Exception | None = None) -> None:
+        self.label = label
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def classify_many(self, **kwargs: Any) -> list[FakeAIDecision]:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return [FakeAIDecision(id=item.id, label=self.label) for item in kwargs["items"]]
+
+
+class FakePostSource:
+    def __init__(self, posts: list[XPost]) -> None:
+        self.posts = posts
+
+    async def fetch(self, _context: Any, _config: Any) -> list[XPost]:
+        return self.posts
+
+
 class FakeContext:
     def __init__(
         self,
@@ -84,6 +113,7 @@ class FakeContext:
         receipts: list[Any] | None = None,
         emit_error: Exception | None = None,
         secret: str = "test-bearer-secret",
+        ai: FakeAI | None = None,
     ) -> None:
         self.config = dict(config)
         self.fake_http = FakeHttp(responses)
@@ -94,6 +124,7 @@ class FakeContext:
         self.secret = secret
         self.events: list[EventDraft] = []
         self.saved: list[Any] = []
+        self.ai = ai or FakeAI(error=AssertionError("unexpected AI call"))
 
     async def get_config(self) -> Mapping[str, Any]:
         return self.config
@@ -272,6 +303,79 @@ def test_source_timeout_propagates_without_cursor_change() -> None:
     assert context.saved == []
 
 
+def _post(post_id: int, *, reply: bool = False, repost: bool = False) -> XPost:
+    return XPost.model_validate(
+        {
+            "id": str(post_id),
+            "author_username": "thsottiaux",
+            "text": "Codex weekly quota has been reset and restored",
+            "url": f"https://x.com/thsottiaux/status/{post_id}",
+            "published_at": f"2026-07-13T10:00:{post_id:02d}Z",
+            "is_reply": reply,
+            "is_repost": repost,
+        }
+    )
+
+
+def test_ai_mode_batches_five_incremental_original_posts_once() -> None:
+    ai = FakeAI()
+    posts = [_post(index) for index in range(1, 6)]
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+    result = asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource(posts)}).run(context))
+    assert len(ai.calls) == 1
+    assert len(ai.calls[0]["items"]) == 5
+    assert result.emitted_events == 5
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "5"
+
+
+def test_replies_and_reposts_never_reach_ai() -> None:
+    ai = FakeAI()
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "ai"},
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+    posts = [_post(1, reply=True), _post(2, repost=True)]
+    result = asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource(posts)}).run(context))
+    assert ai.calls == []
+    assert context.events == []
+    assert result.new_posts == 2
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "2"
+
+
+def test_ai_failure_is_fail_closed_without_checkpoint() -> None:
+    ai = FakeAI(error=RuntimeError("AI unavailable"))
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+    with pytest.raises(RuntimeError, match="AI unavailable"):
+        asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
+    assert context.saved == []
+    assert context.events == []
+
+
+def test_ai_ignore_checkpoints_without_emitting() -> None:
+    ai = FakeAI(label="ignore")
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+    asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
+    assert context.events == []
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "1"
+
+
 # --- twscrape tests with mock ---
 
 
@@ -338,6 +442,7 @@ def test_twscrape_fetch_with_replies(mock_gather: MagicMock, mock_api_cls: Magic
             "source": "twscrape",
             "include_replies": True,
             "include_reposts": True,
+            "original_posts_only": False,
         }
     )
     context = FakeContext(config.model_dump(), [])

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from app.ai.schemas import AIClassificationItem, AIClassificationResult
 from app.application.plugin_service import (
     PluginService,
     PluginStateConflictError,
@@ -13,6 +14,7 @@ from app.application.plugin_service import (
 from app.infrastructure.database.base import Base
 from app.infrastructure.database.session import create_session_factory
 from app.plugin_runtime.base import EventDraft, EventReceipt
+from app.plugin_runtime.context import PluginAIClient
 from app.plugin_runtime.http import RestrictedHttpClient, RestrictedHttpError
 from app.plugin_runtime.manifest import PluginManifest
 from app.plugin_runtime.registry import PluginRegistry
@@ -97,6 +99,42 @@ def test_manifest_and_interval_schedule() -> None:
     assert (
         next_run_at(manifest.default_schedule, after) - after.replace(tzinfo=UTC)
     ).total_seconds() == 60
+
+
+class FakeAIService:
+    async def classify_many(self, **kwargs: object) -> list[AIClassificationResult]:
+        items = kwargs["items"]
+        assert isinstance(items, list)
+        return [
+            AIClassificationResult(id=item.id, label="ignore", confidence=1, reason="test")
+            for item in items
+        ]
+
+
+@pytest.mark.asyncio
+async def test_plugin_ai_client_enforces_manifest_profiles() -> None:
+    client = PluginAIClient(
+        plugin_id="fake_monitor",
+        run_id="run-1",
+        allowed_profiles={"allowed_profile"},
+        service=FakeAIService(),  # type: ignore[arg-type]
+    )
+    with pytest.raises(PermissionError, match="not permitted"):
+        await client.classify_many(
+            profile="forbidden_profile",
+            use_case="test",
+            instruction="classify",
+            labels=["notify", "ignore"],
+            items=[AIClassificationItem(id="1", content="test")],
+        )
+    results = await client.classify_many(
+        profile="allowed_profile",
+        use_case="test",
+        instruction="classify",
+        labels=["notify", "ignore"],
+        items=[AIClassificationItem(id="1", content="test")],
+    )
+    assert results[0].label == "ignore"
 
 
 @pytest.mark.asyncio

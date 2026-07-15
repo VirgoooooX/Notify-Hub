@@ -18,6 +18,7 @@
     "network": ["x.com", "api.x.com", "rss.example.com"],
     "secrets": ["x_api_bearer_token", "twscrape_cookie"],
     "broadcast": false,
-    "media_write": false
+    "media_write": false,
+    "ai_profiles": ["semantic_classifier_fast"]
   }
 }

@@ -56,8 +56,11 @@ class CodexXMonitorConfig(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     notification_level: Literal["info", "warning"] = "info"
     include_reposts: bool = False
-    include_replies: bool = True
-    match_mode: Literal["rules"] = "rules"
+    include_replies: bool = False
+    original_posts_only: bool = True
+    decision_mode: Literal["rules", "ai", "rules_then_ai", "rules_or_ai"] = "rules"
+    ai_profile: str = "semantic_classifier_fast"
+    ai_min_confidence: float = Field(default=0.8, ge=0, le=1)
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
@@ -82,7 +85,36 @@ class CodexXMonitorConfig(BaseModel):
     def validate_source_configuration(self) -> CodexXMonitorConfig:
         if self.source == "rss" and self.feed_url is None:
             raise ValueError("feed_url is required when source is rss")
+        if self.original_posts_only:
+            self.include_replies = False
+            self.include_reposts = False
         return self
+
+
+class AIClassificationItem(BaseModel):
+    id: str
+    content: str
+    cache_key: str | None = None
+
+
+class AIClassificationResult(Protocol):
+    id: str
+    label: str
+    confidence: float
+    reason: str
+
+
+@runtime_checkable
+class PluginAIClient(Protocol):
+    async def classify_many(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        instruction: str,
+        labels: list[str],
+        items: list[AIClassificationItem],
+    ) -> list[AIClassificationResult]: ...
 
 
 class ArticleDraft(BaseModel):
@@ -162,6 +194,7 @@ class PluginMediaPublisher(Protocol):
 class PluginContext(Protocol):
     http: RestrictedHttpClient
     media: PluginMediaPublisher
+    ai: PluginAIClient
 
     async def get_config(self) -> Mapping[str, Any]: ...
     async def get_state(self, key: str, default: Any = None) -> Any: ...

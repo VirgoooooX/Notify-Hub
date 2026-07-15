@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 STATE_KEY = "monitor_state"
 
@@ -21,7 +21,8 @@ class FabrizioHwgConfig(BaseModel):
     recipients: list[str] = Field(default_factory=list)
     notification_level: Literal["info", "warning", "critical"] = "info"
     include_reposts: bool = False
-    include_replies: bool = True
+    include_replies: bool = False
+    original_posts_only: bool = True
     fallback_cover_url: AnyHttpUrl | None = None
 
     @field_validator("username")
@@ -36,6 +37,13 @@ class FabrizioHwgConfig(BaseModel):
     @classmethod
     def normalize_recipients(cls, values: list[str]) -> list[str]:
         return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    @model_validator(mode="after")
+    def validate_original_only(self) -> FabrizioHwgConfig:
+        if self.original_posts_only:
+            self.include_replies = False
+            self.include_reposts = False
+        return self
 
 
 class ArticleDraft(BaseModel):

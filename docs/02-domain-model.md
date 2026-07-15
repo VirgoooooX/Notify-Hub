@@ -23,6 +23,9 @@ Reminder 1 ─── N ReminderRecipient
 Reminder 1 ─── N Event
 WeComIdentity N ─── 1 Person
 ConversationSession N ─── 1 WeComIdentity
+AIProvider 1 ─── N AIProfile
+AIProfile 1 ─── N AIResponseCache
+AIProfile 1 ─── N AIInvocation
 ```
 
 ## 3. Event：发生了什么
@@ -412,3 +415,12 @@ failed -> healthy（成功手动运行或重新启用后）
 - Reminder 和确认记录：长期保留，允许归档。
 
 清理任务必须分批执行，避免 SQLite 长事务。
+
+## 21. AI Gateway
+
+- `AIProvider`：服务端点、协议、TLS/私网策略、超时、重试和结构化输出能力；API Key 使用现有 SecretStore 的 `ai_provider/<provider_id>/api_key`，不进入 Provider 行。
+- `AIProviderModel`：Provider `/models` 的持久化发现目录；`available` 表示本次同步仍存在，`enabled` 表示管理员显式允许用于 Profile。新发现模型默认禁用，唯一约束为 `(provider_id, model_id)`。
+- `AIProfile`：插件可引用的稳定运行策略。除 Provider 与允许模型外，还定义单一能力类型（classify/extract/summarize）、Temperature、输出上限、超时、输出语言、推理强度、详细程度、是否返回理由及理由长度、补充系统约束、缓存 TTL、每日请求/Token 限额和 revision。平台安全约束、禁用工具与结构化校验不属于可关闭的 Profile 选项。
+- `AIProfile.deleted_at`：Profile 删除采用软删除，以保留 `AIInvocation` 审计关系；被启用插件引用时禁止删除，删除后不再出现在列表中且不能调用。
+- `AIResponseCache`：按 Profile、revision、Prompt version 和输入哈希唯一；Profile 改动后旧缓存不会误命中。
+- `AIInvocation`：只保存 Profile、插件/运行 ID、用途、输入哈希、缓存命中、延迟、Token 和稳定错误码，不保存正文、Prompt 或凭据。

@@ -535,6 +535,26 @@ curl -X POST https://notify.example.com/api/v1/events \
 
 ---
 
+# Phase 11：v0.6.0 AI Gateway
+
+## 目标
+
+把 AI 建成平台基座能力，插件只调用权限受控的 `context.ai`。
+
+## 顺序
+
+1. Provider/ProviderModel/Profile/Cache/Invocation 模型与迁移；
+2. Provider/Profile 管理 API、SecretStore 与后台页面；
+3. OpenAI-compatible Client、SSRF/TLS/超时和结构化输出降级；
+4. 持久化缓存、请求/Token 预算与调用日志；
+5. Manifest `ai_profiles` 和 `context.ai`；
+6. Codex X Monitor 的规则预筛选、批量 AI 判定和 fail-closed；
+7. 原创增量过滤、重启缓存和故障恢复测试。
+
+未配置 AI 时核心平台和纯规则模式必须继续可用。首次 baseline、无增量、回复、转推和缓存命中不得消耗 Provider 请求。
+
+---
+
 # 3. 每阶段完成定义
 
 每个阶段只有同时满足以下条件才算完成：

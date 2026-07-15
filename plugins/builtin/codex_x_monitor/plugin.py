@@ -13,6 +13,7 @@ from .schemas import (
     PLUGIN_ID,
     PLUGIN_VERSION,
     STATE_KEY,
+    AIClassificationItem,
     ArticleDraft,
     CodexXMonitorConfig,
     EventDraft,
@@ -96,16 +97,67 @@ class CodexXMonitorPlugin:
 
         emitted = 0
         matched = 0
+        rules_by_id = {
+            post.id: match_post(post, config)
+            for post in candidates
+            if not post.is_repost and not post.is_reply
+        }
+        ai_candidates = []
+        if config.decision_mode != "rules":
+            for post in candidates:
+                if post.is_repost or post.is_reply:
+                    continue
+                rule_result = rules_by_id[post.id]
+                if config.decision_mode == "rules_then_ai" and not rule_result.matched:
+                    continue
+                if config.decision_mode == "rules_or_ai" and rule_result.matched:
+                    continue
+                ai_candidates.append(post)
+
+        ai_by_id: dict[str, Any] = {}
+        for offset in range(0, len(ai_candidates), 5):
+            batch = ai_candidates[offset : offset + 5]
+            decisions = await context.ai.classify_many(
+                profile=config.ai_profile,
+                use_case="codex_usage_reset",
+                instruction=(
+                    "判断每条原创帖子是否明确表示 Codex、ChatGPT 或相关服务的使用配额、"
+                    "周限额或速率限制已经恢复、重置或明显改善。"
+                ),
+                labels=["notify", "ignore", "uncertain"],
+                items=[
+                    AIClassificationItem(
+                        id=post.id,
+                        content=post.text,
+                        cache_key=f"x:{post.author_username}:{post.id}",
+                    )
+                    for post in batch
+                ],
+            )
+            ai_by_id.update({decision.id: decision for decision in decisions})
+
         for post in candidates:
-            if post.is_repost and not config.include_reposts:
+            if post.is_repost:
                 await self._checkpoint(context, state, post, config.source)
                 continue
-            if post.is_reply and not config.include_replies:
+            if post.is_reply:
                 await self._checkpoint(context, state, post, config.source)
                 continue
 
-            result = match_post(post, config)
-            if result.matched:
+            result = rules_by_id[post.id]
+            ai_decision = ai_by_id.get(post.id)
+            should_notify = result.matched
+            ai_controls_decision = config.decision_mode in {"ai", "rules_then_ai"} or (
+                config.decision_mode == "rules_or_ai" and not result.matched
+            )
+            if ai_controls_decision:
+                should_notify = bool(
+                    ai_decision is not None
+                    and ai_decision.label == "notify"
+                    and ai_decision.confidence >= config.ai_min_confidence
+                )
+
+            if should_notify:
                 matched += 1
                 summary = format_post_summary(post)
 
@@ -131,6 +183,10 @@ class CodexXMonitorPlugin:
                             "author": post.author_username,
                             "matched_rules": list(result.matched_rules),
                             "source": config.source,
+                            "decision_mode": config.decision_mode,
+                            "ai_label": getattr(ai_decision, "label", None),
+                            "ai_confidence": getattr(ai_decision, "confidence", None),
+                            "ai_reason": getattr(ai_decision, "reason", None),
                         },
                         article=ArticleDraft(
                             title="Codex 用量可能已重置",

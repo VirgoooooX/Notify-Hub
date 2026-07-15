@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
+from app.ai.schemas import (
+    AIClassificationItem,
+    AIClassificationResult,
+    AIExtractionResult,
+    AISummaryResult,
+)
 from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.http import RestrictedHttpClient
 
@@ -41,6 +47,167 @@ class SecretResolver(Protocol):
     async def resolve(self, plugin_id: str, name: str) -> str: ...
 
 
+class AIServiceProtocol(Protocol):
+    async def classify(
+        self,
+        *,
+        profile: str,
+        plugin_id: str | None,
+        plugin_run_id: str | None,
+        use_case: str,
+        content: str,
+        instruction: str,
+        labels: Sequence[str],
+        cache_key: str | None = None,
+    ) -> AIClassificationResult: ...
+
+    async def classify_many(
+        self,
+        *,
+        profile: str,
+        plugin_id: str | None,
+        plugin_run_id: str | None,
+        use_case: str,
+        instruction: str,
+        labels: Sequence[str],
+        items: Sequence[AIClassificationItem],
+    ) -> list[AIClassificationResult]: ...
+
+    async def extract(
+        self,
+        *,
+        profile: str,
+        plugin_id: str | None,
+        plugin_run_id: str | None,
+        use_case: str,
+        content: str,
+        instruction: str,
+        fields: Sequence[str],
+        cache_key: str | None = None,
+    ) -> AIExtractionResult: ...
+
+    async def summarize(
+        self,
+        *,
+        profile: str,
+        plugin_id: str | None,
+        plugin_run_id: str | None,
+        use_case: str,
+        content: str,
+        instruction: str,
+        max_characters: int = 2000,
+        cache_key: str | None = None,
+    ) -> AISummaryResult: ...
+
+
+class PluginAIClient:
+    def __init__(
+        self,
+        *,
+        plugin_id: str,
+        run_id: str,
+        allowed_profiles: set[str],
+        service: AIServiceProtocol | None,
+    ) -> None:
+        self._plugin_id = plugin_id
+        self._run_id = run_id
+        self._allowed_profiles = allowed_profiles
+        self._service = service
+
+    def _authorize(self, profile: str) -> AIServiceProtocol:
+        if profile not in self._allowed_profiles:
+            raise PermissionError("plugin is not permitted to use this AI profile")
+        if self._service is None:
+            raise RuntimeError("AI service is not available")
+        return self._service
+
+    async def classify(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        content: str,
+        instruction: str,
+        labels: Sequence[str],
+        cache_key: str | None = None,
+    ) -> AIClassificationResult:
+        service = self._authorize(profile)
+        return await service.classify(
+            profile=profile,
+            plugin_id=self._plugin_id,
+            plugin_run_id=self._run_id,
+            use_case=use_case,
+            content=content,
+            instruction=instruction,
+            labels=labels,
+            cache_key=cache_key,
+        )
+
+    async def classify_many(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        instruction: str,
+        labels: Sequence[str],
+        items: Sequence[AIClassificationItem],
+    ) -> list[AIClassificationResult]:
+        service = self._authorize(profile)
+        return await service.classify_many(
+            profile=profile,
+            plugin_id=self._plugin_id,
+            plugin_run_id=self._run_id,
+            use_case=use_case,
+            instruction=instruction,
+            labels=labels,
+            items=items,
+        )
+
+    async def extract(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        content: str,
+        instruction: str,
+        fields: Sequence[str],
+        cache_key: str | None = None,
+    ) -> AIExtractionResult:
+        service = self._authorize(profile)
+        return await service.extract(
+            profile=profile,
+            plugin_id=self._plugin_id,
+            plugin_run_id=self._run_id,
+            use_case=use_case,
+            content=content,
+            instruction=instruction,
+            fields=fields,
+            cache_key=cache_key,
+        )
+
+    async def summarize(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        content: str,
+        instruction: str,
+        max_characters: int = 2000,
+        cache_key: str | None = None,
+    ) -> AISummaryResult:
+        service = self._authorize(profile)
+        return await service.summarize(
+            profile=profile,
+            plugin_id=self._plugin_id,
+            plugin_run_id=self._run_id,
+            use_case=use_case,
+            content=content,
+            instruction=instruction,
+            max_characters=max_characters,
+            cache_key=cache_key,
+        )
+
+
 class PluginContext:
     """The complete platform surface visible to a trusted v1 plugin."""
 
@@ -49,6 +216,7 @@ class PluginContext:
         "_emitter",
         "_secrets",
         "_state",
+        "ai",
         "http",
         "logger",
         "media",
@@ -66,6 +234,7 @@ class PluginContext:
         emitter: EventEmitter,
         secrets: SecretResolver,
         http: RestrictedHttpClient,
+        ai: PluginAIClient,
         media: PluginMediaPublisher | None = None,
     ) -> None:
         self.plugin_id = plugin_id
@@ -76,6 +245,7 @@ class PluginContext:
         self._secrets = secrets
         self.http = http
         self.media = media
+        self.ai = ai
         self.logger = structlog.get_logger().bind(plugin_id=plugin_id, plugin_run_id=run_id)
 
     async def emit_event(self, event: Any) -> EventReceipt:

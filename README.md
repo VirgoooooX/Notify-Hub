@@ -16,6 +16,7 @@ Notify Hub 负责：
 - 通过自然语言创建、查询、延后、完成或取消提醒；
 - 安装、配置、启停和调度监控插件；
 - 统一处理去重、重试、发送记录、权限和审计。
+- 通过 AI Gateway 统一管理兼容 Provider、模型 Profile、缓存、预算和调用审计。
 
 其中企业微信入站对话、语音和持续催办属于后续版本；首个 MVP 先建立可靠事件投递和插件平台。
 
@@ -98,6 +99,7 @@ Notify Hub 负责：
 - [Codex X Monitor 插件设计](docs/09-codex-x-monitor-plugin.md)
 - [测试策略](docs/10-testing-strategy.md)
 - [可交互持续提醒设计](docs/11-interactive-continuous-reminders.md)
+- [AI Gateway](docs/13-ai-gateway.md)
 - [架构决策记录](docs/DECISIONS.md)
 - [编码 Agent 与开发约束](AGENTS.md)
 
@@ -117,6 +119,8 @@ Notify Hub 负责：
 当前代码已完成 `v0.3.0` 的 Phase 0～9 累计范围，包括可靠事件投递、企业微信渠道、插件运行时与 Codex X Monitor、管理后台、提醒/持续催办、回调交互及受控图片/语音能力。冻结后的发布边界和门禁见 [`docs/12-v0.3.0-release-contract.md`](docs/12-v0.3.0-release-contract.md)。
 
 真实企业微信文本、交互卡片、图片、语音和回调仍需在配置有效凭据的部署环境完成手工验收；ASR/TTS 依赖部署方配置本地 Adapter，不在基础镜像内置模型。
+
+`v0.6.0` 正在增加平台级 AI Gateway。Provider、API Key、模型、缓存和预算由核心统一管理；插件只能调用 Manifest 明确授权的 `context.ai` Profile。未配置 AI Provider 或 Key 时，现有事件、提醒、投递和纯规则插件仍正常运行，也不会在启动时发起外部 AI 请求。
 
 ## 本地开发与测试
 

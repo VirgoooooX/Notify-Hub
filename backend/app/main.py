@@ -12,8 +12,10 @@ from sqlalchemy import select
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
+from app.ai.service import AIService
 from app.api.errors import install_error_handlers
 from app.api.health import router as health_router
+from app.application.ai_control_service import AIControlService
 from app.application.conversation_service import ConversationService
 from app.application.event_service import EventService
 from app.application.media_service import MediaService
@@ -77,6 +79,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     factory = create_session_factory(engine)
     clock = SystemClock()
     event_service = EventService(factory, clock)
+    ai_control_service = AIControlService(factory, clock.now)
     wecom_client = WeComClient(settings, clock)
     worker_stop = asyncio.Event()
     reminder_service = ReminderService(
@@ -182,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.secret_encryption_key is not None
         else None
     )
+    ai_service = AIService(factory, secret_store=secret_store)
     plugin_service = PluginService(
         session_factory=factory,
         registry=PluginRegistry(),
@@ -190,6 +194,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         clock=clock.now,
         media_service=media_service,
         settings=settings,
+        ai_service=ai_service,
     )
     plugin_worker = PluginWorker(plugin_service, worker_id="plugin-main")
 
@@ -212,6 +217,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        await ai_control_service.bootstrap_if_empty(
+            enabled=settings.ai_enabled,
+            preset=settings.ai_bootstrap_preset,
+            base_url=settings.ai_bootstrap_base_url,
+            model=settings.ai_bootstrap_model,
+            api_key=(
+                settings.ai_bootstrap_api_key.get_secret_value()
+                if settings.ai_bootstrap_api_key is not None
+                else None
+            ),
+            secret_store=secret_store,
+        )
         async with factory() as session:
             persisted_settings = {
                 row.key: row.value
@@ -260,7 +277,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await media_http.aclose()
         await engine.dispose()
 
-    app = FastAPI(title="Notify Hub", version="0.5.2", lifespan=lifespan)
+    app = FastAPI(title="Notify Hub", version="0.6.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory
@@ -268,6 +285,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.login_limiter = SlidingWindowLimiter(clock)
     app.state.api_limiter = SlidingWindowLimiter(clock)
     app.state.event_service = event_service
+    app.state.ai_control_service = ai_control_service
+    app.state.ai_service = ai_service
     app.state.notification_service = NotificationService(factory, clock)
     app.state.notification_channel = channel
     app.state.delivery_worker = worker
@@ -309,6 +328,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_auth import router as auth_router
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
+    from app.api.ai import router as ai_router
     from app.api.events import router as events_router
     from app.api.media import public_router
     from app.api.media import router as media_router
@@ -317,6 +337,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.wecom_callback import router as callback_router
 
     app.include_router(auth_router, prefix="/api/v1/admin/auth")
+    app.include_router(ai_router, prefix="/api/v1/admin")
     app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(management_router, prefix="/api/v1/admin")
     app.include_router(events_router, prefix="/api/v1")

@@ -96,10 +96,10 @@ class FabrizioHwgPlugin:
         emitted = 0
         matched = 0
         for post in candidates:
-            if post.is_repost and not config.include_reposts:
+            if post.is_repost:
                 await self._checkpoint(context, state, post, config.source)
                 continue
-            if post.is_reply and not config.include_replies:
+            if post.is_reply:
                 await self._checkpoint(context, state, post, config.source)
                 continue
 
