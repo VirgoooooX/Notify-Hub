@@ -175,17 +175,47 @@ def git_operations(project_root: Path, new_version: str, auto_push: bool) -> Non
         if file_path.is_file():
             subprocess.run(["git", "add", rel_path], cwd=str(project_root), check=True)
 
-    # 3. Create the unified commit
-    subprocess.run(["git", "commit", "-m", commit_msg], cwd=str(project_root), check=True)
-    print(f"\nCreated Git Commit: {commit_msg}")
-
-    # 4. Tag the commit
-    subprocess.run(
-        ["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"],
+    # 3. Create the unified commit only when the version files actually changed.
+    staged_status = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
         cwd=str(project_root),
-        check=True,
+        check=False,
+    ).returncode
+    if staged_status == 1:
+        subprocess.run(["git", "commit", "-m", commit_msg], cwd=str(project_root), check=True)
+        print(f"\nCreated Git Commit: {commit_msg}")
+    elif staged_status == 0:
+        print("\nVersion files are already up to date; skipping empty release commit.")
+    else:
+        raise subprocess.CalledProcessError(staged_status, ["git", "diff", "--cached", "--quiet"])
+
+    # 4. Tag the commit. Re-running the same release is safe when the tag
+    # already points at HEAD, but a conflicting tag must never be moved.
+    tag_check = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/tags/{tag_name}^{{commit}}"],
+        cwd=str(project_root),
+        check=False,
+        capture_output=True,
+        text=True,
     )
-    print(f"Created Git Tag:    {tag_name}")
+    if tag_check.returncode == 0:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(project_root),
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        if tag_check.stdout.strip() != head:
+            raise RuntimeError(f"Git tag {tag_name} already exists on a different commit")
+        print(f"Git Tag Already Exists: {tag_name}")
+    else:
+        subprocess.run(
+            ["git", "tag", "-a", tag_name, "-m", f"Release {tag_name}"],
+            cwd=str(project_root),
+            check=True,
+        )
+        print(f"Created Git Tag:    {tag_name}")
 
     if auto_push:
         print(f"\nPushing branches and tags to origin...")
