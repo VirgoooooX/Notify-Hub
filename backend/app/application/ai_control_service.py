@@ -34,6 +34,10 @@ class AIProfileInUseError(RuntimeError):
     pass
 
 
+class AIProviderInUseError(RuntimeError):
+    pass
+
+
 def normalize_provider_url(value: str, *, allow_private_network: bool) -> str:
     parsed = urlsplit(value.strip())
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -144,7 +148,11 @@ class AIControlService:
 
     async def list_providers(self) -> list[dict[str, Any]]:
         async with self._factory() as session:
-            rows = await session.scalars(select(AIProvider).order_by(AIProvider.created_at))
+            rows = await session.scalars(
+                select(AIProvider)
+                .where(AIProvider.deleted_at.is_(None))
+                .order_by(AIProvider.created_at)
+            )
             return [self._provider_view(row) for row in rows]
 
     async def create_provider(self, values: Mapping[str, Any]) -> dict[str, Any]:
@@ -179,7 +187,7 @@ class AIControlService:
     async def update_provider(self, provider_id: str, values: Mapping[str, Any]) -> dict[str, Any]:
         async with self._factory() as session, session.begin():
             row = await session.get(AIProvider, provider_id)
-            if row is None:
+            if row is None or row.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
             next_allow_private = bool(
                 values.get("allow_private_network", row.allow_private_network)
@@ -199,7 +207,32 @@ class AIControlService:
             row.updated_at = self._clock()
         return self._provider_view(row)
 
-    async def delete_provider(self, provider_id: str) -> None:
+    async def delete_provider(self, provider_id: str) -> bool:
+        async with self._factory() as session, session.begin():
+            row = await session.get(AIProvider, provider_id)
+            if row is None:
+                raise AIResourceNotFoundError(provider_id)
+            if row.deleted_at is not None:
+                return False
+            profile_ids = list(
+                await session.scalars(
+                    select(AIProfile.id).where(
+                        AIProfile.provider_id == provider_id,
+                        AIProfile.deleted_at.is_(None),
+                    )
+                )
+            )
+            if profile_ids:
+                raise AIProviderInUseError(
+                    f"AI provider is used by profiles: {', '.join(profile_ids)}"
+                )
+            row.enabled = False
+            row.deleted_at = self._clock()
+            row.updated_at = row.deleted_at
+            return True
+
+    async def rollback_provider_creation(self, provider_id: str) -> None:
+        """Physically remove a provider whose create transaction could not store its secret."""
         async with self._factory() as session, session.begin():
             row = await session.get(AIProvider, provider_id)
             if row is not None:
@@ -207,7 +240,8 @@ class AIControlService:
 
     async def list_provider_models(self, provider_id: str) -> list[dict[str, Any]]:
         async with self._factory() as session:
-            if await session.get(AIProvider, provider_id) is None:
+            provider = await session.get(AIProvider, provider_id)
+            if provider is None or provider.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
             rows = await session.scalars(
                 select(AIProviderModel)
@@ -225,7 +259,8 @@ class AIControlService:
         discovered = set(cleaned)
         now = self._clock()
         async with self._factory() as session, session.begin():
-            if await session.get(AIProvider, provider_id) is None:
+            provider = await session.get(AIProvider, provider_id)
+            if provider is None or provider.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
             rows = list(
                 await session.scalars(
@@ -261,7 +296,8 @@ class AIControlService:
             raise ValueError("allowed model list is invalid")
         allowed = set(cleaned)
         async with self._factory() as session, session.begin():
-            if await session.get(AIProvider, provider_id) is None:
+            provider = await session.get(AIProvider, provider_id)
+            if provider is None or provider.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
             rows = list(
                 await session.scalars(
@@ -290,7 +326,8 @@ class AIControlService:
         now = self._clock()
         provider_id = str(values["provider_id"])
         async with self._factory() as session, session.begin():
-            if await session.get(AIProvider, provider_id) is None:
+            provider = await session.get(AIProvider, provider_id)
+            if provider is None or provider.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
             await self._ensure_model_allowed(session, provider_id, str(values["model"]))
             profile_id = str(values.get("id") or new_id("aiprof"))
@@ -330,8 +367,10 @@ class AIControlService:
             if row is None or row.deleted_at is not None:
                 raise AIResourceNotFoundError(profile_id)
             provider_id = values.get("provider_id")
-            if provider_id is not None and await session.get(AIProvider, provider_id) is None:
-                raise AIResourceNotFoundError(str(provider_id))
+            if provider_id is not None:
+                provider = await session.get(AIProvider, provider_id)
+                if provider is None or provider.deleted_at is not None:
+                    raise AIResourceNotFoundError(str(provider_id))
             next_provider_id = str(provider_id or row.provider_id)
             next_model = str(values.get("model", row.model))
             await self._ensure_model_allowed(session, next_provider_id, next_model)

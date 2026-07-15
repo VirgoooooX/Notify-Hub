@@ -35,6 +35,7 @@ class AIProvider(StringIdMixin, TimestampMixin, Base):
     structured_output_mode: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
     custom_headers_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     custom_query: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AIProviderModel(StringIdMixin, TimestampMixin, Base):

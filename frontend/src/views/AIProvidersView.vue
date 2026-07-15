@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
-import { api } from '@/lib/api'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
+import { api, ApiError } from '@/lib/api'
 import type { AIProvider, AIProviderModel } from '@/types'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useUiStore } from '@/stores/ui'
 
 const presetUrls: Record<string, string> = {
@@ -21,6 +22,9 @@ const ui = useUiStore()
 const items = ref<AIProvider[]>([])
 const show = ref(false)
 const busy = ref(false)
+const editingId = ref<string>()
+const deleteTarget = ref<AIProvider>()
+const deleteBusy = ref(false)
 const keyTarget = ref<string>()
 const modelTarget = ref<string>()
 const models = ref<AIProviderModel[]>([])
@@ -34,6 +38,11 @@ const form = reactive({
   base_url: 'https://api.example.com/v1',
   api_key: '',
   allow_private_network: false,
+  enabled: true,
+  timeout_seconds: 30,
+  max_retries: 2,
+  verify_tls: true,
+  structured_output_mode: 'auto',
 })
 const keyForm = reactive({ value: '' })
 const modelProvider = computed(() => items.value.find((item) => item.id === modelTarget.value))
@@ -61,22 +70,108 @@ async function load() {
   }
 }
 
-async function create() {
+function resetForm() {
+  editingId.value = undefined
+  Object.assign(form, {
+    name: '',
+    preset: 'custom',
+    base_url: 'https://api.example.com/v1',
+    api_key: '',
+    allow_private_network: false,
+    enabled: true,
+    timeout_seconds: 30,
+    max_retries: 2,
+    verify_tls: true,
+    structured_output_mode: 'auto',
+  })
+}
+
+function closeForm() {
+  show.value = false
+  resetForm()
+}
+
+function openCreate() {
+  if (show.value && !editingId.value) {
+    closeForm()
+    return
+  }
+  resetForm()
+  show.value = true
+}
+
+async function startEdit(provider: AIProvider) {
+  editingId.value = provider.id
+  show.value = true
+  form.preset = provider.preset
+  await nextTick()
+  Object.assign(form, {
+    name: provider.name,
+    base_url: provider.base_url,
+    api_key: '',
+    allow_private_network: provider.allow_private_network,
+    enabled: provider.enabled,
+    timeout_seconds: provider.timeout_seconds,
+    max_retries: provider.max_retries,
+    verify_tls: provider.verify_tls,
+    structured_output_mode: provider.structured_output_mode,
+  })
+}
+
+async function saveProvider() {
   busy.value = true
   try {
-    await api.post('/admin/ai/providers', {
-      ...form,
-      api_key: form.api_key || undefined,
-      protocol: 'openai_chat_completions',
-    })
-    form.api_key = ''
-    show.value = false
-    ui.toast('Provider 与凭据已安全保存', 'success')
+    const payload = {
+      name: form.name,
+      preset: form.preset,
+      base_url: form.base_url,
+      allow_private_network: form.allow_private_network,
+      enabled: form.enabled,
+      timeout_seconds: form.timeout_seconds,
+      max_retries: form.max_retries,
+      verify_tls: form.verify_tls,
+      structured_output_mode: form.structured_output_mode,
+    }
+    if (editingId.value) {
+      await api.patch(`/admin/ai/providers/${editingId.value}`, payload)
+      ui.toast('Provider 配置已更新', 'success')
+    } else {
+      await api.post('/admin/ai/providers', {
+        ...payload,
+        api_key: form.api_key || undefined,
+        protocol: 'openai_chat_completions',
+      })
+      ui.toast('Provider 与凭据已安全保存', 'success')
+    }
+    closeForm()
     await load()
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : '创建失败', 'danger')
   } finally {
     busy.value = false
+  }
+}
+
+async function deleteProvider() {
+  if (!deleteTarget.value) return
+  deleteBusy.value = true
+  try {
+    const providerId = deleteTarget.value.id
+    await api.delete(`/admin/ai/providers/${providerId}`)
+    if (keyTarget.value === providerId) keyTarget.value = undefined
+    if (modelTarget.value === providerId) closeModels()
+    if (editingId.value === providerId) closeForm()
+    deleteTarget.value = undefined
+    ui.toast('Provider 已删除，历史调用记录继续保留', 'success')
+    await load()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      ui.toast('该 Provider 仍被 AI Profile 引用，请先迁移或删除相关 Profile', 'danger')
+    } else {
+      ui.toast(error instanceof Error ? error.message : '删除失败', 'danger')
+    }
+  } finally {
+    deleteBusy.value = false
   }
 }
 
@@ -166,12 +261,23 @@ onMounted(load)
 </script>
 <template>
   <PageHeader title="AI Providers" description="平台统一维护端点与凭据；插件无法读取 API 地址、Key 或模型。">
-    <button class="btn btn--primary" @click="show=!show">
-      新增 Provider
+    <button class="btn btn--primary" @click="openCreate">
+      {{ show && !editingId ? '收起' : '新增 Provider' }}
     </button>
   </PageHeader>
   <section v-if="show" class="panel" style="margin-bottom:16px">
-    <form class="grid split" @submit.prevent="create">
+    <div class="provider-form__heading">
+      <div>
+        <p class="eyebrow">
+          {{ editingId ? 'EDIT PROVIDER' : 'NEW PROVIDER' }}
+        </p>
+        <h2>{{ editingId ? '编辑 Provider' : '新增 Provider' }}</h2>
+      </div>
+      <button type="button" class="btn btn--ghost" @click="closeForm">
+        取消
+      </button>
+    </div>
+    <form class="grid split" @submit.prevent="saveProvider">
       <div class="field">
         <label>名称</label><input v-model="form.name" class="input" required>
       </div><div class="field">
@@ -200,10 +306,32 @@ onMounted(load)
         </select>
       </div><div class="field">
         <label>Base URL</label><input v-model="form.base_url" class="input" required>
-      </div><div class="field">
+      </div><div v-if="!editingId" class="field">
         <label>API Key（可选，保存后不再回显）</label><input v-model="form.api_key" class="input" type="password" autocomplete="new-password" placeholder="sk-...">
-      </div><label><input v-model="form.allow_private_network" type="checkbox"> 允许私网端点（高风险）</label><button class="btn btn--primary" :disabled="busy">
-        创建并安全保存
+      </div><div v-else class="field provider-form__key-note">
+        <label>API Key</label><span>凭据不会回显；如需更换，请使用列表中的“设置 Key”。</span>
+      </div><div class="field">
+        <label>请求超时（秒）</label><input v-model.number="form.timeout_seconds" class="input" type="number" min="1" max="300" required>
+      </div><div class="field">
+        <label>最大重试次数</label><input v-model.number="form.max_retries" class="input" type="number" min="0" max="5" required>
+      </div><div class="field">
+        <label>结构化输出模式</label><select v-model="form.structured_output_mode" class="select">
+          <option value="auto">
+            自动协商
+          </option><option value="json_schema">
+            JSON Schema
+          </option><option value="json_object">
+            JSON Object
+          </option><option value="prompt_json">
+            Prompt JSON
+          </option>
+        </select>
+      </div><div class="provider-form__checks">
+        <label><input v-model="form.enabled" type="checkbox"> 启用 Provider</label>
+        <label><input v-model="form.allow_private_network" type="checkbox"> 允许私网端点（高风险）</label>
+        <label><input v-model="form.verify_tls" type="checkbox"> 校验 TLS 证书</label>
+      </div><button class="btn btn--primary" :disabled="busy">
+        {{ busy ? '正在保存…' : editingId ? '保存修改' : '创建并安全保存' }}
       </button>
     </form>
   </section>
@@ -286,31 +414,50 @@ onMounted(load)
       </div>
     </template>
   </section>
-  <EmptyState v-if="!items.length" /><div v-else class="table-wrap">
+  <EmptyState v-if="!items.length" /><div v-else class="table-wrap provider-table">
     <table>
       <thead><tr><th>名称</th><th>预置</th><th>端点</th><th>凭据</th><th>状态</th><th>操作</th></tr></thead><tbody>
         <tr v-for="item in items" :key="item.id">
           <td><strong>{{ item.name }}</strong><br><span class="mono muted">{{ item.id }}</span></td><td>{{ item.preset }}</td><td class="mono">
             {{ item.base_url }}
           </td><td>{{ item.api_key_configured?'已配置':'未配置' }}</td><td><StatusBadge :status="item.enabled?'active':'disabled'" /></td><td>
-            <button class="btn btn--ghost btn--small" @click="testProvider(item.id)">
-              连接测试
-            </button>
-            <button class="btn btn--ghost btn--small" @click="configureModels(item)">
-              同步 / 配置模型
-            </button>
-            <button class="btn btn--ghost btn--small" @click="keyTarget=item.id">
-              设置 Key
-            </button>
+            <div class="provider-actions">
+              <button class="btn btn--ghost btn--small" @click="testProvider(item.id)">
+                连接测试
+              </button>
+              <button class="btn btn--ghost btn--small" @click="configureModels(item)">
+                同步 / 配置模型
+              </button>
+              <button class="btn btn--ghost btn--small" @click="keyTarget=item.id">
+                设置 Key
+              </button>
+              <button class="btn btn--ghost btn--small" @click="startEdit(item)">
+                编辑
+              </button>
+              <button class="btn btn--danger btn--small" @click="deleteTarget=item">
+                删除
+              </button>
+            </div>
           </td>
         </tr>
       </tbody>
     </table>
   </div>
+  <ConfirmDialog
+    :open="Boolean(deleteTarget)"
+    title="删除 AI Provider？"
+    :description="`将停用并移除 ${deleteTarget?.name ?? '该 Provider'}，同时删除其凭据；历史模型配置和调用记录继续保留。若仍有 AI Profile 引用，系统会阻止删除。`"
+    confirm-text="确认删除"
+    danger
+    :busy="deleteBusy"
+    @confirm="deleteProvider"
+    @cancel="deleteTarget=undefined"
+  />
 </template>
 
 <style scoped>
 .model-control{border-top:3px solid var(--accent)}
+.provider-form__heading{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px}.provider-form__heading h2{margin:0;font-size:18px}.provider-form__checks{display:flex;flex-wrap:wrap;align-items:center;gap:18px}.provider-form__key-note span{min-height:40px;display:flex;align-items:center;color:var(--muted);font-size:12px}.provider-table table{min-width:1120px}.provider-actions{display:flex;flex-wrap:wrap;gap:6px}
 .model-control__header{align-items:flex-start;gap:24px}
 .model-control__header h2{margin:0;font-size:18px}
 .model-control__description{max-width:720px;margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.7}

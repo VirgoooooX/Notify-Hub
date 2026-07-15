@@ -10,7 +10,7 @@ from app.application.ai_control_service import AIControlService
 from app.application.plugin_service import PluginAIProfileUnavailableError
 from app.config import Settings
 from app.infrastructure.database import Base
-from app.infrastructure.database.ai_models import AIProfile
+from app.infrastructure.database.ai_models import AIProfile, AIProvider
 from app.infrastructure.database.models import AuditLog
 from app.infrastructure.database.plugin_models import PluginConfig, PluginRecord
 from app.infrastructure.database.session import create_session_factory
@@ -349,6 +349,76 @@ async def test_ai_profile_delete_is_soft_and_blocks_active_plugin(
 
 
 @pytest.mark.asyncio
+async def test_ai_provider_delete_is_soft_and_blocks_live_profiles(
+    api: tuple[httpx.AsyncClient, object],
+) -> None:
+    client, app = api
+    headers = await _admin_headers(client)
+    created = await client.post(
+        "/api/v1/admin/ai/providers",
+        headers=headers,
+        json={
+            "id": "aip_delete_provider",
+            "name": "Provider to delete",
+            "preset": "custom",
+            "base_url": "https://provider.example.test/v1",
+        },
+    )
+    provider_id = created.json()["data"]["id"]
+    updated = await client.patch(
+        f"/api/v1/admin/ai/providers/{provider_id}",
+        headers=headers,
+        json={"name": "Updated provider", "timeout_seconds": 45},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["name"] == "Updated provider"
+    assert updated.json()["data"]["timeout_seconds"] == 45
+
+    control = app.state.ai_control_service
+    await control.sync_provider_models(provider_id, ["model-delete-provider"])
+    await control.set_allowed_models(provider_id, ["model-delete-provider"])
+    profile = await client.post(
+        "/api/v1/admin/ai/profiles",
+        headers=headers,
+        json={
+            "id": "profile_provider_delete_test",
+            "name": "Provider delete reference",
+            "provider_id": provider_id,
+            "model": "model-delete-provider",
+        },
+    )
+    profile_id = profile.json()["data"]["id"]
+
+    blocked = await client.delete(f"/api/v1/admin/ai/providers/{provider_id}", headers=headers)
+    assert blocked.status_code == 409
+    assert "profile_provider_delete_test" in blocked.text
+
+    assert (
+        await client.delete(f"/api/v1/admin/ai/profiles/{profile_id}", headers=headers)
+    ).status_code == 204
+    assert (
+        await client.delete(f"/api/v1/admin/ai/providers/{provider_id}", headers=headers)
+    ).status_code == 204
+    assert (
+        await client.delete(f"/api/v1/admin/ai/providers/{provider_id}", headers=headers)
+    ).status_code == 204
+    assert provider_id not in {item["id"] for item in await control.list_providers()}
+
+    async with app.state.session_factory() as session:
+        row = await session.get(AIProvider, provider_id)
+        assert row is not None
+        assert row.deleted_at is not None
+        assert row.enabled is False
+        actions = list(
+            await session.scalars(
+                select(AuditLog.action).where(AuditLog.resource_id == provider_id)
+            )
+        )
+        assert "ai.provider.update" in actions
+        assert "ai.provider.delete" in actions
+
+
+@pytest.mark.asyncio
 async def test_ai_provider_api_key_is_encrypted_and_never_returned(tmp_path: Path) -> None:
     root = tmp_path
     settings = Settings(
@@ -384,6 +454,12 @@ async def test_ai_provider_api_key_is_encrypted_and_never_returned(tmp_path: Pat
         assert listed.json()["data"][0]["api_key_configured"] is True
         assert secret not in listed.text
         assert await app.state.secret_store.get("ai_provider", provider_id, "api_key") == secret
+        deleted = await client.delete(f"/api/v1/admin/ai/providers/{provider_id}", headers=headers)
+        assert deleted.status_code == 204
+        assert await app.state.secret_store.get("ai_provider", provider_id, "api_key") is None
+        assert (await client.get("/api/v1/admin/ai/providers", headers=headers)).json()[
+            "data"
+        ] == []
     await app.state.engine.dispose()
 
 

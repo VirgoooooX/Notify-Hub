@@ -64,7 +64,7 @@ class AIService:
     async def list_models(self, provider_id: str) -> list[str]:
         async with self._factory() as session:
             provider = await session.get(AIProvider, provider_id)
-            if provider is None:
+            if provider is None or provider.deleted_at is not None:
                 raise AIGatewayError("ai_provider_not_found", "AI provider was not found")
             if not provider.enabled:
                 raise AIGatewayError("ai_provider_disabled", "AI provider is disabled")
@@ -396,7 +396,7 @@ class AIService:
                     f"AI profile does not support {required_capability}",
                 )
             provider = await session.get(AIProvider, profile.provider_id)
-            if provider is None:
+            if provider is None or provider.deleted_at is not None:
                 raise AIGatewayError("ai_provider_not_found", "AI provider was not found")
             if not provider.enabled:
                 raise AIGatewayError("ai_provider_disabled", "AI provider is disabled")

@@ -12,6 +12,8 @@
 - API Key：使用 SecretStore 的 `scope_type=ai_provider`、`scope_id=<provider_id>`、`name=api_key`；只显示是否配置。
 - 调用历史：保存输入哈希、缓存命中、状态、延迟、Token 和稳定错误码，不保存原文或 Prompt。
 
+Provider 可在控制台编辑端点、TLS/私网策略、启用状态、超时、重试和结构化输出模式；API Key 独立更新且永不回显。删除 Provider 使用软删除以保留历史审计，删除时清理 API Key 并从管理列表和运行时隐藏；若仍有未删除 Profile 引用则返回冲突，管理员必须先迁移或删除这些 Profile。
+
 Profile 的补充系统约束只能收窄行为，不能覆盖平台安全规则。防提示注入、不执行内容中的指令、禁用工具、结构化输出与 Schema 校验由 Gateway 固定执行，不设计为可关闭开关。具体业务判断、标签、字段和业务 Prompt 留在插件中，避免 Profile 与某个插件耦合。
 
 删除 Profile 使用软删除：管理列表和运行时立即视为不存在，但保留历史调用关联。启用中的插件仍引用该 Profile 时返回冲突，管理员必须先切换 Profile、改为规则模式或停用插件。插件保存配置及重新启用时也会复核 Manifest/Profile 依赖，已删除或停用的 Profile 不能重新形成悬空引用。

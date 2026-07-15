@@ -8,6 +8,7 @@ from app.application.ai_control_service import (
     AIControlService,
     AIModelNotAllowedError,
     AIProfileInUseError,
+    AIProviderInUseError,
     AIProviderUrlError,
     AIResourceConflictError,
     AIResourceNotFoundError,
@@ -200,6 +201,8 @@ def _translate_error(exc: Exception) -> HTTPException:
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, AIProfileInUseError):
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, AIProviderInUseError):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, AIProviderUrlError):
         return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     if isinstance(exc, AIModelNotAllowedError):
@@ -237,7 +240,7 @@ async def create_provider(body: AIProviderCreate, request: Request) -> DataRespo
         try:
             await store.put("ai_provider", result["id"], "api_key", body.api_key)
         except Exception:
-            await _service(request).delete_provider(result["id"])
+            await _service(request).rollback_provider_creation(result["id"])
             raise
     result["api_key_configured"] = body.api_key is not None
     await _audit(request, "ai.provider.create", "ai_provider", result["id"])
@@ -262,6 +265,19 @@ async def update_provider(
     )
     await _audit(request, "ai.provider.update", "ai_provider", provider_id)
     return DataResponse(data=result)
+
+
+@router.delete("/providers/{provider_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_provider(provider_id: str, request: Request) -> None:
+    try:
+        newly_deleted = await _service(request).delete_provider(provider_id)
+    except (AIResourceNotFoundError, AIProviderInUseError) as exc:
+        raise _translate_error(exc) from exc
+    store = request.app.state.secret_store
+    if store is not None:
+        await store.delete("ai_provider", provider_id, "api_key")
+    if newly_deleted:
+        await _audit(request, "ai.provider.delete", "ai_provider", provider_id)
 
 
 @router.put("/providers/{provider_id}/api-key")
