@@ -166,6 +166,100 @@ async def test_ai_gateway_falls_back_from_json_schema(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_ai_gateway_continues_to_prompt_json_after_invalid_json_object(
+    tmp_path: Path,
+) -> None:
+    modes: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        mode = payload.get("response_format", {}).get("type", "prompt_json")
+        modes.append(mode)
+        if mode == "json_schema":
+            return httpx.Response(400, json={"error": {"message": "unsupported"}})
+        if mode == "json_object":
+            assert '"results"' in payload["messages"][0]["content"]
+            return httpx.Response(
+                200,
+                json={"choices": [{"message": {"content": "not valid JSON"}}]},
+            )
+        return _success_response(request)
+
+    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    result = await service.classify(
+        profile="test_classifier",
+        plugin_id="test_plugin",
+        plugin_run_id="run-1",
+        use_case="test",
+        content="candidate",
+        instruction="Classify candidate.",
+        labels=["notify", "ignore"],
+    )
+    assert result.label == "notify"
+    assert modes == ["json_schema", "json_object", "json_object", "prompt_json"]
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_accepts_complete_fenced_json(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        successful = _success_response(request)
+        body = json.loads(successful.content)
+        content = body["choices"][0]["message"]["content"]
+        body["choices"][0]["message"]["content"] = f"```json\n{content}\n```"
+        return httpx.Response(200, json=body)
+
+    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    result = await service.classify(
+        profile="test_classifier",
+        plugin_id="test_plugin",
+        plugin_run_id="run-1",
+        use_case="test",
+        content="candidate",
+        instruction="Classify candidate.",
+        labels=["notify", "ignore"],
+    )
+    assert result.label == "notify"
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_rejects_all_invalid_modes_without_leaking_content(
+    tmp_path: Path,
+) -> None:
+    calls = 0
+    raw_marker = "provider-private-invalid-output"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = json.loads(request.content)
+        mode = payload.get("response_format", {}).get("type", "prompt_json")
+        if mode == "json_schema":
+            return httpx.Response(400, json={"error": {"message": "unsupported"}})
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": raw_marker}}]},
+        )
+
+    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AIGatewayError) as exc_info:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id="test_plugin",
+            plugin_run_id="run-1",
+            use_case="test",
+            content="candidate",
+            instruction="Classify candidate.",
+            labels=["notify", "ignore"],
+        )
+    assert exc_info.value.code == "ai_invalid_structured_output"
+    assert raw_marker not in str(exc_info.value)
+    assert calls == 5
+    await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_ai_gateway_enforces_daily_request_budget(tmp_path: Path) -> None:
     service, _factory, client = await _configured_service(
         tmp_path, httpx.MockTransport(_success_response), daily_request_limit=1

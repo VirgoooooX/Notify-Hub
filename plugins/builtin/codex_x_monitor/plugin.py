@@ -108,7 +108,10 @@ class CodexXMonitorPlugin:
                 if post.is_repost or post.is_reply:
                     continue
                 rule_result = rules_by_id[post.id]
-                if config.decision_mode == "rules_then_ai" and not rule_result.matched:
+                if (
+                    config.decision_mode == "rules_then_ai"
+                    and rule_result.confidence >= config.rule_ai_threshold
+                ):
                     continue
                 if config.decision_mode == "rules_or_ai" and rule_result.matched:
                     continue
@@ -122,7 +125,8 @@ class CodexXMonitorPlugin:
                 use_case="codex_usage_reset",
                 instruction=(
                     "判断每条原创帖子是否明确表示 Codex、ChatGPT 或相关服务的使用配额、"
-                    "周限额或速率限制已经恢复、重置或明显改善。"
+                    "周限额或速率限制已经恢复、已确定将重置或明显改善。仅仅询问、讨论、"
+                    "提议或猜测是否要重置必须标记为 ignore；无法确定时标记为 uncertain。"
                 ),
                 labels=["notify", "ignore", "uncertain"],
                 items=[
@@ -147,9 +151,7 @@ class CodexXMonitorPlugin:
             result = rules_by_id[post.id]
             ai_decision = ai_by_id.get(post.id)
             should_notify = result.matched
-            ai_controls_decision = config.decision_mode in {"ai", "rules_then_ai"} or (
-                config.decision_mode == "rules_or_ai" and not result.matched
-            )
+            ai_controls_decision = config.decision_mode == "ai" or ai_decision is not None
             if ai_controls_decision:
                 should_notify = bool(
                     ai_decision is not None
@@ -182,6 +184,9 @@ class CodexXMonitorPlugin:
                             "post_id": post.id,
                             "author": post.author_username,
                             "matched_rules": list(result.matched_rules),
+                            "rule_matched": result.matched,
+                            "rule_confidence": result.confidence,
+                            "rule_ai_threshold": config.rule_ai_threshold,
                             "source": config.source,
                             "decision_mode": config.decision_mode,
                             "ai_label": getattr(ai_decision, "label", None),

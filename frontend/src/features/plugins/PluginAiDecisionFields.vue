@@ -7,6 +7,7 @@ defineProps<{
   decisionMode: string
   aiProfile: string
   aiMinConfidence: number
+  ruleAiThreshold: number
   allowedProfiles: AIProfile[]
 }>()
 
@@ -14,6 +15,7 @@ const emit = defineEmits<{
   (e: 'update:decisionMode', value: string): void
   (e: 'update:aiProfile', value: string): void
   (e: 'update:aiMinConfidence', value: number): void
+  (e: 'update:ruleAiThreshold', value: number): void
 }>()
 </script>
 
@@ -29,7 +31,7 @@ const emit = defineEmits<{
           仅规则
         </option>
         <option value="rules_then_ai">
-          规则预筛选 + AI
+          规则评分 + AI 兜底
         </option>
         <option value="ai">
           仅 AI
@@ -57,7 +59,7 @@ const emit = defineEmits<{
     </div>
 
     <div class="field">
-      <label>最低通知置信度</label>
+      <label>AI 最低通知置信度</label>
       <AppInput
         :model-value="aiMinConfidence"
         type="number"
@@ -68,13 +70,27 @@ const emit = defineEmits<{
         @update:model-value="emit('update:aiMinConfidence', Number($event))"
       />
     </div>
+
+    <div class="field">
+      <label>规则置信度阈值</label>
+      <AppInput
+        :model-value="ruleAiThreshold"
+        type="number"
+        min="0"
+        max="1"
+        step="0.05"
+        :disabled="decisionMode !== 'rules_then_ai'"
+        @update:model-value="emit('update:ruleAiThreshold', Number($event))"
+      />
+      <small>规则置信度低于该值时才调用 AI。</small>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .ai-decision-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: var(--space-4);
   grid-column: 1 / -1;
 }
@@ -89,6 +105,12 @@ const emit = defineEmits<{
   font-size: var(--text-xs);
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.field small {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 @media (max-width: 600px) {

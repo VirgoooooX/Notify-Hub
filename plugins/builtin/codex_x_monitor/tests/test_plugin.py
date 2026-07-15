@@ -293,6 +293,29 @@ def test_matcher_filters_reposts_replies_and_negative_semantics() -> None:
     result = match_post(post, config)
     assert result.matched is False
     assert result.excluded_by
+    assert result.confidence == 0.99
+
+
+def test_matcher_confidently_filters_reset_questions_without_ai() -> None:
+    config = CodexXMonitorConfig.model_validate(BASE_CONFIG)
+    post = XPost.model_validate(
+        {
+            "id": "2077271889626706300",
+            "author_username": "thsottiaux",
+            "text": (
+                "Embarrassment of riches. But looks like we might hit 9M soon. "
+                "Should we reset the ChatGPT Work and Codex usage again or give it some space?"
+            ),
+            "url": "https://x.com/thsottiaux/status/2077271889626706300",
+            "published_at": "2026-07-15T00:00:00Z",
+        }
+    )
+    result = match_post(post, config)
+    assert result.matched is False
+    assert result.confidence == 0.99
+    assert result.excluded_by == (
+        r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+reset\b",
+    )
 
 
 def test_source_timeout_propagates_without_cursor_change() -> None:
@@ -321,7 +344,7 @@ def test_ai_mode_batches_five_incremental_original_posts_once() -> None:
     ai = FakeAI()
     posts = [_post(index) for index in range(1, 6)]
     context = FakeContext(
-        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai", "rule_ai_threshold": 1.0},
         [],
         state={"last_seen_post_id": "0"},
         ai=ai,
@@ -352,7 +375,7 @@ def test_replies_and_reposts_never_reach_ai() -> None:
 def test_ai_failure_is_fail_closed_without_checkpoint() -> None:
     ai = FakeAI(error=RuntimeError("AI unavailable"))
     context = FakeContext(
-        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai", "rule_ai_threshold": 1.0},
         [],
         state={"last_seen_post_id": "0"},
         ai=ai,
@@ -366,7 +389,7 @@ def test_ai_failure_is_fail_closed_without_checkpoint() -> None:
 def test_ai_ignore_checkpoints_without_emitting() -> None:
     ai = FakeAI(label="ignore")
     context = FakeContext(
-        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai", "rule_ai_threshold": 1.0},
         [],
         state={"last_seen_post_id": "0"},
         ai=ai,
@@ -374,6 +397,20 @@ def test_ai_ignore_checkpoints_without_emitting() -> None:
     asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
     assert context.events == []
     assert context.states[STATE_KEY]["last_seen_post_id"] == "1"
+
+
+def test_rules_then_ai_skips_ai_for_high_confidence_rule_decisions() -> None:
+    ai = FakeAI(error=AssertionError("high-confidence rule must not call AI"))
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "rules_then_ai"},
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+    result = asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
+    assert result.emitted_events == 1
+    assert ai.calls == []
+    assert context.events[0].payload["rule_confidence"] >= 0.8
 
 
 # --- twscrape tests with mock ---

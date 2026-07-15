@@ -1,7 +1,7 @@
 {
   "id": "codex_x_monitor",
   "name": "Codex X Monitor",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "监控指定 X 账号中的 Codex 用量重置消息",
   "entrypoint": "plugin:CodexXMonitorPlugin",
   "api_version": "1",

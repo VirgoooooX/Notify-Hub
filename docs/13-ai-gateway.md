@@ -20,13 +20,13 @@ Profile 的补充系统约束只能收窄行为，不能覆盖平台安全规则
 
 ## 数据面
 
-第一版提供 `classify`、`extract`、`summarize`，统一调用 `{base_url}/chat/completions`。三类结果都使用结构化模型，按 `json_schema -> json_object -> prompt_json` 降级。响应必须通过 Pydantic 严格校验；非法 JSON 或结构最多修复一次。429、5xx、网络和超时按 Provider 重试上限处理，永久错误不重复重试。
+第一版提供 `classify`、`extract`、`summarize`，统一调用 `{base_url}/chat/completions`。三类结果都使用结构化模型，按 `json_schema -> json_object -> prompt_json` 降级；某一级修复一次仍无效时继续尝试下一级。响应必须通过 Pydantic 严格校验；只额外兼容整个响应均被 Markdown JSON 围栏包裹的情况，不从任意说明文字中提取 JSON。429、5xx、网络和超时按 Provider 重试上限处理，永久错误不重复重试。
 
 Provider URL 默认 HTTPS、禁止 URL 凭据和 fragment、禁止云元数据地址，并校验 DNS 与实际连接 peer。私网访问必须由管理员显式开启；重定向默认拒绝。
 
 ## Codex X Monitor
 
-推荐 `rules_then_ai`：只处理游标之后的原创帖子，回复和转推在 AI 前过滤；确定性规则先筛出候选，再将最多五条候选批量分类。首次 baseline、无增量、过滤内容和缓存命中不调用 Provider。
+推荐 `rules_then_ai`：只处理游标之后的原创帖子，回复和转推在 AI 前过滤；确定性规则同时给出通知/忽略决策和规则置信度，只有低于插件 `rule_ai_threshold` 的暧昧文本才进入 AI，并以最多五条批量分类。明确公告和明确否定/询问由高置信度规则直接处理。首次 baseline、无增量、高置信度规则结果和缓存命中不调用 Provider。
 
 AI 返回 `ignore` 时推进 checkpoint；返回 `notify` 且达到置信度后才 emit。AI 或结构化校验失败时 fail-closed，不推进候选游标。Event emit 失败时 AI 结果已持久缓存，下次运行不会重复付费。
 

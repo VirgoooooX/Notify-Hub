@@ -27,6 +27,7 @@ const props = defineProps<{
     decision_mode: string
     ai_profile: string
     ai_min_confidence: number
+    rule_ai_threshold: number
     source: string
     feed_url: string
     cover_image_url: string
@@ -118,6 +119,7 @@ const allowedAiProfiles = computed(() => {
           v-model:decision-mode="formState.decision_mode"
           v-model:ai-profile="formState.ai_profile"
           v-model:ai-min-confidence="formState.ai_min_confidence"
+          v-model:rule-ai-threshold="formState.rule_ai_threshold"
           :allowed-profiles="allowedAiProfiles"
         />
       </template>

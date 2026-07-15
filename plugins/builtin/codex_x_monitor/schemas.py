@@ -12,7 +12,7 @@ from plugins.shared.x_monitor.models import XPost as XPost
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.2.0"
+PLUGIN_VERSION = "0.3.0"
 STATE_KEY = "monitor_state"
 
 DEFAULT_CONTEXT_PATTERNS = [
@@ -33,10 +33,15 @@ DEFAULT_POSITIVE_PATTERNS = [
     r"\ballowance\b",
     r"\bweekly\s+limits?\b",
 ]
+BUILTIN_QUESTION_PATTERNS = [
+    r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+reset\b",
+    r"\b(?:considering|debating|discussing|thinking\s+about)\s+(?:a\s+)?reset\b",
+]
 DEFAULT_NEGATIVE_PATTERNS = [
     r"\bnot\s+(?:been\s+)?reset\b",
     r"\bwon['\u2019]?t\s+reset\b",
     r"\bcannot\s+reset\b",
+    *BUILTIN_QUESTION_PATTERNS,
     r"\bunrelated\s+benchmark\b",
     r"\bquoted\s+old\s+post\b",
 ]
@@ -61,6 +66,7 @@ class CodexXMonitorConfig(BaseModel):
     decision_mode: Literal["rules", "ai", "rules_then_ai", "rules_or_ai"] = "rules"
     ai_profile: str = "semantic_classifier_fast"
     ai_min_confidence: float = Field(default=0.8, ge=0, le=1)
+    rule_ai_threshold: float = Field(default=0.8, ge=0, le=1)
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
