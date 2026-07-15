@@ -83,8 +83,26 @@ const time = (v: string) =>
         </template>
         
         <div class="flow-chart-box">
-          <div class="flow-header">
-            EVENT ACCEPTED ━━━ NOTIFICATION ROUTED ━━━ DELIVERY CLAIMED ━━━ PROVIDER ACK
+          <div class="flow-steps">
+            <div class="flow-step">
+              <span class="step-badge">1</span>
+              <span class="step-label">EVENT ACCEPTED</span>
+            </div>
+            <div class="flow-divider">➔</div>
+            <div class="flow-step">
+              <span class="step-badge">2</span>
+              <span class="step-label">NOTIFICATION ROUTED</span>
+            </div>
+            <div class="flow-divider">➔</div>
+            <div class="flow-step">
+              <span class="step-badge">3</span>
+              <span class="step-label">DELIVERY CLAIMED</span>
+            </div>
+            <div class="flow-divider">➔</div>
+            <div class="flow-step">
+              <span class="step-badge">4</span>
+              <span class="step-label">PROVIDER ACK</span>
+            </div>
           </div>
           <div class="flow-legend">
             <span class="legend-item success"><span class="dot" />核心队列工作中</span>
@@ -137,20 +155,61 @@ const time = (v: string) =>
 }
 
 .flow-chart-box {
-  background-color: var(--color-neutral-900);
-  color: #d9dfd7;
+  background-color: var(--color-neutral-50);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: var(--space-4);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: var(--leading-relaxed);
-  overflow-x: overlay;
 }
 
-.flow-header {
-  border-bottom: 1px solid #2d322e;
-  padding-bottom: var(--space-2);
-  margin-bottom: var(--space-3);
+.flow-steps {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background-color: var(--color-neutral-100);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  margin-bottom: var(--space-4);
+  overflow-x: auto;
+}
+
+.flow-step {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: var(--color-neutral-0);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+}
+
+.step-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background-color: var(--color-neutral-200);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.step-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
   white-space: nowrap;
+}
+
+.flow-divider {
+  color: var(--color-neutral-500);
+  font-size: 12px;
+  user-select: none;
 }
 
 .flow-legend {

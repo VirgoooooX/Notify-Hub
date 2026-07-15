@@ -749,6 +749,7 @@ onMounted(load)
   overflow: hidden;
   text-overflow: ellipsis;
   display: inline-block;
+  vertical-align: middle;
 }
 
 .provider-actions {

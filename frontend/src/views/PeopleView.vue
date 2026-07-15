@@ -325,7 +325,13 @@ onMounted(load)
 .card-header-wrap {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.card-header-wrap > div:first-child {
+  min-width: 0;
+  flex: 1;
 }
 
 .person-name {
@@ -336,12 +342,17 @@ onMounted(load)
 
 .item-id {
   font-size: 11px;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .header-actions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  flex-shrink: 0;
 }
 
 .default-badge-trigger {
