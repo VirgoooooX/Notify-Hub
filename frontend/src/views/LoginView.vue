@@ -63,7 +63,7 @@ async function submit() {
           统一接收事件、调度提醒，并追踪每一次企业微信投递。可靠落库，清晰恢复。
         </p>
       </div>
-      <small class="art-footer mono">NOTIFY HUB / RELEASE 0.7.0</small>
+      <small class="art-footer mono">NOTIFY HUB / RELEASE 0.7.1</small>
     </section>
 
     <section class="login-form-wrap">
