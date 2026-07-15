@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "notify-hub"
-version = "0.6.0"
+version = "0.7.0"
 description = "Self-hosted WeCom notification, reminder, and monitoring hub"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"

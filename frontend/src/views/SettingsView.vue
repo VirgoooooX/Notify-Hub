@@ -18,7 +18,7 @@ const testing = ref(false)
 const settings = reactive({
   timezone: 'Asia/Shanghai',
   retention_days: 90,
-  version: '0.6.0',
+  version: '0.7.0',
   wecom: {
     configured: false,
     corp_id_configured: false,
