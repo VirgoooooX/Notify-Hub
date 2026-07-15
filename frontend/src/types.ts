@@ -6,7 +6,17 @@ export interface Delivery{id:string;recipient_name?:string;recipient_id?:string;
 export interface Attempt{id:string;attempt_no:number;status:Status;started_at:string;finished_at?:string;error_code?:string;error_message?:string}
 export interface Person{id:string;name:string;is_default?:boolean;enabled?:boolean;wecom_identities?:Array<{id:string;user_id:string;verified?:boolean}>}
 export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allow_broadcast?:boolean;rate_limit_per_minute?:number;last_used_at?:string}
-export interface Plugin{id:string;name:string;version?:string;description?:string;status:Status;enabled:boolean;schedule?:string;last_run_at?:string;next_run_at?:string;consecutive_failures?:number;manifest?:{permissions?:{ai_profiles?:string[]}};secrets?:Array<{name:string;configured:boolean;source?:string;updated_at?:string}>}
+export type PluginSchedule =
+  | { type: 'interval'; seconds: number }
+  | { type: 'cron'; expression: string; timezone: string }
+export type PluginScheduleMode = 'default' | 'interval' | 'cron'
+export interface PluginScheduleFormState {
+  schedule_mode: PluginScheduleMode
+  schedule_interval_minutes: number
+  schedule_cron_expression: string
+  schedule_timezone: string
+}
+export interface Plugin{id:string;name:string;version?:string;description?:string;status:Status;enabled:boolean;schedule?:PluginSchedule;schedule_inherits_default?:boolean;last_run_at?:string;next_run_at?:string;consecutive_failures?:number;manifest?:{default_schedule?:PluginSchedule;permissions?:{ai_profiles?:string[];ai_capabilities?:AICapability[]}};secrets?:Array<{name:string;configured:boolean;source?:string;updated_at?:string}>}
 export interface AIProvider{id:string;name:string;preset:string;protocol:string;base_url:string;enabled:boolean;allow_private_network:boolean;timeout_seconds:number;max_retries:number;verify_tls:boolean;structured_output_mode:string;api_key_configured:boolean;created_at:string;updated_at:string}
 export interface AIProviderModel{id:string;provider_id:string;model_id:string;available:boolean;enabled:boolean;created_at:string;updated_at:string}
 export type AICapability = 'classify' | 'extract' | 'summarize'
@@ -37,10 +47,9 @@ export interface PluginDetailsResponse {
   timezone?: string
   config?: Record<string, JsonValue>
   config_schema?: PluginConfigSchema
-  schedule?: {
-    type?: string
-    seconds?: number
-  }
+  manifest?: { default_schedule?: PluginSchedule }
+  schedule?: PluginSchedule
+  schedule_inherits_default?: boolean
 }
 
 export interface PluginSecret {

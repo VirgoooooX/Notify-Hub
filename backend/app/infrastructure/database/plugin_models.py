@@ -24,6 +24,9 @@ class PluginRecord(StringIdMixin, TimestampMixin, Base):
     last_error: Mapped[str | None] = mapped_column(String(500))
     manifest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     schedule: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    schedule_inherits_default: Mapped[bool | None] = mapped_column(
+        Boolean, default=True, nullable=True
+    )
 
 
 class PluginConfig(Base):

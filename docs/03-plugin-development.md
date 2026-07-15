@@ -70,7 +70,7 @@ plugins/private/<plugin_id>/
     "secrets": ["x_api_bearer_token"],
     "broadcast": false,
     "media_write": false,
-    "ai_profiles": ["semantic_classifier_fast"]
+    "ai_capabilities": ["classify"]
   }
 }
 ```
@@ -164,9 +164,9 @@ class PluginContext:
 - 管理员 JWT；
 - 其他插件状态。
 
-`context.ai` 每次调用都检查 Manifest 中的 `ai_profiles`，配置页面选中 Profile 不能替代运行时授权。插件提供具体业务 instruction、内容、标签/字段和缓存键；平台 Profile 决定能力类型、Provider、模型、Key、输出策略、预算、超时与缓存。调用方法必须与 Profile 能力一致，例如 `context.ai.classify()` 只能使用 classify Profile。通用防提示注入、禁用工具和结构化校验由 Gateway 强制执行，插件无需重复声明，也不能关闭。AI 只返回建议，插件仍通过确定性代码决定是否 emit 和何时 checkpoint。
+`context.ai` 每次调用都检查 Manifest 中的 `ai_profiles` 或 `ai_capabilities`，配置页面选中 Profile 不能替代运行时授权。`ai_profiles` 适合绑定固定 Profile；`ai_capabilities` 允许管理员从对应能力的启用 Profile 中选择。插件提供具体业务 instruction、内容、标签/字段和缓存键；平台 Profile 决定能力类型、Provider、模型、Key、输出策略、预算、超时与缓存。调用方法必须与 Profile 能力一致，例如 `context.ai.classify()` 只能使用 classify Profile。通用防提示注入、禁用工具和结构化校验由 Gateway 强制执行，插件无需重复声明，也不能关闭。AI 只返回建议，插件仍通过确定性代码决定是否 emit 和何时 checkpoint。
 
-Manifest 的 `permissions.ai_profiles` 同时是插件对 Profile 的依赖声明。平台会从已校验配置中解析实际选择；没有显式选择器的插件按依赖全部获授权 Profile 处理。保存配置和启用插件时都会验证依赖仍可用，防止软删除后重新产生悬空引用。
+Manifest 的 `permissions.ai_profiles` 与 `permissions.ai_capabilities` 同时是插件的 AI 权限声明。平台会从已校验配置中解析实际选择；使用能力授权时，只允许选择能力匹配且已启用的 Profile。保存配置和启用插件时都会验证依赖仍可用，防止软删除后重新产生悬空引用。
 
 ## 6. EventDraft
 
@@ -230,12 +230,14 @@ class EventDraft(BaseModel):
 class CodexXConfig(BaseModel):
     enabled: bool = True
     username: str = "thsottiaux"
-    interval_seconds: int = Field(default=600, ge=60, le=86400)
     data_source: Literal["x_api", "rss"] = "rss"
     keywords: list[str] = ["codex", "reset", "usage"]
     recipients: list[str] = []
     first_run_mode: Literal["baseline", "scan_recent"] = "baseline"
 ```
+
+运行周期不属于插件业务配置，不应在配置 Schema 中重复声明。历史插件可以暂时兼容
+`interval_seconds`，但运行时调度以平台的独立调度配置为准。
 
 敏感字段不得作为普通字符串配置：
 
@@ -275,6 +277,21 @@ class CodexXConfig(BaseModel):
 - 管理员“立即运行”也遵守并发限制；
 - 调度配置写数据库，不仅存在内存中；
 - 进程重启后恢复下一次运行。
+
+### 默认值与自定义值
+
+- `manifest.json` 的 `default_schedule` 是插件作者提供的默认值；
+- 新安装插件默认“跟随 Manifest”，插件升级修改默认值时会自动更新；
+- 管理员选择 interval 或 cron 后，平台将其标记为自定义调度，后续插件升级不得覆盖；
+- 管理员可恢复为“跟随 Manifest”；
+- 保存普通插件配置不得写入或重置调度。
+
+管理 API 将两类写操作分离：
+
+- `PUT /api/v1/admin/plugins/{plugin_id}/schedule`：保存自定义 interval 或 cron；
+- `DELETE /api/v1/admin/plugins/{plugin_id}/schedule`：恢复跟随 Manifest 默认值。
+
+旧客户端仍可在配置请求中携带 `schedule`，平台会将其视为自定义值；新客户端不应再使用该兼容路径。
 
 ## 10. 超时、重试和熔断
 

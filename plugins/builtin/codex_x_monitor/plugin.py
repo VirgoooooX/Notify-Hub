@@ -70,6 +70,10 @@ class CodexXMonitorPlugin:
     def config_schema(cls) -> dict[str, Any]:
         return CodexXMonitorConfig.model_json_schema()
 
+    @classmethod
+    def validate_config(cls, config: Mapping[str, Any]) -> dict[str, Any]:
+        return CodexXMonitorConfig.model_validate(config).model_dump(mode="json")
+
     async def run(self, context: PluginContext) -> PluginRunResult:
         config = CodexXMonitorConfig.model_validate(await context.get_config())
         if not config.enabled:

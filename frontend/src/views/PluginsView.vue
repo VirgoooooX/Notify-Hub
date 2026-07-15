@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '@/lib/api'
-import type { AIProfile, Plugin, Person, JsonValue, PluginDetailsResponse, PluginSecret } from '@/types'
+import type { AIProfile, Plugin, Person, JsonValue, PluginDetailsResponse, PluginSchedule, PluginScheduleMode, PluginSecret } from '@/types'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -17,11 +17,17 @@ const running = ref(new Set<string>())
 const target = ref<Plugin>()
 const editing = ref<(Plugin & { secrets?: PluginSecret[] }) | null>(null)
 const busy = ref(false)
+const initialScheduleSignature = ref('')
+const scheduleApiAvailable = ref(true)
+const currentDefaultSchedule = ref<PluginSchedule | null>(null)
 
 const editForm = reactive({
   username: '',
   twscrape_fetch_limit: 40,
-  interval_seconds: 180,
+  schedule_mode: 'default' as PluginScheduleMode,
+  schedule_interval_minutes: 3,
+  schedule_cron_expression: '*/10 * * * *',
+  schedule_timezone: 'Asia/Shanghai',
   include_replies: false,
   include_reposts: false,
   decision_mode: 'rules',
@@ -35,6 +41,56 @@ const editForm = reactive({
   recipients: [] as string[],
   secrets: {} as Record<string, string>
 })
+
+function scheduleSignature() {
+  if (editForm.schedule_mode === 'default') return 'default'
+  if (editForm.schedule_mode === 'interval') {
+    return `interval:${Number(editForm.schedule_interval_minutes)}`
+  }
+  return `cron:${editForm.schedule_cron_expression.trim()}:${editForm.schedule_timezone.trim()}`
+}
+
+function schedulePayload(): PluginSchedule {
+  if (editForm.schedule_mode === 'default') {
+    if (!currentDefaultSchedule.value) throw new Error('插件没有声明默认调度')
+    return currentDefaultSchedule.value
+  }
+  if (editForm.schedule_mode === 'interval') {
+    return {
+      type: 'interval',
+      seconds: Math.round(Number(editForm.schedule_interval_minutes) * 60)
+    }
+  }
+  return {
+    type: 'cron',
+    expression: editForm.schedule_cron_expression.trim(),
+    timezone: editForm.schedule_timezone.trim()
+  }
+}
+
+function loadScheduleForm(details: PluginDetailsResponse) {
+  const schedule = details.schedule
+  const defaultSchedule = details.manifest?.default_schedule
+  scheduleApiAvailable.value = typeof details.schedule_inherits_default === 'boolean'
+  currentDefaultSchedule.value = defaultSchedule ?? null
+  editForm.schedule_mode = details.schedule_inherits_default === true
+    ? 'default'
+    : schedule?.type ?? 'default'
+  const interval = schedule?.type === 'interval'
+    ? schedule
+    : defaultSchedule?.type === 'interval'
+      ? defaultSchedule
+      : undefined
+  editForm.schedule_interval_minutes = interval ? interval.seconds / 60 : 10
+  const cron = schedule?.type === 'cron'
+    ? schedule
+    : defaultSchedule?.type === 'cron'
+      ? defaultSchedule
+      : undefined
+  editForm.schedule_cron_expression = cron?.expression ?? '*/10 * * * *'
+  editForm.schedule_timezone = cron?.timezone ?? 'Asia/Shanghai'
+  initialScheduleSignature.value = scheduleSignature()
+}
 
 async function load() {
   try {
@@ -104,9 +160,7 @@ async function configure(item: Plugin) {
     editForm.username = (conf.username as string) || ''
     editForm.twscrape_fetch_limit = (conf.twscrape_fetch_limit as number) || 40
 
-    const sched =
-      details.schedule && typeof details.schedule === 'object' ? details.schedule : null
-    editForm.interval_seconds = sched?.seconds || 180
+    loadScheduleForm(details)
 
     editForm.include_replies = false
     editForm.include_reposts = !!conf.include_reposts
@@ -131,6 +185,18 @@ async function saveConfig() {
   busy.value = true
   try {
     const pluginId = editing.value.id
+    if (
+      editForm.schedule_mode === 'interval' &&
+      (!Number.isFinite(editForm.schedule_interval_minutes) || editForm.schedule_interval_minutes < 1)
+    ) {
+      throw new Error('调度间隔不能少于 1 分钟')
+    }
+    if (
+      editForm.schedule_mode === 'cron' &&
+      (!editForm.schedule_cron_expression.trim() || !editForm.schedule_timezone.trim())
+    ) {
+      throw new Error('请填写 Cron 表达式和时区')
+    }
     const configData: Record<string, JsonValue> = {
       username: editForm.username,
       include_replies: editForm.include_replies,
@@ -161,13 +227,22 @@ async function saveConfig() {
       }
     }
 
-    await api.put(`/admin/plugins/${pluginId}/config`, {
-      config: configData,
-      schedule: {
-        type: 'interval',
-        seconds: Number(editForm.interval_seconds)
+    const scheduleChanged = scheduleSignature() !== initialScheduleSignature.value
+    const configRequest: { config: Record<string, JsonValue>; schedule?: PluginSchedule } = {
+      config: configData
+    }
+    if (!scheduleApiAvailable.value) {
+      configRequest.schedule = schedulePayload()
+    }
+    await api.put(`/admin/plugins/${pluginId}/config`, configRequest)
+
+    if (scheduleApiAvailable.value && scheduleChanged) {
+      if (editForm.schedule_mode === 'default') {
+        await api.delete(`/admin/plugins/${pluginId}/schedule`)
+      } else {
+        await api.put(`/admin/plugins/${pluginId}/schedule`, { schedule: schedulePayload() })
       }
-    })
+    }
 
     for (const [secName, secVal] of Object.entries(editForm.secrets)) {
       if (secVal.trim()) {

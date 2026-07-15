@@ -27,7 +27,7 @@ from app.plugin_runtime.context import (
 )
 from app.plugin_runtime.http import RestrictedHttpClient
 from app.plugin_runtime.manifest import PluginManifest, PluginSchedule
-from app.plugin_runtime.registry import PluginRegistry
+from app.plugin_runtime.registry import PluginLoadError, PluginRegistry
 from app.plugin_runtime.runner import PluginRunner, RunOutcome
 from app.plugin_runtime.schedule import next_run_at
 from app.plugin_runtime.schema import validate_json_schema
@@ -199,27 +199,43 @@ class PluginService:
                             last_error=None,
                             manifest=manifest.model_dump(mode="json"),
                             schedule=manifest.default_schedule.model_dump(mode="json"),
+                            schedule_inherits_default=True,
                             created_at=now,
                             updated_at=now,
                         )
                     )
                 else:
                     old_manifest = row.manifest
-                    if isinstance(old_manifest, dict):
+                    if row.schedule_inherits_default is None and isinstance(old_manifest, dict):
                         old_default = old_manifest.get("default_schedule")
-                        # Dict comparison is order-independent. Treat row.schedule as unchanged
-                        # when it matches the old default. A custom schedule identical to that
-                        # default is intentionally migrated once.
-                        if old_default is not None and row.schedule == old_default:
-                            row.schedule = manifest.default_schedule.model_dump(mode="json")
-                            if row.enabled and not row.circuit_open:
-                                row.next_run_at = next_run_at(manifest.default_schedule, now)
+                        row.schedule_inherits_default = (
+                            old_default is not None and row.schedule == old_default
+                        )
+                    if row.schedule_inherits_default:
+                        row.schedule = manifest.default_schedule.model_dump(mode="json")
+                        if row.enabled and not row.circuit_open:
+                            row.next_run_at = next_run_at(manifest.default_schedule, now)
                     row.name = manifest.name
                     row.version = manifest.version
                     row.description = manifest.description
                     row.install_type = registered.install_type
                     row.manifest = manifest.model_dump(mode="json")
                     row.updated_at = now
+                    if manifest.permissions.ai_capabilities:
+                        config_row = await session.get(PluginConfig, manifest.id)
+                        if config_row is not None:
+                            try:
+                                config_row.config = self._validate_config(
+                                    registered.plugin_class, config_row.config
+                                )
+                                config_row.updated_at = now
+                            except Exception:  # Plugin validation is an isolation boundary.
+                                row.enabled = False
+                                row.status = "failed"
+                                row.next_run_at = None
+                                row.last_error = (
+                                    "plugin configuration is incompatible with the current schema"
+                                )
             stale = await session.scalars(select(PluginRun).where(PluginRun.status == "running"))
             for run in stale:
                 run.status = "queued"
@@ -264,6 +280,7 @@ class PluginService:
             "last_error": row.last_error,
             "manifest": row.manifest,
             "schedule": row.schedule,
+            "schedule_inherits_default": row.schedule_inherits_default is True,
         }
 
     async def update_config(
@@ -274,20 +291,18 @@ class PluginService:
         schedule: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         registered = self.registry.get(plugin_id)
-        validator = getattr(registered.plugin_class, "validate_config", None)
-        if validator is None:
-            validated = dict(config)
-            validate_json_schema(validated, registered.plugin_class.config_schema())
-        else:
-            validated = validator(config)
+        validated = self._validate_config(registered.plugin_class, config)
         validated_schedule = (
-            registered.manifest.default_schedule
+            None
             if schedule is None
             else PluginManifest.model_validate(
                 {**registered.manifest.model_dump(), "default_schedule": schedule}
             ).default_schedule
         )
         now = self._clock()
+        schedule_next_run = (
+            None if validated_schedule is None else next_run_at(validated_schedule, now)
+        )
         async with self._factory() as session, session.begin():
             plugin = await session.get(PluginRecord, plugin_id)
             if plugin is None:
@@ -306,24 +321,84 @@ class PluginService:
             else:
                 row.config = validated
                 row.updated_at = now
-            plugin.schedule = validated_schedule.model_dump(mode="json")
+            if validated_schedule is not None:
+                plugin.schedule = validated_schedule.model_dump(mode="json")
+                plugin.schedule_inherits_default = False
             plugin.updated_at = now
-            if plugin.enabled and not plugin.circuit_open:
-                plugin.next_run_at = next_run_at(validated_schedule, now)
+            if validated_schedule is not None and plugin.enabled and not plugin.circuit_open:
+                plugin.next_run_at = schedule_next_run
         return validated
 
+    async def update_schedule(
+        self, plugin_id: str, schedule: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        registered = self.registry.get(plugin_id)
+        validated_schedule = PluginManifest.model_validate(
+            {**registered.manifest.model_dump(), "default_schedule": schedule}
+        ).default_schedule
+        now = self._clock()
+        candidate = next_run_at(validated_schedule, now)
+        async with self._factory() as session, session.begin():
+            plugin = await session.get(PluginRecord, plugin_id)
+            if plugin is None:
+                raise PluginNotFoundError(plugin_id)
+            plugin.schedule = validated_schedule.model_dump(mode="json")
+            plugin.schedule_inherits_default = False
+            plugin.updated_at = now
+            if plugin.enabled and not plugin.circuit_open:
+                plugin.next_run_at = candidate
+        return validated_schedule.model_dump(mode="json")
+
+    async def reset_schedule(self, plugin_id: str) -> dict[str, Any]:
+        registered = self.registry.get(plugin_id)
+        schedule = registered.manifest.default_schedule
+        now = self._clock()
+        candidate = next_run_at(schedule, now)
+        async with self._factory() as session, session.begin():
+            plugin = await session.get(PluginRecord, plugin_id)
+            if plugin is None:
+                raise PluginNotFoundError(plugin_id)
+            plugin.schedule = schedule.model_dump(mode="json")
+            plugin.schedule_inherits_default = True
+            plugin.updated_at = now
+            if plugin.enabled and not plugin.circuit_open:
+                plugin.next_run_at = candidate
+        return schedule.model_dump(mode="json")
+
     async def enable(self, plugin_id: str) -> None:
+        try:
+            registered = self.registry.get(plugin_id)
+        except PluginLoadError:
+            registered = None
         now = self._clock()
         async with self._factory() as session, session.begin():
             row = await session.get(PluginRecord, plugin_id)
             if row is None:
                 raise PluginNotFoundError(plugin_id)
             config_row = await session.get(PluginConfig, plugin_id)
+            raw_config = {} if config_row is None else dict(config_row.config)
+            validated_config = (
+                raw_config
+                if registered is None
+                else self._validate_config(registered.plugin_class, raw_config)
+            )
             await self._ensure_ai_profiles_available(
                 session,
                 PluginManifest.model_validate(row.manifest),
-                {} if config_row is None else config_row.config,
+                validated_config,
             )
+            if config_row is None:
+                session.add(
+                    PluginConfig(
+                        plugin_id=plugin_id,
+                        config=validated_config,
+                        schema_version=1,
+                        updated_at=now,
+                    )
+                )
+            else:
+                config_row.config = validated_config
+                config_row.updated_at = now
             row.enabled = True
             row.status = "healthy"
             row.circuit_open = False
@@ -331,6 +406,15 @@ class PluginService:
             row.last_error = None
             row.next_run_at = next_run_at(self._schedule(row), now)
             row.updated_at = now
+
+    @staticmethod
+    def _validate_config(plugin_class: type[Any], config: Mapping[str, Any]) -> dict[str, Any]:
+        validator = getattr(plugin_class, "validate_config", None)
+        if validator is not None:
+            return dict(validator(config))
+        validated = dict(config)
+        validate_json_schema(validated, plugin_class.config_schema())
+        return validated
 
     @staticmethod
     async def _ensure_ai_profiles_available(
@@ -341,15 +425,22 @@ class PluginService:
         referenced = referenced_ai_profiles(manifest, config)
         if not referenced:
             return
-        available = set(
+        profile_rows = list(
             await session.scalars(
-                select(AIProfile.id).where(
+                select(AIProfile).where(
                     AIProfile.id.in_(referenced),
                     AIProfile.enabled.is_(True),
                     AIProfile.deleted_at.is_(None),
                 )
             )
         )
+        allowed_ids = set(manifest.permissions.ai_profiles)
+        allowed_capabilities = set(manifest.permissions.ai_capabilities)
+        available = {
+            profile.id
+            for profile in profile_rows
+            if profile.id in allowed_ids or profile.capability in allowed_capabilities
+        }
         missing = sorted(referenced - available)
         if missing:
             raise PluginAIProfileUnavailableError(
@@ -471,6 +562,9 @@ class PluginService:
                 raise PluginNotFoundError(plugin_id)
             manifest = PluginManifest.model_validate(plugin_row.manifest)
         registered = self.registry.get(plugin_id)
+        config = self._validate_config(registered.plugin_class, await self._config.get(plugin_id))
+        runtime_profiles = set(manifest.permissions.ai_profiles)
+        runtime_profiles.update(referenced_ai_profiles(manifest, config))
         http = RestrictedHttpClient(
             allowed_hosts=manifest.permissions.network,
             allowed_private_networks=manifest.permissions.private_network,
@@ -503,7 +597,7 @@ class PluginService:
             ai=PluginAIClient(
                 plugin_id=plugin_id,
                 run_id=run_id,
-                allowed_profiles=set(manifest.permissions.ai_profiles),
+                allowed_profiles=runtime_profiles,
                 service=self._ai_service,
             ),
         )

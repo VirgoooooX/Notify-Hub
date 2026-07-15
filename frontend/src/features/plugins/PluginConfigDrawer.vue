@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { Plugin, Person, AIProfile, PluginSecret } from '@/types'
+import { computed, watch } from 'vue'
+import type { Plugin, Person, AIProfile, PluginSecret, PluginScheduleFormState } from '@/types'
 import AppDrawer from '@/components/ui/AppDrawer.vue'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
@@ -9,6 +9,7 @@ import AppAlert from '@/components/ui/AppAlert.vue'
 import PluginRecipientSelector from './PluginRecipientSelector.vue'
 import PluginSecretFields from './PluginSecretFields.vue'
 import PluginAiDecisionFields from './PluginAiDecisionFields.vue'
+import PluginScheduleFields from './PluginScheduleFields.vue'
 
 const props = defineProps<{
   open: boolean
@@ -18,10 +19,9 @@ const props = defineProps<{
   busy: boolean
   
   // Form fields
-  formState: {
+  formState: PluginScheduleFormState & {
     username: string
     twscrape_fetch_limit: number
-    interval_seconds: number
     include_replies: boolean
     include_reposts: boolean
     decision_mode: string
@@ -43,9 +43,25 @@ const emit = defineEmits<{
 }>()
 
 const allowedAiProfiles = computed(() => {
-  const allowed = props.plugin?.manifest?.permissions?.ai_profiles ?? []
-  return props.aiProfiles.filter((profile) => allowed.includes(profile.id))
+  const permissions = props.plugin?.manifest?.permissions
+  const allowedIds = permissions?.ai_profiles ?? []
+  const allowedCapabilities = permissions?.ai_capabilities ?? []
+  return props.aiProfiles.filter(
+    (profile) =>
+      profile.enabled &&
+      (allowedIds.includes(profile.id) || allowedCapabilities.includes(profile.capability)),
+  )
 })
+
+watch(
+  [allowedAiProfiles, () => props.formState.ai_profile],
+  ([profiles, selected]) => {
+    if (profiles.length && !profiles.some((profile) => profile.id === selected)) {
+      props.formState.ai_profile = profiles[0].id
+    }
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -62,16 +78,10 @@ const allowedAiProfiles = computed(() => {
         <AppInput v-model="formState.username" required />
       </div>
 
-      <div class="field">
-        <label>抓取周期（分钟）</label>
-        <AppInput
-          :model-value="Math.round(formState.interval_seconds / 60)"
-          type="number"
-          min="1"
-          required
-          @update:model-value="formState.interval_seconds = Number($event) * 60"
-        />
-      </div>
+      <PluginScheduleFields
+        :form-state="formState"
+        :default-schedule="plugin.manifest?.default_schedule"
+      />
 
       <!-- Codex X Monitor Specific -->
       <template v-if="plugin.id === 'codex_x_monitor'">

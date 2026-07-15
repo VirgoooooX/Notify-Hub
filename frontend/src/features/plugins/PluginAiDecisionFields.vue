@@ -49,8 +49,8 @@ const emit = defineEmits<{
         :disabled="decisionMode === 'rules'"
         @update:model-value="emit('update:aiProfile', $event)"
       >
-        <option v-if="!allowedProfiles.length" value="semantic_classifier_fast">
-          semantic_classifier_fast (暂无可用授权 Profile)
+        <option v-if="!allowedProfiles.length" :value="aiProfile">
+          {{ aiProfile }} (暂无可用授权 Profile)
         </option>
         <option v-for="profile in allowedProfiles" :key="profile.id" :value="profile.id">
           {{ profile.name }} · {{ profile.id }}

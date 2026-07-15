@@ -39,6 +39,12 @@ BASE_CONFIG = {
 }
 
 
+def test_validate_config_expands_ai_profile_default() -> None:
+    validated = CodexXMonitorPlugin.validate_config({**BASE_CONFIG, "decision_mode": "ai"})
+
+    assert validated["ai_profile"] == "semantic_classifier_fast"
+
+
 @dataclass
 class FakeResponse:
     status_code: int = 200

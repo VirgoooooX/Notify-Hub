@@ -547,7 +547,7 @@ curl -X POST https://notify.example.com/api/v1/events \
 2. Provider/Profile 管理 API、SecretStore 与后台页面；
 3. OpenAI-compatible Client、SSRF/TLS/超时和结构化输出降级；
 4. 持久化缓存、请求/Token 预算与调用日志；
-5. Manifest `ai_profiles` 和 `context.ai`；
+5. Manifest `ai_profiles`/`ai_capabilities` 和 `context.ai`；
 6. Codex X Monitor 的规则预筛选、批量 AI 判定和 fail-closed；
 7. 原创增量过滤、重启缓存和故障恢复测试。
 

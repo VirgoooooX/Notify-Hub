@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -55,6 +56,10 @@ class PluginRegistry:
         try:
             raw = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest = PluginManifest.model_validate(raw)
+            # Import locally to avoid a manifest/schedule module cycle.
+            from app.plugin_runtime.schedule import next_run_at
+
+            next_run_at(manifest.default_schedule, datetime.now(UTC))
         except (OSError, ValueError) as exc:
             raise PluginLoadError(f"invalid manifest: {exc}") from exc
         directory = manifest_path.parent.resolve()

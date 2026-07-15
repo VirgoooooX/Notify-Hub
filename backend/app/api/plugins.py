@@ -13,6 +13,7 @@ from app.application.plugin_service import (
 )
 from app.application.runtime_adapters import _read_env_key_manually
 from app.infrastructure.database.models import Secret
+from app.plugin_runtime.manifest import PluginSchedule
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -37,7 +38,12 @@ router = APIRouter(prefix="/plugins", tags=["plugins"], dependencies=[Depends(re
 
 class PluginConfigUpdate(BaseModel):
     config: dict[str, Any]
+    # Kept for compatibility with older clients. New clients use /schedule.
     schedule: dict[str, Any] | None = None
+
+
+class PluginScheduleUpdate(BaseModel):
+    schedule: PluginSchedule = Field(discriminator="type")
 
 
 class DataResponse(BaseModel):
@@ -117,11 +123,39 @@ async def update_config(plugin_id: str, body: PluginConfigUpdate, request: Reque
     except PluginNotFoundError as exc:
         raise _not_found(exc) from exc
     except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except PluginAIProfileUnavailableError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     await _audit(request, "plugin.config.update", plugin_id)
     return DataResponse(data={"config": result})
+
+
+@router.put("/{plugin_id}/schedule")
+async def update_schedule(
+    plugin_id: str, body: PluginScheduleUpdate, request: Request
+) -> DataResponse:
+    try:
+        result = await _service(request).update_schedule(
+            plugin_id, body.schedule.model_dump(mode="json")
+        )
+    except PluginNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    await _audit(request, "plugin.schedule.update", plugin_id)
+    return DataResponse(data={"schedule": result, "schedule_inherits_default": False})
+
+
+@router.delete("/{plugin_id}/schedule")
+async def reset_schedule(plugin_id: str, request: Request) -> DataResponse:
+    try:
+        result = await _service(request).reset_schedule(plugin_id)
+    except PluginNotFoundError as exc:
+        raise _not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    await _audit(request, "plugin.schedule.reset", plugin_id)
+    return DataResponse(data={"schedule": result, "schedule_inherits_default": True})
 
 
 @router.post("/{plugin_id}/enable", status_code=status.HTTP_204_NO_CONTENT)

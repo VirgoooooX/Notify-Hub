@@ -9,6 +9,7 @@
 - AI Provider：预置类型、兼容协议、Base URL、TLS/私网策略、超时、重试和结构化输出模式。
 - Provider 模型目录：管理员主动从兼容 `/models` 端点同步；新发现模型默认不可用，必须显式勾选进入允许列表。后续同步中消失的模型会自动退出允许列表。
 - AI Profile：可复用的运行策略，定义稳定 ID、单一能力类型、Provider、从允许列表选择的模型、Temperature、输出上限、超时、输出语言、推理强度、详细程度、理由开关/长度、补充系统约束、缓存 TTL、每日请求和 Token 上限；API 和调用执行时都会重新验证模型权限与能力匹配。
+- 插件通过 Manifest 声明固定 `ai_profiles` 或可选 `ai_capabilities`。固定授权用于必须绑定指定策略的插件；能力授权允许管理员在插件配置中选择任意已启用且能力匹配的 Profile，运行时仍由 Gateway 校验 Profile 状态与调用方法的能力一致性。
 - API Key：使用 SecretStore 的 `scope_type=ai_provider`、`scope_id=<provider_id>`、`name=api_key`；只显示是否配置。
 - 调用历史：保存输入哈希、缓存命中、状态、延迟、Token 和稳定错误码，不保存原文或 Prompt。
 

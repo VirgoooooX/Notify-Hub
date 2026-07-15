@@ -22,6 +22,16 @@ const time = (v?: string) =>
         timeStyle: 'short'
       }).format(new Date(v))
     : '—'
+
+const scheduleText = (item: Plugin) => {
+  if (!item.schedule) return '手动'
+  const source = item.schedule_inherits_default ? '默认 · ' : ''
+  if (item.schedule.type === 'interval') {
+    const minutes = item.schedule.seconds / 60
+    return `${source}每 ${Number.isInteger(minutes) ? minutes : minutes.toFixed(1)} 分钟`
+  }
+  return `${source}${item.schedule.expression} · ${item.schedule.timezone}`
+}
 </script>
 
 <template>
@@ -46,7 +56,7 @@ const time = (v?: string) =>
     <div class="entity-meta">
       <div class="meta-row">
         <span>调度</span>
-        <strong class="mono">{{ item.schedule ?? '手动' }}</strong>
+        <strong class="mono schedule-value">{{ scheduleText(item) }}</strong>
       </div>
       <div class="meta-row">
         <span>上次运行</span>
@@ -155,6 +165,12 @@ const time = (v?: string) =>
 
 .meta-row strong {
   font-weight: 500;
+}
+
+.schedule-value {
+  max-width: 70%;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .text-danger {

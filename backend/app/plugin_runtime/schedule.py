@@ -58,16 +58,24 @@ def _next_cron(schedule: CronSchedule, after: datetime) -> datetime:
         _expand(fields[4], 0, 7),
     )
     weekday = {0 if item == 7 else item for item in weekday}
+    day_is_wildcard = fields[2] in {"*", "?"}
+    weekday_is_wildcard = fields[4] in {"*", "?"}
     candidate = after.astimezone(timezone).replace(second=0, microsecond=0) + timedelta(minutes=1)
     limit = candidate + timedelta(days=366 * 5)
     while candidate <= limit:
         cron_weekday = (candidate.weekday() + 1) % 7
+        day_matches = candidate.day in day
+        weekday_matches = cron_weekday in weekday
+        calendar_matches = (
+            day_matches and weekday_matches
+            if day_is_wildcard or weekday_is_wildcard
+            else day_matches or weekday_matches
+        )
         if (
             candidate.minute in minute
             and candidate.hour in hour
-            and candidate.day in day
             and candidate.month in month
-            and cron_weekday in weekday
+            and calendar_matches
         ):
             return candidate.astimezone(UTC)
         candidate += timedelta(minutes=1)

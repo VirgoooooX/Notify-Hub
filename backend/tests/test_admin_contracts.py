@@ -1,8 +1,12 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
+from app.plugin_runtime.registry import PluginRegistry
+
+from tests.test_plugin_runtime import _write_fake_plugin
 
 
 @pytest.mark.asyncio
@@ -128,3 +132,64 @@ async def test_admin_initialization_and_refresh_are_single_use_under_concurrency
         )
     )
     assert sorted(response.status_code for response in refreshed) == [200, 401]
+
+
+@pytest.mark.asyncio
+async def test_admin_can_customize_and_reset_plugin_schedule(
+    api: tuple[httpx.AsyncClient, object],
+    tmp_path: Path,
+) -> None:
+    client, app = api
+    initialized = await client.post(
+        "/api/v1/admin/auth/initialize",
+        json={"username": "administrator", "password": "correct-horse-battery-staple"},
+    )
+    token = initialized.json()["data"]["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    plugin_root = tmp_path / "api_plugins"
+    _write_fake_plugin(plugin_root)
+    app.state.plugin_service.registry = PluginRegistry({"test": plugin_root})
+    await app.state.plugin_service.initialize()
+
+    plugins = (await client.get("/api/v1/admin/plugins", headers=headers)).json()["data"]
+    plugin_id = "fake_monitor"
+    assert [plugin["id"] for plugin in plugins] == [plugin_id]
+
+    customized = await client.put(
+        f"/api/v1/admin/plugins/{plugin_id}/schedule",
+        headers=headers,
+        json={
+            "schedule": {
+                "type": "cron",
+                "expression": "*/10 * * * *",
+                "timezone": "Asia/Shanghai",
+            }
+        },
+    )
+    assert customized.status_code == 200
+    assert customized.json()["data"]["schedule_inherits_default"] is False
+
+    details = await client.get(f"/api/v1/admin/plugins/{plugin_id}", headers=headers)
+    assert details.json()["data"]["schedule"] == {
+        "type": "cron",
+        "expression": "*/10 * * * *",
+        "timezone": "Asia/Shanghai",
+    }
+    assert details.json()["data"]["schedule_inherits_default"] is False
+
+    invalid = await client.put(
+        f"/api/v1/admin/plugins/{plugin_id}/schedule",
+        headers=headers,
+        json={
+            "schedule": {
+                "type": "cron",
+                "expression": "*/10 * * * *",
+                "timezone": "Mars/Olympus",
+            }
+        },
+    )
+    assert invalid.status_code == 422
+
+    reset = await client.delete(f"/api/v1/admin/plugins/{plugin_id}/schedule", headers=headers)
+    assert reset.status_code == 200
+    assert reset.json()["data"]["schedule_inherits_default"] is True
