@@ -14,7 +14,7 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /build
 RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE ./
 COPY backend/app/ backend/app/
 RUN pip install --upgrade pip && pip install .
 
