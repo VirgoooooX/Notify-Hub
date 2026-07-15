@@ -329,9 +329,7 @@ class PluginService:
                 plugin.next_run_at = schedule_next_run
         return validated
 
-    async def update_schedule(
-        self, plugin_id: str, schedule: Mapping[str, Any]
-    ) -> dict[str, Any]:
+    async def update_schedule(self, plugin_id: str, schedule: Mapping[str, Any]) -> dict[str, Any]:
         registered = self.registry.get(plugin_id)
         validated_schedule = PluginManifest.model_validate(
             {**registered.manifest.model_dump(), "default_schedule": schedule}

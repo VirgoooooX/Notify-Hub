@@ -161,9 +161,9 @@ def test_cron_uses_standard_day_or_weekday_semantics() -> None:
         }
     )
     # Both day-of-month and weekday are restricted: traditional cron matches either.
-    assert next_run_at(
-        manifest.default_schedule, datetime(2026, 1, 1, tzinfo=UTC)
-    ) == datetime(2026, 1, 5, tzinfo=UTC)
+    assert next_run_at(manifest.default_schedule, datetime(2026, 1, 1, tzinfo=UTC)) == datetime(
+        2026, 1, 5, tzinfo=UTC
+    )
 
 
 def test_registry_rejects_unusable_default_cron(tmp_path: Path) -> None:
