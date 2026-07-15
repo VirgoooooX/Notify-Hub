@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Activity,
@@ -23,8 +23,21 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
+const scrollContainer = ref<globalThis.HTMLElement>()
+const scrollbarTrack = ref<globalThis.HTMLElement>()
+const thumbHeight = ref(0)
+const thumbTop = ref(0)
+const scrollbarVisible = ref(false)
+let resizeObserver: globalThis.ResizeObserver | undefined
+let frameId: number | undefined
+let dragStartY = 0
+let dragStartScrollTop = 0
 
 const title = computed(() => String(route.meta.title ?? '控制台'))
+const thumbStyle = computed(() => ({
+  height: `${thumbHeight.value}px`,
+  transform: `translateY(${thumbTop.value}px)`
+}))
 
 interface NavItem {
   href: string
@@ -103,6 +116,92 @@ async function logout() {
   await auth.logout()
   router.push('/login')
 }
+
+function updateScrollbar() {
+  frameId = undefined
+  const container = scrollContainer.value
+  const track = scrollbarTrack.value
+  if (!container || !track) return
+  const maxScroll = container.scrollHeight - container.clientHeight
+  scrollbarVisible.value = maxScroll > 1
+  if (!scrollbarVisible.value) return
+  const trackHeight = track.clientHeight
+  thumbHeight.value = Math.max(36, trackHeight * container.clientHeight / container.scrollHeight)
+  const maxThumbTop = Math.max(0, trackHeight - thumbHeight.value)
+  thumbTop.value = maxScroll > 0 ? container.scrollTop / maxScroll * maxThumbTop : 0
+}
+
+function scheduleScrollbarUpdate() {
+  if (frameId === undefined) frameId = window.requestAnimationFrame(updateScrollbar)
+}
+
+function moveThumb(event: globalThis.PointerEvent) {
+  const container = scrollContainer.value
+  const track = scrollbarTrack.value
+  if (!container || !track) return
+  const movableTrack = track.clientHeight - thumbHeight.value
+  const maxScroll = container.scrollHeight - container.clientHeight
+  if (movableTrack <= 0 || maxScroll <= 0) return
+  container.scrollTop = dragStartScrollTop + (event.clientY - dragStartY) / movableTrack * maxScroll
+}
+
+function stopThumbDrag() {
+  window.removeEventListener('pointermove', moveThumb)
+  window.removeEventListener('pointerup', stopThumbDrag)
+}
+
+function startThumbDrag(event: globalThis.PointerEvent) {
+  const container = scrollContainer.value
+  if (!container) return
+  event.preventDefault()
+  dragStartY = event.clientY
+  dragStartScrollTop = container.scrollTop
+  window.addEventListener('pointermove', moveThumb)
+  window.addEventListener('pointerup', stopThumbDrag, { once: true })
+}
+
+function jumpToTrackPosition(event: globalThis.PointerEvent) {
+  const container = scrollContainer.value
+  const track = scrollbarTrack.value
+  if (!container || !track || event.target !== track) return
+  const trackRect = track.getBoundingClientRect()
+  const movableTrack = track.clientHeight - thumbHeight.value
+  const maxScroll = container.scrollHeight - container.clientHeight
+  if (movableTrack <= 0 || maxScroll <= 0) return
+  const targetTop = event.clientY - trackRect.top - thumbHeight.value / 2
+  container.scrollTop = Math.max(0, Math.min(movableTrack, targetTop)) / movableTrack * maxScroll
+}
+
+watch(
+  () => route.fullPath,
+  async () => {
+    await nextTick()
+    if (scrollContainer.value) scrollContainer.value.scrollTop = 0
+    scheduleScrollbarUpdate()
+  }
+)
+
+onMounted(() => {
+  const container = scrollContainer.value
+  if (!container) return
+  container.addEventListener('scroll', scheduleScrollbarUpdate, { passive: true })
+  window.addEventListener('resize', scheduleScrollbarUpdate)
+  if ('ResizeObserver' in window) {
+    resizeObserver = new window.ResizeObserver(scheduleScrollbarUpdate)
+    resizeObserver.observe(container)
+    const content = container.firstElementChild
+    if (content instanceof window.HTMLElement) resizeObserver.observe(content)
+  }
+  scheduleScrollbarUpdate()
+})
+
+onBeforeUnmount(() => {
+  scrollContainer.value?.removeEventListener('scroll', scheduleScrollbarUpdate)
+  window.removeEventListener('resize', scheduleScrollbarUpdate)
+  stopThumbDrag()
+  resizeObserver?.disconnect()
+  if (frameId !== undefined) window.cancelAnimationFrame(frameId)
+})
 </script>
 
 <template>
@@ -179,10 +278,19 @@ async function logout() {
         </div>
       </header>
 
-      <div class="workspace-content">
+      <div ref="scrollContainer" class="workspace-content" role="region" aria-label="页面内容">
         <div class="content-width">
           <RouterView />
         </div>
+      </div>
+      <div
+        v-show="scrollbarVisible"
+        ref="scrollbarTrack"
+        class="overlay-scrollbar"
+        aria-hidden="true"
+        @pointerdown="jumpToTrackPosition"
+      >
+        <div class="overlay-scrollbar__thumb" :style="thumbStyle" @pointerdown="startThumbDrag" />
       </div>
     </main>
   </div>
@@ -191,7 +299,9 @@ async function logout() {
 <style scoped>
 .app-shell {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background-color: var(--surface-app);
 }
 
@@ -350,7 +460,10 @@ async function logout() {
   margin-left: 240px;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  position: relative;
 }
 
 .workspace-header {
@@ -477,6 +590,44 @@ async function logout() {
 .workspace-content {
   padding: var(--space-6);
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.workspace-content::-webkit-scrollbar {
+  display: none;
+}
+
+.overlay-scrollbar {
+  position: absolute;
+  z-index: calc(var(--z-header) + 1);
+  top: 68px;
+  right: 3px;
+  bottom: 4px;
+  width: 8px;
+  border-radius: 999px;
+  touch-action: none;
+}
+
+.overlay-scrollbar__thumb {
+  width: 5px;
+  margin-left: 3px;
+  border-radius: 999px;
+  background: rgba(42, 49, 44, 0.3);
+  transition: width 120ms ease, margin-left 120ms ease, background-color 120ms ease;
+  cursor: grab;
+}
+
+.overlay-scrollbar:hover .overlay-scrollbar__thumb {
+  width: 7px;
+  margin-left: 1px;
+  background: rgba(42, 49, 44, 0.52);
+}
+
+.overlay-scrollbar__thumb:active {
+  cursor: grabbing;
+  background: rgba(42, 49, 44, 0.68);
 }
 
 @keyframes pulse-green {
