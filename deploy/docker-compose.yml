@@ -2,10 +2,7 @@ name: notify-hub
 
 services:
   notify-hub:
-    image: notify-hub:0.6.0
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile
+    image: ghcr.io/virgooooox/notify-hub:latest
     container_name: notify-hub
     restart: unless-stopped
     environment:
@@ -29,6 +26,13 @@ services:
 
       # 4. 插件敏感凭据 (内置 Codex X 监控插件的 Twitter Cookie，格式：'auth_token=xxx; ct0=yyy')
       NOTIFY_HUB_PLUGIN_CODEX_X_MONITOR_SECRET_TWSCRAPE_COOKIE: "${NOTIFY_HUB_PLUGIN_CODEX_X_MONITOR_SECRET_TWSCRAPE_COOKIE:-}"
+
+      # 5. Optional AI Gateway bootstrap. Leave disabled/blank to configure later in the admin UI.
+      NOTIFY_HUB_AI_ENABLED: "${NOTIFY_HUB_AI_ENABLED:-false}"
+      NOTIFY_HUB_AI_BOOTSTRAP_PRESET: "${NOTIFY_HUB_AI_BOOTSTRAP_PRESET:-custom}"
+      NOTIFY_HUB_AI_BOOTSTRAP_BASE_URL: "${NOTIFY_HUB_AI_BOOTSTRAP_BASE_URL:-}"
+      NOTIFY_HUB_AI_BOOTSTRAP_MODEL: "${NOTIFY_HUB_AI_BOOTSTRAP_MODEL:-}"
+      NOTIFY_HUB_AI_BOOTSTRAP_API_KEY: "${NOTIFY_HUB_AI_BOOTSTRAP_API_KEY:-}"
     ports:
       - "127.0.0.1:8788:8000"
     volumes:
