@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
       <div class="brand-area">
         <div class="logo-wrapper">
           <img src="/brand/logo-horizontal-reverse.svg" alt="Notify Hub" class="brand-logo">
-          <small class="brand-version">OPERATIONS / 0.7.2</small>
+          <small class="brand-version">OPERATIONS / 0.8.0</small>
         </div>
         <button class="close-nav-btn mobile-only" aria-label="关闭导航" @click="ui.sidebarOpen = false">
           <X :size="20" />

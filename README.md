@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/VirgoooooX/Notify-Hub">
-    <img src="https://img.shields.io/badge/Version-0.7.2-0873F9?style=for-the-badge" alt="Version 0.7.2" />
+    <img src="https://img.shields.io/badge/Version-0.8.0-0873F9?style=for-the-badge" alt="Version 0.8.0" />
   </a>
   <a href="https://www.python.org/">
     <img src="https://img.shields.io/badge/Python-3.12-07153F?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />

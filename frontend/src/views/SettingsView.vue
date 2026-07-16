@@ -22,7 +22,7 @@ const settings = reactive({
   timezone: 'Asia/Shanghai',
   retention_days: 90,
   default_reminder_parser_profile_id: '',
-  version: '0.7.2',
+  version: '0.8.0',
   wecom: {
     configured: false,
     corp_id_configured: false,
