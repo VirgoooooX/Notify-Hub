@@ -16,6 +16,8 @@ import DataTable from '@/components/data/DataTable.vue'
 import TableToolbar from '@/components/data/TableToolbar.vue'
 import { useUiStore } from '@/stores/ui'
 import InteractiveReminderPreview from '@/components/reminders/InteractiveReminderPreview.vue'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import { defaultReminderForm, reminderCreatePayload } from '@/features/reminders/reminderForm'
 
 const ui = useUiStore()
 const items = ref<Page<Reminder>>({
@@ -27,32 +29,10 @@ const items = ref<Page<Reminder>>({
 const page = ref(1)
 const status = ref('')
 const show = ref(false)
-const busy = ref(false)
+const { pending: busy, run: runCreate } = useAsyncAction()
 const broadcastAudienceCount = ref(0)
 
-const form = reactive({
-  title: '',
-  content: '',
-  content_type: 'text',
-  media_asset_id: '',
-  url: '',
-  schedule_type: 'once',
-  at: '',
-  interval_minutes: 60,
-  cron_expression: '0 9 * * 1-5',
-  start_at: '',
-  end_at: '',
-  misfire_policy: 'fire_once',
-  timezone: 'Asia/Shanghai',
-  recipients: '',
-  broadcast: false,
-  notify_on_all_completed: false,
-  require_ack: false,
-  ack_policy: 'any',
-  repeat_interval_seconds: 300,
-  max_attempts: 12,
-  stop_at: ''
-})
+const form = reactive(defaultReminderForm())
 
 const previewTriggers = ref<string[]>([])
 const mediaPreviewUrl = ref('')
@@ -153,78 +133,19 @@ async function loadBroadcastAudience() {
 }
 
 async function create() {
-  busy.value = true
   try {
-    if (form.content_type === 'image' && !form.media_asset_id) {
-      throw new Error('图片提醒需要先上传一张图片')
+    if ((form.content_type === 'image' || form.content_type === 'article') && !form.media_asset_id) {
+      throw new Error(`${form.content_type === 'article' ? '图文' : '图片'}提醒需要先上传一张图片`)
     }
-    if (form.content_type === 'article' && !form.url) {
-      throw new Error('图文提醒需要填写跳转链接')
-    }
-    const scheduledAt = form.at ? new Date(form.at).toISOString() : undefined
-    const stopAt = form.stop_at ? new Date(form.stop_at).toISOString() : undefined
-    await api.post('/admin/reminders', {
-      title: form.title,
-      content: form.content,
-      content_type: form.content_type,
-      media_asset_id: form.media_asset_id || undefined,
-      url: form.url || undefined,
-      schedule: form.schedule_type === 'once'
-        ? { type: 'once', at: scheduledAt, timezone: form.timezone }
-        : form.schedule_type === 'interval'
-          ? {
-              type: 'interval',
-              interval_seconds: form.interval_minutes * 60,
-              start_at: form.start_at ? new Date(form.start_at).toISOString() : new Date().toISOString(),
-              end_at: form.end_at ? new Date(form.end_at).toISOString() : undefined,
-              timezone: form.timezone,
-              misfire_policy: form.misfire_policy
-            }
-          : {
-              type: 'cron',
-              cron_expression: form.cron_expression,
-              start_at: form.start_at ? new Date(form.start_at).toISOString() : undefined,
-              end_at: form.end_at ? new Date(form.end_at).toISOString() : undefined,
-              timezone: form.timezone,
-              misfire_policy: form.misfire_policy
-            },
-      recipients: form.broadcast ? [] : form.recipients
-        .split(',')
-        .map((v) => v.trim())
-        .filter(Boolean),
-      broadcast: form.broadcast,
-      notify_on_all_completed: form.notify_on_all_completed,
-      require_ack: form.require_ack,
-      ack_policy: form.ack_policy,
-      repeat: form.require_ack
-        ? {
-            interval_seconds: form.repeat_interval_seconds,
-            max_attempts: form.max_attempts,
-            stop_at: stopAt
-          }
-        : undefined
-    })
+    await runCreate(() => api.post('/admin/reminders', reminderCreatePayload(form)))
     show.value = false
     ui.toast('提醒已创建', 'success')
-    // Reset form fields
-    form.title = ''
-    form.content = ''
-    form.content_type = 'text'
-    form.media_asset_id = ''
     if (mediaPreviewUrl.value) globalThis.URL.revokeObjectURL(mediaPreviewUrl.value)
     mediaPreviewUrl.value = ''
-    form.url = ''
-    form.at = ''
-    form.cron_expression = '0 9 * * 1-5'
-    form.recipients = ''
-    form.broadcast = false
-    form.notify_on_all_completed = false
-    form.require_ack = false
+    Object.assign(form, defaultReminderForm())
     await load()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '创建失败', 'danger')
-  } finally {
-    busy.value = false
   }
 }
 
@@ -415,8 +336,8 @@ const contentLabel = (type?: string) => {
         <img v-if="mediaPreviewUrl" :src="mediaPreviewUrl" class="media-preview" alt="提醒图片预览">
       </div>
       <div v-if="form.content_type === 'image' || form.content_type === 'article'" class="field full-width">
-        <label>跳转链接 URL {{ form.content_type === 'article' ? '（必填）' : '（可选）' }}</label>
-        <AppInput v-model="form.url" placeholder="https://..." :required="form.content_type === 'article'" />
+        <label>跳转链接 URL（可选）</label>
+        <AppInput v-model="form.url" placeholder="未填写时打开封面图片" />
       </div>
 
       <div class="field full-width">

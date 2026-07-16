@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/VirgoooooX/Notify-Hub">
-    <img src="https://img.shields.io/badge/Version-0.8.0-0873F9?style=for-the-badge" alt="Version 0.8.0" />
+    <img src="https://img.shields.io/github/v/release/VirgoooooX/Notify-Hub?display_name=tag&style=for-the-badge&color=0873F9" alt="Latest release" />
   </a>
   <a href="https://www.python.org/">
     <img src="https://img.shields.io/badge/Python-3.12-07153F?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />
@@ -324,17 +324,10 @@ npm run build
 
 | 文档 | 内容 |
 | --- | --- |
-| [`docs/00-product-scope.md`](docs/00-product-scope.md) | 产品边界、角色与核心用例 |
-| [`docs/01-architecture.md`](docs/01-architecture.md) | 模块化单体架构和依赖方向 |
-| [`docs/02-domain-model.md`](docs/02-domain-model.md) | Event、Delivery、Reminder 等领域模型 |
-| [`docs/03-plugin-development.md`](docs/03-plugin-development.md) | 插件 Manifest、Context 与开发契约 |
-| [`docs/04-api-contracts.md`](docs/04-api-contracts.md) | Admin、Client 与回调 API 契约 |
-| [`docs/07-security-and-reliability.md`](docs/07-security-and-reliability.md) | 安全边界与恢复要求 |
-| [`docs/08-deployment-and-operations.md`](docs/08-deployment-and-operations.md) | 部署、备份、升级和故障排查 |
-| [`docs/13-ai-gateway.md`](docs/13-ai-gateway.md) | AI Gateway 控制面与调用约束 |
-| [`docs/14-reminder-center-development-plan.md`](docs/14-reminder-center-development-plan.md) | 提醒中心设计与开发计划 |
-| [`docs/15-reminder-operations.md`](docs/15-reminder-operations.md) | 提醒运维、恢复和发布验收 |
-| [`docs/DECISIONS.md`](docs/DECISIONS.md) | 已接受的架构决策记录 |
+| [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前架构、领域、安全、插件和测试总纲 |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | 已接受的架构决策及其原因 |
+| [`docs/operations.md`](docs/operations.md) | 部署、备份、恢复和提醒运维 |
+| [`docs/archive/design-phase/`](docs/archive/design-phase/) | 历史设计与开发计划，仅供追溯 |
 
 ---
 

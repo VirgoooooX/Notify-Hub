@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from app.application.media_service import MediaService
+    from app.media.public_urls import PublicMediaUrlBuilder
 
 
 @dataclass(frozen=True)
@@ -369,15 +370,16 @@ class PluginMediaPublisher:
         media_write_allowed: bool,
         media_service: MediaService | None,
         session_factory: async_sessionmaker[AsyncSession] | None,
-        public_base_url: str | None,
-        signing_key: bytes,
+        public_media_urls: PublicMediaUrlBuilder,
     ) -> None:
         self._plugin_id = plugin_id
         self._media_write_allowed = media_write_allowed
         self._media_service = media_service
         self._factory = session_factory
-        self._public_base_url = public_base_url
-        self._signing_key = signing_key
+        self._public_media_urls = public_media_urls
+
+    def public_static_url(self, path: str) -> str:
+        return self._public_media_urls.static_url(path)
 
     async def publish_image_url(
         self,
@@ -422,12 +424,7 @@ class PluginMediaPublisher:
                 retention_seconds=duration,
             )
 
-        import time
-
-        expires = int(time.time()) + duration
-
-        from app.infrastructure.security.tokens import generate_media_signature
-
-        sig = generate_media_signature(asset.id, expires, self._signing_key.decode("utf-8"))
-        base_url = self._public_base_url or "http://localhost:8000"
-        return f"{base_url.rstrip('/')}/public/media/{asset.id}?expires={expires}&sig={sig}"
+        return self._public_media_urls.signed_image_url(
+            asset.id,
+            lifetime_seconds=duration,
+        )

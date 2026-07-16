@@ -18,6 +18,7 @@ import {
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { APP_VERSION } from '@/lib/version'
 
 const route = useRoute()
 const router = useRouter()
@@ -211,7 +212,7 @@ onBeforeUnmount(() => {
       <div class="brand-area">
         <div class="logo-wrapper">
           <img src="/brand/logo-horizontal-reverse.svg" alt="Notify Hub" class="brand-logo">
-          <small class="brand-version">OPERATIONS / 0.8.0</small>
+          <small class="brand-version">OPERATIONS / {{ APP_VERSION }}</small>
         </div>
         <button class="close-nav-btn mobile-only" aria-label="关闭导航" @click="ui.sidebarOpen = false">
           <X :size="20" />

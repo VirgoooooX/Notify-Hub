@@ -1,6 +1,11 @@
 import vue from '@vitejs/plugin-vue'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vitest/config'
+
+const packageJson = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
+) as { version: string }
 
 const allowedHosts = (process.env.NOTIFY_HUB_DEV_ALLOWED_HOSTS ?? '')
   .split(',')
@@ -9,6 +14,7 @@ const allowedHosts = (process.env.NOTIFY_HUB_DEV_ALLOWED_HOSTS ?? '')
 
 export default defineConfig({
   plugins: [vue()],
+  define: { __APP_VERSION__: JSON.stringify(packageJson.version) },
   resolve: { alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) } },
   server: {
     allowedHosts,

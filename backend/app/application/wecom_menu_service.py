@@ -164,11 +164,11 @@ class WeComMenuService:
 
         title = result.title
         messages = {
-            "completed": f"✅ 已完成：{title}\n\n本次持续提醒已停止。",
-            "snooze_10": f"⏰ 已推迟10分钟：{title}\n\n10分钟内不会再次催办。",
-            "snooze_30": f"⏰ 已推迟30分钟：{title}\n\n30分钟内不会再次催办。",
-            "ignored_today": f"🌙 今日已忽略：{title}\n\n今天不会再次催办。",
-            "stopped": f"⏹️ 已停止本次：{title}\n\n仅停止本次，不影响后续周期提醒。",
+            "completed": f"✅ 已完成：{title}，本次持续提醒已停止。",
+            "snooze_10": f"⏰ 已推迟10分钟：{title}，10分钟内不会再次催办。",
+            "snooze_30": f"⏰ 已推迟30分钟：{title}，30分钟内不会再次催办。",
+            "ignored_today": f"🌙 今日已忽略：{title}，今天不会再次催办。",
+            "stopped": f"⏹️ 已停止本次：{title}，不影响后续周期提醒。",
             "not_active": (
                 f"ℹ️ 无法操作：{title}\n\n这条交互式提醒已经结束，菜单不会自动回退到更早的提醒。"
             ),

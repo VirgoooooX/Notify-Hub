@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notify Hub Plugin Development"
+  short_description: "Build, debug, test, and review trusted Notify Hub plugins"
+  default_prompt: "Use $notify-hub-plugin-development to build a reliable and testable Notify Hub plugin."

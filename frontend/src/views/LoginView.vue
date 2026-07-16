@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth'
 import AppInput from '@/components/ui/AppInput.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
+import { APP_VERSION } from '@/lib/version'
 
 const auth = useAuthStore()
 const route = useRoute()
@@ -63,7 +64,7 @@ async function submit() {
           统一接收事件、调度提醒，并追踪每一次企业微信投递。可靠落库，清晰恢复。
         </p>
       </div>
-      <small class="art-footer mono">NOTIFY HUB / RELEASE 0.8.0</small>
+      <small class="art-footer mono">NOTIFY HUB / RELEASE {{ APP_VERSION }}</small>
     </section>
 
     <section class="login-form-wrap">

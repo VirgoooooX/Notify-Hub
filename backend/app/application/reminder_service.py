@@ -11,13 +11,19 @@ from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from app.application.audit import add_audit
+from app.application.reminder_delivery_service import ReminderDeliveryService
+from app.application.reminder_scheduling import (
+    schedule_from_reminder as _schedule_from_reminder,
+)
+from app.application.reminder_scheduling import (
+    structured_schedule as _structured_schedule,
+)
+from app.application.reminder_scheduling import (
+    utc_datetime as _utc,
+)
 from app.domain.clock import Clock, SystemClock
 from app.domain.reminder_schedules import (
-    CronSchedule,
-    IntervalSchedule,
     MisfirePolicy,
-    OnceSchedule,
-    ReminderSchedule,
     ScheduleValidationError,
     next_occurrence,
     resolve_due,
@@ -38,7 +44,7 @@ from app.domain.reminders import (
     validate_timezone,
 )
 from app.infrastructure.database.base import new_id
-from app.infrastructure.database.models import Delivery, Event, Notification, Person, WeComIdentity
+from app.infrastructure.database.models import Delivery, Notification, Person, WeComIdentity
 from app.infrastructure.database.reminder_models import (
     IncomingMessage,
     NotificationAction,
@@ -47,7 +53,7 @@ from app.infrastructure.database.reminder_models import (
     ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
-from sqlalchemy import Select, delete, exists, func, or_, select, update
+from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -177,57 +183,6 @@ def _broadcast_interactive_hint(notify_on_all_completed: bool) -> str:
     return BROADCAST_INTERACTIVE_REMINDER_HINT
 
 
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _structured_schedule(
-    *,
-    schedule_type: ScheduleType,
-    timezone: str,
-    scheduled_at: datetime | None,
-    interval_seconds: int | None,
-    cron_expression: str | None,
-    start_at: datetime | None,
-) -> ReminderSchedule:
-    try:
-        if schedule_type is ScheduleType.ONCE:
-            if scheduled_at is None:
-                raise ReminderError("once schedule requires scheduled_at")
-            return OnceSchedule(scheduled_at, timezone)
-        if schedule_type is ScheduleType.INTERVAL:
-            if interval_seconds is None:
-                raise ReminderError("interval schedule requires interval_seconds")
-            anchor_at = start_at or scheduled_at
-            if anchor_at is None:
-                raise ReminderError("interval schedule requires start_at")
-            return IntervalSchedule(interval_seconds, anchor_at, timezone)
-        if schedule_type is ScheduleType.CRON:
-            if not cron_expression:
-                raise ReminderError("cron schedule requires cron_expression")
-            return CronSchedule(cron_expression, timezone)
-    except ScheduleValidationError as exc:
-        raise ReminderError(str(exc)) from exc
-    raise ReminderError("structured schedule type is required")
-
-
-def _schedule_from_reminder(reminder: Reminder) -> ReminderSchedule | None:
-    schedule_type = ScheduleType(reminder.schedule_type)
-    if schedule_type is ScheduleType.RECURRING:
-        return None
-    config = reminder.schedule_config or {}
-    return _structured_schedule(
-        schedule_type=schedule_type,
-        timezone=reminder.timezone,
-        scheduled_at=_utc(reminder.scheduled_at) if reminder.scheduled_at else None,
-        interval_seconds=cast(int | None, config.get("seconds")),
-        cron_expression=cast(str | None, config.get("expression")),
-        start_at=_utc(reminder.start_at) if reminder.start_at else None,
-    )
-
-
 class ReminderService:
     def __init__(
         self,
@@ -240,6 +195,7 @@ class ReminderService:
         self._emit_event = emit_event
         self._action_token_secret = action_token_secret.encode()
         self._clock = clock or SystemClock()
+        self._deliveries = ReminderDeliveryService(self._sessions, self._clock.now)
 
     def action_token(self, action_id: str) -> str:
         signature = (
@@ -365,8 +321,8 @@ class ReminderService:
                 raise ReminderError("unsupported reminder content type")
             if command.url and not command.url.startswith(("https://", "http://")):
                 raise ReminderError("reminder URL must use HTTP or HTTPS")
-            if command.content_type == "image" and not command.media_asset_id:
-                raise ReminderError("image reminders require a media asset")
+            if command.content_type in {"image", "article"} and not command.media_asset_id:
+                raise ReminderError("image and article reminders require a media asset")
             if command.media_asset_id:
                 from app.infrastructure.database.media_models import MediaAsset
 
@@ -431,6 +387,8 @@ class ReminderService:
                 if command.url and not command.url.startswith(("https://", "http://")):
                     raise ReminderError("reminder URL must use HTTP or HTTPS")
                 reminder.url = command.url or None
+            if reminder.content_type in {"image", "article"} and not reminder.media_asset_id:
+                raise ReminderError("image and article reminders require a media asset")
             if command.schedule_type is not None:
                 timezone = command.timezone or reminder.timezone
                 validate_timezone(timezone)
@@ -959,11 +917,8 @@ class ReminderService:
                     source_id=reminder.id,
                     event_type="reminder.broadcast_all_completed",
                     event_key=f"reminder:{occurrence.id}:broadcast-all-completed",
-                    title=f"✅ 所有人都已完成｜{occurrence.title_snapshot}",
-                    content=(
-                        f"✅ 所有人都已完成：{occurrence.title_snapshot}\n\n"
-                        "本次广播持续提醒已结束，感谢大家及时确认。"
-                    ),
+                    title=f"✅ 全员已完成：{occurrence.title_snapshot}",
+                    content="",
                     recipients=("@all",),
                     message_type="text",
                     require_ack=False,
@@ -980,7 +935,11 @@ class ReminderService:
                 interactive = occurrence.repeat_interval_seconds_snapshot is not None
                 content = occurrence.content_snapshot
                 message_type = occurrence.content_type_snapshot
-                if message_type == "article" and not occurrence.url:
+                if (
+                    message_type == "article"
+                    and not occurrence.url
+                    and not occurrence.media_asset_id_snapshot
+                ):
                     message_type = "text"
                 if interactive:
                     hint = _broadcast_interactive_hint(occurrence.notify_on_all_completed_snapshot)
@@ -1175,7 +1134,11 @@ class ReminderService:
 
             interactive = occurrence.repeat_interval_seconds_snapshot is not None
             message_type = occurrence.content_type_snapshot
-            if message_type == "article" and not occurrence.url:
+            if (
+                message_type == "article"
+                and not occurrence.url
+                and not occurrence.media_asset_id_snapshot
+            ):
                 message_type = "text"
             content = occurrence.content_snapshot
             if interactive:
@@ -1712,38 +1675,11 @@ class ReminderService:
         occurrence_id: str | None = None,
         recipient_id: str | None = None,
     ) -> int:
-        async with self._sessions() as session, session.begin():
-            if occurrence_id is not None:
-                notification_ids = select(Notification.id).where(
-                    Notification.reminder_occurrence_id == occurrence_id
-                )
-            else:
-                reminder_events: Select[tuple[str]] = select(Event.id).where(
-                    Event.source_type == "reminder", Event.source_id == reminder_id
-                )
-                notification_ids = select(Notification.id).where(
-                    Notification.event_id.in_(reminder_events)
-                )
-            delivery_filter: builtins.list[Any] = [
-                Delivery.notification_id.in_(notification_ids),
-                Delivery.status.in_(("pending", "retry_wait")),
-            ]
-            if recipient_id is not None:
-                delivery_filter.append(Delivery.recipient_id == recipient_id)
-            result = cast(
-                CursorResult[Any],
-                await session.execute(
-                    update(Delivery)
-                    .where(*delivery_filter)
-                    .values(
-                        status="cancelled",
-                        last_error_code="reminder_acknowledged",
-                        last_error_message="reminder stopped before delivery",
-                        updated_at=self._clock.now(),
-                    )
-                ),
-            )
-            return int(result.rowcount or 0)
+        return await self._deliveries.cancel_pending(
+            reminder_id,
+            occurrence_id=occurrence_id,
+            recipient_id=recipient_id,
+        )
 
     async def _cancel_deliveries_if_inactive(self, reminder_id: str) -> int:
         async with self._sessions() as session:

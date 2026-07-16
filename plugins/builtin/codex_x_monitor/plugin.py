@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -167,11 +166,11 @@ class CodexXMonitorPlugin:
                 matched += 1
                 summary = format_post_summary(post)
 
-                cover_url = config.cover_image_url
+                cover_url = (
+                    str(config.cover_image_url) if config.cover_image_url is not None else None
+                )
                 if cover_url is None:
-                    public_base = os.environ.get("NOTIFY_HUB_PUBLIC_BASE_URL")
-                    if public_base:
-                        cover_url = f"{public_base.rstrip('/')}/codex_wechat_cover.png"  # type: ignore[assignment]
+                    cover_url = context.media.public_static_url("codex_wechat_cover.png")
 
                 receipt = await context.emit_event(
                     EventDraft(

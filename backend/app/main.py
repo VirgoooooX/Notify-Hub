@@ -57,6 +57,7 @@ from app.media.downloader import SafeMediaDownloader
 from app.media.speech import LocalCommandAmrTranscoder, LocalCommandTTS
 from app.media.storage import MediaStorage
 from app.plugin_runtime.registry import PluginRegistry
+from app.version import APP_VERSION
 from app.workers.delivery_worker import DeliveryWorker
 from app.workers.interaction_worker import InteractionWorker
 from app.workers.media_cleanup_worker import MediaCleanupWorker
@@ -296,7 +297,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await media_http.aclose()
         await engine.dispose()
 
-    app = FastAPI(title="Notify Hub", version="0.8.0", lifespan=lifespan)
+    app = FastAPI(title="Notify Hub", version=APP_VERSION, lifespan=lifespan)
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = factory

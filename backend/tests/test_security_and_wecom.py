@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -7,6 +8,7 @@ from app.channels.wecom.adapter import WeComAdapter, split_utf8
 from app.channels.wecom.client import WeComClient
 from app.config import Settings
 from app.infrastructure.logging.setup import redact
+from app.infrastructure.security.tokens import verify_media_signature
 from pydantic import ValidationError
 
 
@@ -87,6 +89,40 @@ async def test_interactive_article_uses_news_and_keeps_menu_hint() -> None:
     assert article["title"] == "提交月度报表"
     assert "【快捷操作】" in article["description"]
     assert "最近收到的一条交互式提醒" in article["description"]
+
+
+@pytest.mark.asyncio
+async def test_article_uses_signed_local_media_as_cover_and_click_url() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        public_base_url="https://notify.example.com",
+        public_media_signing_key="signed-media-key",
+        wecom_corp_id="corp",
+        wecom_agent_id=1,
+        wecom_secret="secret",
+    )
+    client = RecordingWeComClient()
+    adapter = WeComAdapter(client, settings)  # type: ignore[arg-type]
+
+    result = await adapter.send(
+        ChannelMessage(
+            "article",
+            "带药",
+            "出门前检查",
+            ["user-1"],
+            media_asset_id="med_cover",
+        )
+    )
+
+    assert result.success
+    article = client.payloads[0]["news"]["articles"][0]  # type: ignore[index]
+    assert article["url"] == article["picurl"]
+    parsed = urlsplit(article["picurl"])
+    query = parse_qs(parsed.query)
+    expires = int(query["expires"][0])
+    assert parsed.path == "/public/media/med_cover"
+    assert verify_media_signature("med_cover", expires, query["sig"][0], "signed-media-key")
 
 
 @pytest.mark.asyncio

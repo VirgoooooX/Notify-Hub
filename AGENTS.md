@@ -3,16 +3,13 @@
 本文件面向在本仓库中工作的 AI 编码助手和开发者。开始修改代码前，必须先阅读：
 
 1. `README.md`
-2. `docs/01-architecture.md`
-3. `docs/02-domain-model.md`
-4. `docs/03-plugin-development.md`
-5. `docs/06-development-roadmap.md`
-6. `docs/07-security-and-reliability.md`
-7. `docs/DECISIONS.md`
+2. `PROJECT_GUIDE.md`
+3. 涉及架构决策时读取 `docs/DECISIONS.md`
+4. 涉及部署、恢复或提醒运维时读取 `docs/operations.md`
 
 ## 1. 当前开发方向
 
-当前项目处于文档先行阶段。进入编码后必须严格按照 `docs/06-development-roadmap.md` 从 Phase 0 开始，不要跳过可靠事件核心直接实现高级功能。
+当前项目已进入完整平台迭代阶段。新增能力必须建立在可靠 Event/Notification/Delivery、持久化调度、权限和恢复机制之上，不得绕过核心链路直接实现渠道或临时任务。
 
 第一条目标闭环：
 
@@ -40,34 +37,18 @@ Codex X Monitor
 11. 第一阶段不得实现网页上传任意插件或脚本；
 12. 不得为了“以后可能需要”提前引入 Redis、RabbitMQ 或微服务。
 
-## 3. 推荐实现顺序
+## 3. 实现优先级
 
-### Phase 0
+新增功能按以下顺序落地：
 
-- 后端项目；
-- 配置；
-- 日志；
-- 数据库；
-- Alembic；
-- 健康检查；
-- 测试；
-- Docker；
-- 前端骨架。
+1. 明确领域状态、权限、幂等和恢复语义；
+2. 完成数据库模型、迁移和 Application Service；
+3. 通过 Event/Notification/Delivery 或持久化 Worker 接入外部效果；
+4. 增加 API、后台或移动端入口；
+5. 补齐失败、重启、权限、安全和数据库约束测试；
+6. 最后处理展示优化和非关键增强。
 
-### Phase 1～3
-
-- 管理员认证；
-- Event/Notification/Delivery；
-- API Client；
-- 数据库队列；
-- 企业微信 Adapter。
-
-### Phase 4～5
-
-- Plugin Runtime；
-- Codex X Monitor。
-
-在这些完成前，不要实现 ASR、TTS、LLM 对话或任意脚本执行。
+不得为了赶页面或单次联调绕过可靠核心，也不得开放网页上传任意插件或脚本。
 
 ## 4. 代码边界
 
@@ -116,7 +97,7 @@ web -> database
 - 网络调用在事务提交后执行；
 - SQLite 开启外键、WAL 和 busy timeout；
 - 不把 JSON 当成所有数据的替代品；
-- 状态枚举和索引遵循 `docs/02-domain-model.md`；
+- 状态枚举和索引遵循当前 ORM、Alembic、领域方法和测试；
 - 删除使用明确保留策略，不做无界全表操作。
 
 ## 7. 插件要求
@@ -190,12 +171,11 @@ PR 描述应包含：
 
 ## 12. 修改文档
 
-代码实现与文档不一致时，必须在同一 PR 更新对应文档。改变已接受架构决策时，应在 `docs/DECISIONS.md` 新增 ADR，而不是直接删除原决策。
+普通实现调整不要求修改历史设计资料。改变项目总纲、运维流程或已接受架构决策时，应在同一 PR 更新 `PROJECT_GUIDE.md`、`docs/operations.md` 或新增 ADR，不得静默改写历史决策。
 
-## 13. 当前首个编码任务
+## 13. 当前迭代原则
 
-```text
-初始化后端工程：FastAPI 应用工厂、配置模型、结构化日志、SQLAlchemy、Alembic、健康检查、pytest 和 Docker 开发环境。
-```
-
-该任务不应包含企业微信、Codex 插件或前端完整页面。
+- 小步完成单一可验证垂直切片；
+- 优先修复可靠性、安全和恢复问题，再扩展新能力；
+- 共享能力进入核心或明确的公共模块，业务规则留在所属领域或插件；
+- 不把历史开发路线图当作当前任务清单，实际范围以用户请求、`PROJECT_GUIDE.md` 和现有代码为准。

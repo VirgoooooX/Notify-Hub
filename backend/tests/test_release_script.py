@@ -13,7 +13,6 @@ assert SPEC is not None and SPEC.loader is not None
 RELEASE_MODULE = module_from_spec(SPEC)
 SPEC.loader.exec_module(RELEASE_MODULE)
 git_operations = RELEASE_MODULE.git_operations
-update_readme_version = RELEASE_MODULE.update_readme_version
 update_version_files = RELEASE_MODULE.update_version_files
 
 
@@ -27,18 +26,10 @@ def test_update_version_files_keeps_application_versions_in_sync(tmp_path: Path)
     files = {
         "pyproject.toml": '[project]\nversion = "0.7.2"\n',
         "uv.lock": '[[package]]\nname = "notify-hub"\nversion = "0.7.2"\n',
-        "backend/app/main.py": 'app = FastAPI(title="Notify Hub", version="0.7.2")\n',
         "frontend/package.json": '{"name":"notify-hub-web","version":"0.7.2"}\n',
         "frontend/package-lock.json": (
             '{"name":"notify-hub-web","version":"0.7.2","packages":'
             '{"":{"name":"notify-hub-web","version":"0.7.2"}}}\n'
-        ),
-        "frontend/src/views/LoginView.vue": "NOTIFY HUB / RELEASE 0.7.2\n",
-        "frontend/src/views/SettingsView.vue": "version: '0.7.2',\n",
-        "frontend/src/layouts/AppLayout.vue": "OPERATIONS / 0.7.2\n",
-        "README.md": (
-            '<img src="https://img.shields.io/badge/Version-0.7.2-0873F9'
-            '?style=for-the-badge" alt="Version 0.7.2" />\n'
         ),
     }
     for relative_path, content in files.items():
@@ -51,8 +42,6 @@ def test_update_version_files_keeps_application_versions_in_sync(tmp_path: Path)
     for relative_path in RELEASE_MODULE.VERSION_FILES:
         assert "0.8.0" in (tmp_path / relative_path).read_text(encoding="utf-8")
         assert "0.7.2" not in (tmp_path / relative_path).read_text(encoding="utf-8")
-    assert "Version-0.8.0-0873F9" in (tmp_path / "README.md").read_text(encoding="utf-8")
-
     update_version_files(tmp_path, "0.9.0-rc.1")
     update_version_files(tmp_path, "0.9.0")
 
@@ -60,21 +49,6 @@ def test_update_version_files_keeps_application_versions_in_sync(tmp_path: Path)
         content = (tmp_path / relative_path).read_text(encoding="utf-8")
         assert "0.9.0" in content
         assert "rc.1" not in content
-
-
-def test_update_readme_version_escapes_prerelease_hyphen_for_shields(tmp_path: Path) -> None:
-    readme = tmp_path / "README.md"
-    readme.write_text(
-        '<img src="https://img.shields.io/badge/Version-0.7.2-0873F9'
-        '?style=for-the-badge" alt="Version 0.7.2" />\n',
-        encoding="utf-8",
-    )
-
-    update_readme_version(tmp_path, "0.8.0-rc.1")
-
-    content = readme.read_text(encoding="utf-8")
-    assert "Version-0.8.0--rc.1-0873F9" in content
-    assert 'alt="Version 0.8.0-rc.1"' in content
 
 
 def test_git_operations_skips_empty_commit_and_creates_tag(tmp_path: Path) -> None:
@@ -100,7 +74,6 @@ def test_git_operations_accepts_existing_tag_on_head(tmp_path: Path) -> None:
     run = Mock(
         side_effect=[
             _completed(["git", "--version"]),
-            _completed(["uv"]),
             _completed(["git", "diff"], 0),
             _completed(["git", "rev-parse"], 0, stdout="abc\n"),
             _completed(["git", "rev-parse", "HEAD"], 0, stdout="abc\n"),
@@ -117,7 +90,6 @@ def test_git_operations_rejects_existing_tag_on_other_commit(tmp_path: Path) -> 
     run = Mock(
         side_effect=[
             _completed(["git", "--version"]),
-            _completed(["uv"]),
             _completed(["git", "diff"], 0),
             _completed(["git", "rev-parse"], 0, stdout="old\n"),
             _completed(["git", "rev-parse", "HEAD"], 0, stdout="new\n"),

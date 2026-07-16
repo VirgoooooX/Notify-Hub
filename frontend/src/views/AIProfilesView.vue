@@ -20,6 +20,12 @@ import AppCard from '@/components/ui/AppCard.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
 import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import {
+  aiProfilePolicyPayload,
+  defaultAIProfileForm,
+  editAIProfileForm,
+} from '@/features/ai/profileForm'
 
 const capabilityLabels: Record<AICapability, string> = {
   classify: '分类',
@@ -50,33 +56,12 @@ const invocations = ref<AIInvocation[]>([])
 const providerModels = ref<AIProviderModel[]>([])
 const show = ref(false)
 const editingId = ref<string>()
-const busy = ref(false)
+const { pending: busy, run: runSave } = useAsyncAction()
 const modelsLoading = ref(false)
 const deleteTarget = ref<AIProfile>()
-const deleteBusy = ref(false)
+const { pending: deleteBusy, run: runDelete } = useAsyncAction()
 
-const form = reactive({
-  id: '',
-  name: '',
-  description: '',
-  capability: 'classify' as AICapability,
-  provider_id: '',
-  model: '',
-  temperature: 0,
-  max_output_tokens: 160,
-  response_format: 'auto',
-  timeout_seconds: 20,
-  output_language: 'auto' as AIOutputLanguage,
-  reasoning_effort: 'provider_default' as AIReasoningEffort,
-  verbosity: 'standard' as AIVerbosity,
-  include_reason: true,
-  max_reason_characters: 200,
-  system_instructions: '',
-  cache_ttl_seconds: 2592000,
-  daily_request_limit: 500 as number | '',
-  daily_token_limit: 1000000 as number | '',
-  enabled: true,
-})
+const form = reactive(defaultAIProfileForm())
 
 const allowedModels = computed(() =>
   providerModels.value.filter((model) => model.available && model.enabled),
@@ -138,28 +123,7 @@ async function load() {
 }
 
 function resetForm() {
-  Object.assign(form, {
-    id: '',
-    name: '',
-    description: '',
-    capability: 'classify' as AICapability,
-    provider_id: providers.value[0]?.id ?? '',
-    model: '',
-    temperature: 0,
-    max_output_tokens: 160,
-    response_format: 'auto',
-    timeout_seconds: 20,
-    output_language: 'auto' as AIOutputLanguage,
-    reasoning_effort: 'provider_default' as AIReasoningEffort,
-    verbosity: 'standard' as AIVerbosity,
-    include_reason: true,
-    max_reason_characters: 200,
-    system_instructions: '',
-    cache_ttl_seconds: 2592000,
-    daily_request_limit: 500,
-    daily_token_limit: 1000000,
-    enabled: true,
-  })
+  Object.assign(form, defaultAIProfileForm(providers.value[0]?.id))
 }
 
 function openCreate() {
@@ -171,28 +135,7 @@ function openCreate() {
 
 function openEdit(item: AIProfile) {
   editingId.value = item.id
-  Object.assign(form, {
-    id: item.id,
-    name: item.name,
-    description: item.description,
-    capability: item.capability,
-    provider_id: item.provider_id,
-    model: item.model,
-    temperature: item.temperature,
-    max_output_tokens: item.max_output_tokens,
-    response_format: item.response_format,
-    timeout_seconds: item.timeout_seconds,
-    output_language: item.output_language,
-    reasoning_effort: item.reasoning_effort,
-    verbosity: item.verbosity,
-    include_reason: item.include_reason,
-    max_reason_characters: item.max_reason_characters,
-    system_instructions: item.system_instructions,
-    cache_ttl_seconds: item.cache_ttl_seconds,
-    daily_request_limit: item.daily_request_limit ?? '',
-    daily_token_limit: item.daily_token_limit ?? '',
-    enabled: item.enabled,
-  })
+  Object.assign(form, editAIProfileForm(item))
   show.value = true
   void loadProviderModels(item.provider_id)
 }
@@ -203,56 +146,35 @@ function closeEditor() {
 }
 
 function policyPayload() {
-  return {
-    name: form.name,
-    description: form.description,
-    provider_id: form.provider_id,
-    model: form.model,
-    temperature: form.temperature,
-    max_output_tokens: form.max_output_tokens,
-    response_format: form.response_format,
-    timeout_seconds: form.timeout_seconds,
-    output_language: form.output_language,
-    reasoning_effort: form.reasoning_effort,
-    verbosity: form.verbosity,
-    include_reason: form.include_reason,
-    max_reason_characters: form.max_reason_characters,
-    system_instructions: form.system_instructions,
-    cache_ttl_seconds: form.cache_ttl_seconds,
-    daily_request_limit: form.daily_request_limit === '' ? null : form.daily_request_limit,
-    daily_token_limit: form.daily_token_limit === '' ? null : form.daily_token_limit,
-    enabled: form.enabled,
-  }
+  return aiProfilePolicyPayload(form)
 }
 
 async function saveProfile() {
-  busy.value = true
   try {
-    if (editingId.value) {
-      await api.patch(`/admin/ai/profiles/${editingId.value}`, policyPayload())
-      ui.toast('Profile 运行策略已更新', 'success')
-    } else {
-      await api.post('/admin/ai/profiles', {
-        ...policyPayload(),
-        id: form.id || undefined,
-        capability: form.capability,
-      })
-      ui.toast('Profile 已创建', 'success')
-    }
+    await runSave(async () => {
+      if (editingId.value) {
+        await api.patch(`/admin/ai/profiles/${editingId.value}`, policyPayload())
+        ui.toast('Profile 运行策略已更新', 'success')
+      } else {
+        await api.post('/admin/ai/profiles', {
+          ...policyPayload(),
+          id: form.id || undefined,
+          capability: form.capability,
+        })
+        ui.toast('Profile 已创建', 'success')
+      }
+    })
     closeEditor()
     await load()
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : editingId.value ? '保存失败' : '创建失败', 'danger')
-  } finally {
-    busy.value = false
   }
 }
 
 async function deleteProfile() {
   if (!deleteTarget.value) return
-  deleteBusy.value = true
   try {
-    await api.delete(`/admin/ai/profiles/${deleteTarget.value.id}`)
+    await runDelete(() => api.delete(`/admin/ai/profiles/${deleteTarget.value!.id}`))
     ui.toast('Profile 已删除，历史调用记录已保留', 'success')
     deleteTarget.value = undefined
     await load()
@@ -264,8 +186,6 @@ async function deleteProfile() {
           ? error.message
           : '删除失败'
     ui.toast(message, 'danger')
-  } finally {
-    deleteBusy.value = false
   }
 }
 

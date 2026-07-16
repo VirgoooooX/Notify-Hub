@@ -376,7 +376,7 @@ async def test_menu_completes_latest_occurrence_and_names_task(api) -> None:
     result = await app.state.wecom_menu_service.handle("completer", MENU_COMPLETE)
 
     assert result.code == "completed"
-    assert result.text == "✅ 已完成：提交月度报表\n\n本次持续提醒已停止。"
+    assert result.text == "✅ 已完成：提交月度报表，本次持续提醒已停止。"
     async with app.state.session_factory() as session:
         stored = await session.get(ReminderOccurrenceRecipient, recipient.id)
         assert stored is not None
@@ -490,7 +490,8 @@ async def test_web_broadcast_tracks_all_members_and_announces_completion(api) ->
             select(Delivery).where(Delivery.notification_id == completion.id)
         )
         assert completion is not None
-        assert completion.title == "✅ 所有人都已完成｜全员提交安全确认"
+        assert completion.title == "✅ 全员已完成：全员提交安全确认"
+        assert completion.content == ""
         assert completion_delivery is not None
         assert completion_delivery.recipient_type == RecipientType.BROADCAST.value
 
@@ -736,7 +737,7 @@ async def test_persisted_menu_callback_is_dispatched_by_interaction_worker(api) 
     )
 
     assert await worker.run_once() == 1
-    assert replies == ["✅ 已完成：提交月度报表\n\n本次持续提醒已停止。"]
+    assert replies == ["✅ 已完成：提交月度报表，本次持续提醒已停止。"]
 
 
 @pytest.mark.asyncio
@@ -843,7 +844,7 @@ async def test_menu_reply_failure_is_retried_with_original_result(api) -> None:
         assert pending is not None and pending.processing_status == "pending"
         assert stored is not None and stored.status == "acknowledged"
     assert await worker.run_once() == 1
-    assert replies == ["✅ 已完成：提交月度报表\n\n本次持续提醒已停止。"]
+    assert replies == ["✅ 已完成：提交月度报表，本次持续提醒已停止。"]
     async with app.state.session_factory() as session:
         processed = await session.get(IncomingMessage, receipt.incoming_message_id)
         assert processed is not None and processed.processing_status == "processed"

@@ -14,24 +14,21 @@ import AppCard from '@/components/ui/AppCard.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
 import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
+import { useAsyncAction } from '@/composables/useAsyncAction'
+import {
+  aiProviderPayload,
+  defaultAIProviderForm,
+  editAIProviderForm,
+  presetUrls,
+} from '@/features/ai/providerForm'
 
-const presetUrls: Record<string, string> = {
-  openai: 'https://api.openai.com/v1',
-  gemini: 'https://generativelanguage.googleapis.com/v1beta/openai',
-  openrouter: 'https://openrouter.ai/api/v1',
-  deepseek: 'https://api.deepseek.com',
-  kimi: 'https://api.moonshot.cn/v1',
-  dashscope: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
-  siliconflow: 'https://api.siliconflow.cn/v1',
-}
 const ui = useUiStore()
 const items = ref<AIProvider[]>([])
 const show = ref(false)
-const busy = ref(false)
+const { pending: busy, run: runSave } = useAsyncAction()
 const editingId = ref<string>()
 const deleteTarget = ref<AIProvider>()
-const deleteBusy = ref(false)
+const { pending: deleteBusy, run: runDelete } = useAsyncAction()
 const keyTarget = ref<string>()
 const modelTarget = ref<string>()
 const models = ref<AIProviderModel[]>([])
@@ -40,18 +37,7 @@ const modelsLoading = ref(false)
 const modelsSyncing = ref(false)
 const modelsSaving = ref(false)
 
-const form = reactive({
-  name: '',
-  preset: 'custom',
-  base_url: 'https://api.example.com/v1',
-  api_key: '',
-  allow_private_network: false,
-  enabled: true,
-  timeout_seconds: 30,
-  max_retries: 2,
-  verify_tls: true,
-  structured_output_mode: 'auto',
-})
+const form = reactive(defaultAIProviderForm())
 
 const keyForm = reactive({ value: '' })
 const modelProvider = computed(() => items.value.find((item) => item.id === modelTarget.value))
@@ -83,18 +69,7 @@ async function load() {
 
 function resetForm() {
   editingId.value = undefined
-  Object.assign(form, {
-    name: '',
-    preset: 'custom',
-    base_url: 'https://api.example.com/v1',
-    api_key: '',
-    allow_private_network: false,
-    enabled: true,
-    timeout_seconds: 30,
-    max_retries: 2,
-    verify_tls: true,
-    structured_output_mode: 'auto',
-  })
+  Object.assign(form, defaultAIProviderForm())
 }
 
 function closeForm() {
@@ -116,59 +91,37 @@ async function startEdit(provider: AIProvider) {
   show.value = true
   form.preset = provider.preset
   await nextTick()
-  Object.assign(form, {
-    name: provider.name,
-    base_url: provider.base_url,
-    api_key: '',
-    allow_private_network: provider.allow_private_network,
-    enabled: provider.enabled,
-    timeout_seconds: provider.timeout_seconds,
-    max_retries: provider.max_retries,
-    verify_tls: provider.verify_tls,
-    structured_output_mode: provider.structured_output_mode,
-  })
+  Object.assign(form, editAIProviderForm(provider))
 }
 
 async function saveProvider() {
-  busy.value = true
   try {
-    const payload = {
-      name: form.name,
-      preset: form.preset,
-      base_url: form.base_url,
-      allow_private_network: form.allow_private_network,
-      enabled: form.enabled,
-      timeout_seconds: form.timeout_seconds,
-      max_retries: form.max_retries,
-      verify_tls: form.verify_tls,
-      structured_output_mode: form.structured_output_mode,
-    }
-    if (editingId.value) {
-      await api.patch(`/admin/ai/providers/${editingId.value}`, payload)
-      ui.toast('Provider 配置已更新', 'success')
-    } else {
-      await api.post('/admin/ai/providers', {
-        ...payload,
-        api_key: form.api_key || undefined,
-        protocol: 'openai_chat_completions',
-      })
-      ui.toast('Provider 与凭据已安全保存', 'success')
-    }
+    await runSave(async () => {
+      const payload = aiProviderPayload(form)
+      if (editingId.value) {
+        await api.patch(`/admin/ai/providers/${editingId.value}`, payload)
+        ui.toast('Provider 配置已更新', 'success')
+      } else {
+        await api.post('/admin/ai/providers', {
+          ...payload,
+          api_key: form.api_key || undefined,
+          protocol: 'openai_chat_completions',
+        })
+        ui.toast('Provider 与凭据已安全保存', 'success')
+      }
+    })
     closeForm()
     await load()
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : '创建失败', 'danger')
-  } finally {
-    busy.value = false
   }
 }
 
 async function deleteProvider() {
   if (!deleteTarget.value) return
-  deleteBusy.value = true
   try {
     const providerId = deleteTarget.value.id
-    await api.delete(`/admin/ai/providers/${providerId}`)
+    await runDelete(() => api.delete(`/admin/ai/providers/${providerId}`))
     if (keyTarget.value === providerId) keyTarget.value = undefined
     if (modelTarget.value === providerId) closeModels()
     if (editingId.value === providerId) closeForm()
@@ -181,24 +134,19 @@ async function deleteProvider() {
     } else {
       ui.toast(error instanceof Error ? error.message : '删除失败', 'danger')
     }
-  } finally {
-    deleteBusy.value = false
   }
 }
 
 async function saveKey() {
   if (!keyTarget.value) return
-  busy.value = true
   try {
-    await api.put(`/admin/ai/providers/${keyTarget.value}/api-key`, keyForm)
+    await runSave(() => api.put(`/admin/ai/providers/${keyTarget.value}/api-key`, keyForm))
     keyForm.value = ''
     keyTarget.value = undefined
     ui.toast('API Key 已安全保存', 'success')
     await load()
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : '保存失败', 'danger')
-  } finally {
-    busy.value = false
   }
 }
 

@@ -11,6 +11,7 @@ import AppAlert from '@/components/ui/AppAlert.vue'
 import DescriptionList from '@/components/data/DescriptionList.vue'
 import { useUiStore } from '@/stores/ui'
 import type { AIProfile } from '@/types'
+import { APP_VERSION } from '@/lib/version'
 
 const ui = useUiStore()
 const busy = ref(false)
@@ -22,7 +23,7 @@ const settings = reactive({
   timezone: 'Asia/Shanghai',
   retention_days: 90,
   default_reminder_parser_profile_id: '',
-  version: '0.8.0',
+  version: APP_VERSION,
   wecom: {
     configured: false,
     corp_id_configured: false,

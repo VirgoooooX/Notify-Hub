@@ -188,6 +188,8 @@ class RestrictedHttpClient(Protocol):
 
 @runtime_checkable
 class PluginMediaPublisher(Protocol):
+    def public_static_url(self, path: str) -> str: ...
+
     async def publish_image_url(
         self,
         source_url: str,

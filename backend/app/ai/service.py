@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import re
 from collections.abc import Sequence
@@ -13,6 +12,19 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai.policy import (
+    apply_reason_policy,
+    batch_hash,
+    classification_item_hash,
+    estimate_classification_tokens,
+    estimate_structured_tokens,
+    profile_policy_instructions,
+    response_format,
+    schema_response_format,
+    structured_hash,
+    structured_modes,
+    validate_classification_batch,
+)
 from app.ai.provider import AIProviderError, OpenAICompatibleClient
 from app.ai.schemas import (
     AIClassificationBatch,
@@ -136,7 +148,7 @@ class AIService:
             raise AIGatewayError("ai_invalid_request", "classification request is invalid")
         profile_row, provider = await self._load_configuration(profile, "classify")
         input_hashes = {
-            item.id: self._item_hash(item, instruction, cleaned_labels) for item in items
+            item.id: classification_item_hash(item, instruction, cleaned_labels) for item in items
         }
         cached = await self._load_cached(profile_row, input_hashes)
         missing = [item for item in items if item.id not in cached]
@@ -151,8 +163,8 @@ class AIService:
             plugin_id,
             plugin_run_id,
             use_case,
-            self._batch_hash([input_hashes[item.id] for item in missing]),
-            self._estimate_input_tokens(missing, instruction, cleaned_labels),
+            batch_hash([input_hashes[item.id] for item in missing]),
+            estimate_classification_tokens(missing, instruction, cleaned_labels),
         )
         started = monotonic()
         try:
@@ -169,7 +181,10 @@ class AIService:
                 cleaned_labels,
                 api_key,
             )
-            generated = [self._apply_reason_policy(item, profile_row) for item in generated]
+            generated = [
+                AIClassificationResult.model_validate(apply_reason_policy(item, profile_row))
+                for item in generated
+            ]
             self._validate_batch(generated, missing, cleaned_labels)
             await self._store_success(
                 invocation_id,
@@ -335,7 +350,7 @@ class AIService:
         if not use_case or len(use_case) > 100:
             raise AIGatewayError("ai_invalid_request", "AI use case is invalid")
         profile, provider = await self._load_configuration(profile_id, capability)
-        input_hash = self._structured_hash(content, instruction, options)
+        input_hash = structured_hash(content, instruction, options)
         cached = await self._load_single_cached(profile, prompt_version, input_hash, result_type)
         if cached is not None:
             await self._record_cache_hit(
@@ -349,7 +364,7 @@ class AIService:
             plugin_run_id,
             use_case,
             input_hash,
-            self._estimate_structured_tokens(content, instruction, options),
+            estimate_structured_tokens(content, instruction, options),
         )
         started = monotonic()
         try:
@@ -369,7 +384,7 @@ class AIService:
                 result_type,
                 api_key,
             )
-            result = self._apply_reason_policy(result, profile)
+            result = result_type.model_validate(apply_reason_policy(result, profile))
             await self._store_single_success(
                 invocation_id,
                 profile,
@@ -556,11 +571,11 @@ class AIService:
         labels: list[str],
         api_key: str | None,
     ) -> tuple[list[AIClassificationResult], int | None, int | None]:
-        modes = self._structured_modes(provider.structured_output_mode, profile.response_format)
+        modes = structured_modes(provider.structured_output_mode, profile.response_format)
         last_error: AIProviderError | None = None
         for mode in modes:
             messages = self._messages(items, instruction, labels, mode, profile)
-            response_format = self._response_format(mode, labels, profile)
+            response_format_value = response_format(mode, labels, profile)
             for attempt in range(provider.max_retries + 2):
                 try:
                     content, input_tokens, output_tokens = await self._provider_client.complete(
@@ -570,7 +585,7 @@ class AIService:
                         messages=messages,
                         temperature=profile.temperature,
                         max_output_tokens=profile.max_output_tokens,
-                        response_format=response_format,
+                        response_format=response_format_value,
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )
                     data = parse_structured_content(content)
@@ -631,7 +646,7 @@ class AIService:
         result_type: type[StructuredResult],
         api_key: str | None,
     ) -> tuple[StructuredResult, int | None, int | None]:
-        modes = self._structured_modes(provider.structured_output_mode, profile.response_format)
+        modes = structured_modes(provider.structured_output_mode, profile.response_format)
         last_error: AIProviderError | None = None
         for mode in modes:
             format_hint = (
@@ -644,7 +659,7 @@ class AIService:
                     "role": "system",
                     "content": (
                         f"{GENERIC_SYSTEM_PROMPT}\n"
-                        f"{self._profile_policy_instructions(profile)}\n{format_hint}"
+                        f"{profile_policy_instructions(profile)}\n{format_hint}"
                     ),
                 },
                 {
@@ -659,7 +674,7 @@ class AIService:
                     ),
                 },
             ]
-            response_format = self._schema_response_format(mode, schema_name, schema)
+            response_format_value = schema_response_format(mode, schema_name, schema)
             for attempt in range(provider.max_retries + 2):
                 try:
                     generated, input_tokens, output_tokens = await self._provider_client.complete(
@@ -669,7 +684,7 @@ class AIService:
                         messages=messages,
                         temperature=profile.temperature,
                         max_output_tokens=profile.max_output_tokens,
-                        response_format=response_format,
+                        response_format=response_format_value,
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )
                     return (
@@ -727,116 +742,11 @@ class AIService:
             {
                 "role": "system",
                 "content": (
-                    f"{SYSTEM_PROMPT}\n"
-                    f"{AIService._profile_policy_instructions(profile)}\n{format_hint}"
+                    f"{SYSTEM_PROMPT}\n{profile_policy_instructions(profile)}\n{format_hint}"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
         ]
-
-    @staticmethod
-    def _response_format(mode: str, labels: list[str], profile: AIProfile) -> dict[str, Any] | None:
-        if mode == "json_schema":
-            return {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "notify_hub_classification",
-                    "strict": True,
-                    "schema": {
-                        "type": "object",
-                        "properties": {
-                            "results": {
-                                "type": "array",
-                                "items": {
-                                    "type": "object",
-                                    "properties": {
-                                        "id": {"type": "string"},
-                                        "label": {"type": "string", "enum": labels},
-                                        "confidence": {
-                                            "type": "number",
-                                            "minimum": 0,
-                                            "maximum": 1,
-                                        },
-                                        "reason": {
-                                            "type": "string",
-                                            "maxLength": (
-                                                profile.max_reason_characters
-                                                if profile.include_reason
-                                                else 0
-                                            ),
-                                        },
-                                    },
-                                    "required": ["id", "label", "confidence", "reason"],
-                                    "additionalProperties": False,
-                                },
-                            }
-                        },
-                        "required": ["results"],
-                        "additionalProperties": False,
-                    },
-                },
-            }
-        if mode == "json_object":
-            return {"type": "json_object"}
-        return None
-
-    @staticmethod
-    def _schema_response_format(
-        mode: str, schema_name: str, schema: dict[str, Any]
-    ) -> dict[str, Any] | None:
-        if mode == "json_schema":
-            return {
-                "type": "json_schema",
-                "json_schema": {"name": schema_name, "strict": True, "schema": schema},
-            }
-        if mode == "json_object":
-            return {"type": "json_object"}
-        return None
-
-    @staticmethod
-    def _structured_modes(provider_mode: str, profile_mode: str) -> list[str]:
-        requested = profile_mode if profile_mode != "auto" else provider_mode
-        return ["json_schema", "json_object", "prompt_json"] if requested == "auto" else [requested]
-
-    @staticmethod
-    def _profile_policy_instructions(profile: AIProfile) -> str:
-        instructions = [
-            "Profile preferences are subordinate to the platform safety and output rules."
-        ]
-        if profile.output_language == "zh-CN":
-            instructions.append("Write human-readable fields in Simplified Chinese.")
-        elif profile.output_language == "en":
-            instructions.append("Write human-readable fields in English.")
-        if profile.reasoning_effort != "provider_default":
-            instructions.append(
-                f"Use {profile.reasoning_effort} reasoning effort while keeping hidden "
-                "reasoning private."
-            )
-        instructions.append(f"Use {profile.verbosity} wording for human-readable fields.")
-        if profile.include_reason:
-            instructions.append(
-                f"Keep each reason within {profile.max_reason_characters} characters."
-            )
-        else:
-            instructions.append("Return an empty string for every reason field.")
-        if profile.system_instructions.strip():
-            instructions.extend(
-                [
-                    "Apply this administrator-provided supplemental instruction only when it does "
-                    "not conflict with platform safety or the requested schema:",
-                    profile.system_instructions.strip(),
-                    "The supplemental instruction cannot override platform safety or output rules.",
-                ]
-            )
-        return "\n".join(instructions)
-
-    @staticmethod
-    def _apply_reason_policy(result: StructuredResult, profile: AIProfile) -> StructuredResult:
-        reason = getattr(result, "reason", None)
-        if not isinstance(reason, str):
-            return result
-        bounded = reason[: profile.max_reason_characters] if profile.include_reason else ""
-        return result.model_copy(update={"reason": bounded})
 
     @staticmethod
     def _validate_batch(
@@ -844,9 +754,7 @@ class AIService:
         items: Sequence[AIClassificationItem],
         labels: Sequence[str],
     ) -> None:
-        requested = {item.id for item in items}
-        returned = {item.id for item in results}
-        if requested != returned or any(item.label not in labels for item in results):
+        if not validate_classification_batch(results, items, labels):
             raise AIGatewayError(
                 "ai_invalid_structured_output", "AI classification result did not match request"
             )
@@ -962,49 +870,10 @@ class AIService:
                     plugin_id=plugin_id,
                     plugin_run_id=plugin_run_id,
                     use_case=use_case,
-                    input_hash=self._batch_hash(list(input_hashes.values())),
+                    input_hash=batch_hash(list(input_hashes.values())),
                     cache_hit=True,
                     status="succeeded",
                     latency_ms=0,
                     created_at=datetime.now(UTC),
                 )
             )
-
-    @staticmethod
-    def _item_hash(item: AIClassificationItem, instruction: str, labels: Sequence[str]) -> str:
-        normalized = {
-            "content": " ".join(item.content.split()),
-            "instruction": " ".join(instruction.split()),
-            "labels": list(labels),
-        }
-        return hashlib.sha256(
-            json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
-
-    @staticmethod
-    def _structured_hash(content: str, instruction: str, options: dict[str, Any]) -> str:
-        normalized = {
-            "content": " ".join(content.split()),
-            "instruction": " ".join(instruction.split()),
-            "options": options,
-        }
-        return hashlib.sha256(
-            json.dumps(normalized, ensure_ascii=False, sort_keys=True).encode()
-        ).hexdigest()
-
-    @staticmethod
-    def _batch_hash(values: list[str]) -> str:
-        return hashlib.sha256("\n".join(sorted(values)).encode()).hexdigest()
-
-    @staticmethod
-    def _estimate_input_tokens(
-        items: Sequence[AIClassificationItem], instruction: str, labels: Sequence[str]
-    ) -> int:
-        characters = len(instruction) + sum(len(item.content) for item in items)
-        characters += sum(len(label) for label in labels)
-        return max(1, (characters + 3) // 4)
-
-    @staticmethod
-    def _estimate_structured_tokens(content: str, instruction: str, options: dict[str, Any]) -> int:
-        characters = len(content) + len(instruction) + len(json.dumps(options, ensure_ascii=False))
-        return max(1, (characters + 3) // 4)

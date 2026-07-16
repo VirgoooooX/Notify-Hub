@@ -6,15 +6,16 @@ from typing import Any
 
 from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
-from app.application.reminder_access import (
-    ReminderAccessService,
-    ReminderActor,
-    ReminderPermissions,
+from app.application.plugin_runtime_adapters import (
+    AuthorizedSecretResolver,
+    DatabasePluginConfigStore,
+    DatabasePluginStateStore,
+    PluginReminderCreator,
+    PluginStateConflictError,
+    SecretPermissionError,
 )
-from app.application.reminder_service import ReminderCreate
+from app.application.reminder_access import ReminderAccessService, ReminderPermissions
 from app.config import Settings
-from app.domain.reminder_schedules import MisfirePolicy
-from app.domain.reminders import AckPolicy, ScheduleType
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.plugin_models import (
@@ -23,18 +24,14 @@ from app.infrastructure.database.plugin_models import (
     PluginRun,
     PluginState,
 )
+from app.media.public_urls import PublicMediaUrlBuilder
 from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.context import (
-    ConfigStore,
     EventEmitter,
     PluginAIClient,
     PluginContext,
     PluginReminderClient,
-    PluginReminderDraft,
-    PluginReminderReceipt,
     SecretResolver,
-    StateStore,
-    StateValue,
 )
 from app.plugin_runtime.http import RestrictedHttpClient
 from app.plugin_runtime.manifest import PluginManifest, PluginSchedule
@@ -45,12 +42,24 @@ from app.plugin_runtime.schema import validate_json_schema
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+# Compatibility aliases for existing callers while runtime adapters live in their own module.
+_DatabaseStateStore = DatabasePluginStateStore
+_DatabaseConfigStore = DatabasePluginConfigStore
+_AuthorizedSecretResolver = AuthorizedSecretResolver
+_PluginReminderCreator = PluginReminderCreator
+
+__all__ = [
+    "EventServiceEmitter",
+    "PluginAIProfileUnavailableError",
+    "PluginNotFoundError",
+    "PluginRunConflictError",
+    "PluginService",
+    "PluginStateConflictError",
+    "SecretPermissionError",
+]
+
 
 class PluginNotFoundError(LookupError):
-    pass
-
-
-class PluginStateConflictError(RuntimeError):
     pass
 
 
@@ -62,151 +71,8 @@ class PluginAIProfileUnavailableError(RuntimeError):
     pass
 
 
-class SecretPermissionError(PermissionError):
-    pass
-
-
 def utcnow() -> datetime:
     return datetime.now(UTC)
-
-
-class _DatabaseStateStore(StateStore):
-    def __init__(
-        self, factory: async_sessionmaker[AsyncSession], clock: Callable[[], datetime]
-    ) -> None:
-        self._factory = factory
-        self._clock = clock
-
-    async def get(self, plugin_id: str, key: str) -> StateValue | None:
-        async with self._factory() as session:
-            row = await session.get(PluginState, (plugin_id, key))
-            return None if row is None else StateValue(row.value, row.version)
-
-    async def set(self, plugin_id: str, key: str, value: Any, expected_version: int | None) -> int:
-        async with self._factory() as session, session.begin():
-            row = await session.get(PluginState, (plugin_id, key))
-            if row is None:
-                if expected_version not in {None, 0}:
-                    raise PluginStateConflictError("plugin state version changed")
-                session.add(
-                    PluginState(
-                        plugin_id=plugin_id,
-                        key=key,
-                        value=value,
-                        version=1,
-                        updated_at=self._clock(),
-                    )
-                )
-                return 1
-            if expected_version is not None and row.version != expected_version:
-                raise PluginStateConflictError("plugin state version changed")
-            old_version = row.version
-            result = await session.execute(
-                update(PluginState)
-                .where(
-                    PluginState.plugin_id == plugin_id,
-                    PluginState.key == key,
-                    PluginState.version == old_version,
-                )
-                .values(value=value, version=old_version + 1, updated_at=self._clock())
-            )
-            if int(getattr(result, "rowcount", 0)) != 1:
-                raise PluginStateConflictError("plugin state version changed")
-            return old_version + 1
-
-    async def save_checkpoint(self, plugin_id: str, values: Mapping[str, Any]) -> None:
-        async with self._factory() as session, session.begin():
-            now = self._clock()
-            for key, value in values.items():
-                row = await session.get(PluginState, (plugin_id, key))
-                if row is None:
-                    session.add(
-                        PluginState(
-                            plugin_id=plugin_id,
-                            key=key,
-                            value=value,
-                            version=1,
-                            updated_at=now,
-                        )
-                    )
-                else:
-                    row.value = value
-                    row.version += 1
-                    row.updated_at = now
-
-
-class _DatabaseConfigStore(ConfigStore):
-    def __init__(self, factory: async_sessionmaker[AsyncSession]) -> None:
-        self._factory = factory
-
-    async def get(self, plugin_id: str) -> dict[str, Any]:
-        async with self._factory() as session:
-            row = await session.get(PluginConfig, plugin_id)
-            return {} if row is None else dict(row.config)
-
-
-class _AuthorizedSecretResolver(SecretResolver):
-    def __init__(self, plugin_id: str, allowed: set[str], delegate: SecretResolver) -> None:
-        self._plugin_id = plugin_id
-        self._allowed = allowed
-        self._delegate = delegate
-
-    async def resolve(self, plugin_id: str, name: str) -> str:
-        if plugin_id != self._plugin_id or name not in self._allowed:
-            raise SecretPermissionError("plugin secret is not permitted")
-        return await self._delegate.resolve(plugin_id, name)
-
-
-class _PluginReminderCreator:
-    def __init__(
-        self,
-        *,
-        access: ReminderAccessService,
-        plugin_id: str,
-        run_id: str,
-        permissions: ReminderPermissions,
-    ) -> None:
-        self._access = access
-        self._plugin_id = plugin_id
-        self._run_id = run_id
-        self._permissions = permissions
-
-    async def create(self, draft: PluginReminderDraft) -> PluginReminderReceipt:
-        result = await self._access.create(
-            ReminderCreate(
-                creator_person_id=draft.creator_person_id,
-                title=draft.title,
-                content=draft.content,
-                schedule_type=ScheduleType(draft.schedule_type),
-                timezone=draft.timezone,
-                recipient_ids=draft.recipient_ids,
-                scheduled_at=draft.scheduled_at,
-                recurrence_rule=draft.recurrence_rule,
-                interval_seconds=draft.interval_seconds,
-                cron_expression=draft.cron_expression,
-                start_at=draft.start_at,
-                end_at=draft.end_at,
-                misfire_policy=MisfirePolicy(draft.misfire_policy),
-                require_ack=draft.require_ack,
-                ack_policy=AckPolicy(draft.ack_policy),
-                repeat_interval_seconds=draft.repeat_interval_seconds,
-                max_reminders=draft.max_reminders,
-                stop_at=draft.stop_at,
-                content_type=draft.content_type,
-                media_asset_id=draft.media_asset_id,
-                url=draft.url,
-            ),
-            actor=ReminderActor("plugin", self._plugin_id),
-            permissions=self._permissions,
-            schedule_mode=draft.schedule_mode,
-            idempotency_key=draft.idempotency_key,
-            request_id=f"plugin-run:{self._run_id}",
-        )
-        return PluginReminderReceipt(
-            reminder_id=result.reminder.id,
-            status=result.reminder.status,
-            duplicate=result.duplicate,
-        )
 
 
 class PluginService:
@@ -233,8 +99,8 @@ class PluginService:
         self._secrets = secret_resolver
         self._runner = runner or PluginRunner()
         self._clock = clock
-        self._state = _DatabaseStateStore(session_factory, clock)
-        self._config = _DatabaseConfigStore(session_factory)
+        self._state = DatabasePluginStateStore(session_factory, clock)
+        self._config = DatabasePluginConfigStore(session_factory)
         self._media_service = media_service
         self._settings = settings
         self._ai_service = ai_service
@@ -643,8 +509,10 @@ class PluginService:
             media_write_allowed=manifest.permissions.media_write,
             media_service=self._media_service,
             session_factory=self._factory,
-            public_base_url=self._settings.public_base_url if self._settings else None,
-            signing_key=key_str.encode("utf-8"),
+            public_media_urls=PublicMediaUrlBuilder(
+                self._settings.public_base_url if self._settings else None,
+                key_str,
+            ),
         )
         context = PluginContext(
             plugin_id=plugin_id,
@@ -652,7 +520,7 @@ class PluginService:
             state=self._state,
             config=self._config,
             emitter=self._emitter,
-            secrets=_AuthorizedSecretResolver(
+            secrets=AuthorizedSecretResolver(
                 plugin_id, set(manifest.permissions.secrets), self._secrets
             ),
             http=http,
@@ -664,7 +532,7 @@ class PluginService:
                 service=self._ai_service,
             ),
             reminders=PluginReminderClient(
-                _PluginReminderCreator(
+                PluginReminderCreator(
                     access=self._reminder_access,
                     plugin_id=plugin_id,
                     run_id=run_id,

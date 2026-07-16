@@ -4,6 +4,7 @@ from typing import Protocol
 from app.channels.base import ChannelMessage, ChannelResult
 from app.channels.wecom.client import WeComClient
 from app.config import Settings
+from app.media.public_urls import PublicMediaUrlBuilder
 
 
 class OutboundMedia(Protocol):
@@ -34,10 +35,15 @@ class WeComAdapter:
         client: WeComClient,
         settings: Settings,
         media: OutboundMedia | None = None,
+        public_media_urls: PublicMediaUrlBuilder | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
         self._media = media
+        self._public_media_urls = public_media_urls or PublicMediaUrlBuilder(
+            settings.public_base_url,
+            settings.public_media_signing_key.get_secret_value(),
+        )
 
     async def send(self, message: ChannelMessage) -> ChannelResult:
         if message.broadcast:
@@ -51,8 +57,22 @@ class WeComAdapter:
         if self._settings.wecom_agent_id is None:
             return ChannelResult(False, False, "AUTH_INVALID", "WeCom agent ID is not configured")
         if message.message_type == "article":
-            if not message.url:
-                return ChannelResult(False, False, "PAYLOAD_INVALID", "Article URL is required")
+            now = datetime.now(UTC)
+            cover_url = message.image_url
+            if not cover_url and message.media_asset_id:
+                cover_url = self._public_media_urls.signed_image_url(
+                    message.media_asset_id,
+                    lifetime_seconds=86_400,
+                    now=now,
+                )
+            article_url = message.url or cover_url
+            if not article_url:
+                return ChannelResult(
+                    False,
+                    False,
+                    "PAYLOAD_INVALID",
+                    "Article URL or public image is required",
+                )
             payload = {
                 "touser": touser,
                 "msgtype": "news",
@@ -62,8 +82,8 @@ class WeComAdapter:
                         {
                             "title": message.title,
                             "description": message.content,
-                            "url": message.url,
-                            "picurl": message.image_url or "",
+                            "url": article_url,
+                            "picurl": cover_url or "",
                         }
                     ]
                 },

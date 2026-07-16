@@ -220,6 +220,25 @@ SQLite 建议：
 
 如果数据库迁移不可逆，回滚必须同时恢复旧数据库备份。
 
+### 9.1 自动发布门禁
+
+Git tag 发布必须依次通过以下检查，任何一步失败都不得推送正式镜像：
+
+- Git tag 与 `pyproject.toml`、`uv.lock`、`frontend/package.json` 和
+  `frontend/package-lock.json` 的版本一致；
+- 后端格式、Lint、类型检查、全量测试、空 SQLite 数据库迁移和 Python 依赖审计；
+- 前端 Lint、类型检查、测试、生产构建和 npm 高危依赖审计；
+- 候选镜像的 Trivy `HIGH/CRITICAL` 扫描；
+- 候选镜像使用独立空数据卷完成 Compose 启动、Alembic 迁移、live 和 ready 检查；
+- 只有经过扫描和 smoke test 的同一个候选镜像才允许重新打正式 tag 并推送 GHCR，发布阶段不得再次构建。
+
+应用版本以 `pyproject.toml` 为主来源。后端从安装包 metadata 读取版本，前端由 Vite 从
+`frontend/package.json` 注入，页面代码不得硬编码版本号。发布前可运行：
+
+```bash
+python scripts/check_version.py --tag v0.8.0
+```
+
 ## 10. 监控指标
 
 第一阶段即使不接 Prometheus，也应在后台或内部指标端点提供：

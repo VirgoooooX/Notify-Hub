@@ -1,0 +1,29 @@
+name: notify-hub-release-smoke
+
+services:
+  notify-hub:
+    image: notify-hub:release-candidate
+    environment:
+      NOTIFY_HUB_ENVIRONMENT: production
+      NOTIFY_HUB_PUBLIC_BASE_URL: https://notify-hub.invalid
+      NOTIFY_HUB_DATABASE_URL: sqlite+aiosqlite:////app/data/release-smoke.db
+      NOTIFY_HUB_SECRET_ENCRYPTION_KEY: release-smoke-encryption-key-32-characters
+      NOTIFY_HUB_JWT_SECRET: release-smoke-jwt-secret-at-least-32-characters
+      NOTIFY_HUB_PUBLIC_MEDIA_SIGNING_KEY: release-smoke-media-signing-key-32-characters
+    ports:
+      - "127.0.0.1::8000"
+    volumes:
+      - release-smoke-data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+
+volumes:
+  release-smoke-data:

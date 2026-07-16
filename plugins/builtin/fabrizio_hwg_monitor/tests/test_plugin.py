@@ -16,6 +16,9 @@ class FakeMedia:
     def __init__(self) -> None:
         self.published: list[str] = []
 
+    def public_static_url(self, path: str) -> str:
+        return f"https://notify.example.com/{path}"
+
     async def publish_image_url(
         self, source_url: str, *, retention_seconds: int | None = None
     ) -> str:

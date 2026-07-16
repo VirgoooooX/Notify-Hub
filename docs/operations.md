@@ -1,6 +1,6 @@
 # Reminder Center 运维手册
 
-本文是 `docs/14-reminder-center-development-plan.md` Phase 8 的运维基线，适用于当前单实例、SQLite、单容器部署。安全与可靠性原则以 `docs/07-security-and-reliability.md` 为准，通用部署说明见 `docs/08-deployment-and-operations.md`。
+本文是 Notify Hub 当前单实例、SQLite、单容器部署的运维基线，覆盖日常检查、备份、恢复、迁移、提醒维护和发布验收。系统边界与安全原则以仓库根目录 `PROJECT_GUIDE.md` 为准；历史设计背景见 `docs/archive/design-phase/`。
 
 本文只描述仓库中已存在的行为。标为“待实现”的项目目前没有可依赖的 CLI、API 或后台操作，不应以直接修改生产数据库代替。
 
@@ -448,4 +448,4 @@ npm run test
 npm run build
 ```
 
-Phase 8 只有在本清单全部满足、待实现项不再作为发布阻断项、恢复演练证据和耐久测试结果均归档后，才可标记完成。
+提醒中心只有在本清单全部满足、待实现项不再作为发布阻断项、恢复演练证据和耐久测试结果均归档后，才可标记为可发布。

@@ -101,6 +101,11 @@ class FakeAI:
         return [FakeAIDecision(id=item.id, label=self.label) for item in kwargs["items"]]
 
 
+class FakeMedia:
+    def public_static_url(self, path: str) -> str:
+        return f"https://notify.example.com/{path}"
+
+
 class FakePostSource:
     def __init__(self, posts: list[XPost]) -> None:
         self.posts = posts
@@ -124,6 +129,7 @@ class FakeContext:
         self.config = dict(config)
         self.fake_http = FakeHttp(responses)
         self.http: RestrictedHttpClient = self.fake_http
+        self.media = FakeMedia()
         self.states: dict[str, Any] = {STATE_KEY: dict(state)} if state else {}
         self.receipts = list(receipts or [])
         self.emit_error = emit_error
