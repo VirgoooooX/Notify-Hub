@@ -28,8 +28,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN groupadd --gid "$APP_GID" notifyhub \
     && useradd --uid "$APP_UID" --gid "$APP_GID" --create-home --shell /usr/sbin/nologin notifyhub \
-    && mkdir -p /app /data /logs /media /run/secrets \
-    && chown -R notifyhub:notifyhub /app /data /logs /media
+    && mkdir -p /app/data /logs /media /run/secrets \
+    && chown -R notifyhub:notifyhub /app /logs /media
 
 WORKDIR /app
 COPY --from=python-builder /opt/venv /opt/venv
@@ -41,7 +41,7 @@ RUN chmod 0555 /usr/local/bin/notify-hub-entrypoint
 
 USER notifyhub
 EXPOSE 8000
-VOLUME ["/data", "/logs", "/media"]
+VOLUME ["/app/data", "/logs", "/media"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=3)"]
 ENTRYPOINT ["notify-hub-entrypoint"]
