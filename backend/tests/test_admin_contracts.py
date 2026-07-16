@@ -122,13 +122,9 @@ async def test_admin_frontend_contracts_require_auth_and_round_trip(
     assert resumed.status_code == 200
     assert resumed.json()["data"]["status"] == "active"
 
-    deleted = await client.delete(
-        f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers
-    )
+    deleted = await client.delete(f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers)
     assert deleted.status_code == 204
-    missing = await client.get(
-        f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers
-    )
+    missing = await client.get(f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers)
     assert missing.status_code == 404
 
 

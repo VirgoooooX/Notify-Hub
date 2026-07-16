@@ -531,7 +531,9 @@ const contentLabel = (type?: string) => {
           <th>催办进度</th>
           <th>下次触发</th>
           <th>状态</th>
-          <th class="actions-heading">操作</th>
+          <th class="actions-heading">
+            操作
+          </th>
         </template>
         <tr v-for="item in items.items" :key="item.id">
           <td>
@@ -643,11 +645,17 @@ const contentLabel = (type?: string) => {
         <label>内容</label>
         <AppTextarea v-model="editForm.content" :rows="8" />
       </div>
-      <p class="edit-note">编辑只影响后续尚未生成的提醒实例；已经发送的历史消息不会被改写。</p>
+      <p class="edit-note">
+        编辑只影响后续尚未生成的提醒实例；已经发送的历史消息不会被改写。
+      </p>
     </form>
     <template #footer>
-      <AppButton :disabled="editBusy" @click="editing = null">取消</AppButton>
-      <AppButton variant="primary" :loading="editBusy" @click="saveEdit">保存修改</AppButton>
+      <AppButton :disabled="editBusy" @click="editing = null">
+        取消
+      </AppButton>
+      <AppButton variant="primary" :loading="editBusy" @click="saveEdit">
+        保存修改
+      </AppButton>
     </template>
   </AppDrawer>
 
