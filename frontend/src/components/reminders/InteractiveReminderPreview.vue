@@ -76,14 +76,10 @@ const quickActions = [
             <span>图文封面与跳转链接</span>
           </div>
           <p v-if="interactive" class="interaction-hint">
-            {{ broadcast ? '📣【全员持续提醒｜需要每个人确认】' : '🔁【持续提醒｜需要你确认完成】' }}<br>
-            这不是一次性通知；{{ broadcast ? '未完成的成员' : '在你完成前，系统' }}会继续收到催办。<br>
-            完成后请尽快点击底部【快捷操作】→【完成本次】。<br>
+            ⏳ {{ broadcast ? '未完成成员将继续收到提醒' : '本提醒将在完成前持续发送' }}<br>
+            📍 完成入口：底部【快捷操作】→【完成本次】
             <template v-if="broadcast && notifyOnAllCompleted">
-              所有登记接收人完成后，系统会广播“所有人都完成”。
-            </template>
-            <template v-else-if="!broadcast">
-              菜单默认操作最近收到的一条交互式提醒。
+              <br>全部成员完成后，将发送全员完成通知
             </template>
           </p>
         </div>

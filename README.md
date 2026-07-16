@@ -327,6 +327,7 @@ npm run build
 | [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前架构、领域、安全、插件和测试总纲 |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | 已接受的架构决策及其原因 |
 | [`docs/operations.md`](docs/operations.md) | 部署、备份、恢复和提醒运维 |
+| [`docs/project-log.md`](docs/project-log.md) | 按主题记录、日期精确到天的功能进展、优化和 Debug 复盘 |
 | [`docs/archive/design-phase/`](docs/archive/design-phase/) | 历史设计与开发计划，仅供追溯 |
 
 ---

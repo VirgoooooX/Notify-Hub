@@ -55,6 +55,12 @@ const time = (v?: string) =>
         timeStyle: 'medium'
       }).format(new Date(v))
     : '—'
+
+const duration = (milliseconds?: number) => {
+  if (milliseconds === undefined || milliseconds === null) return '—'
+  if (milliseconds < 1000) return `${milliseconds} ms`
+  return `${(milliseconds / 1000).toFixed(2)} s`
+}
 </script>
 
 <template>
@@ -146,6 +152,11 @@ const time = (v?: string) =>
         <li v-for="attempt in delivery.attempts ?? []" :key="attempt.id">
           <strong>第 {{ attempt.attempt_no }} 次尝试 · {{ attempt.status }}</strong>
           <span>{{ time(attempt.started_at) }} → {{ time(attempt.finished_at) }}</span>
+          <div class="latency-metrics">
+            <span><b>排队等待</b>{{ duration(attempt.queue_latency_ms) }}</span>
+            <span><b>渠道发送</b>{{ duration(attempt.send_latency_ms) }}</span>
+            <span><b>累计耗时</b>{{ duration(attempt.total_latency_ms) }}</span>
+          </div>
           <p v-if="attempt.error_message">
             {{ attempt.error_code }} · {{ attempt.error_message }}
           </p>
@@ -215,5 +226,31 @@ const time = (v?: string) =>
 
 .attempts-timeline {
   margin-top: var(--space-4);
+}
+
+.latency-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+
+.latency-metrics span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 7px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.latency-metrics b {
+  color: var(--text-tertiary);
+  font-family: var(--font-sans);
+  font-weight: 600;
 }
 </style>

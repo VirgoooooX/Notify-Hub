@@ -49,7 +49,8 @@ const time = (v?: string) =>
   v
     ? new Intl.DateTimeFormat('zh-CN', {
         dateStyle: 'medium',
-        timeStyle: 'medium'
+        timeStyle: 'medium',
+        timeZone: item.value?.timezone || 'Asia/Shanghai'
       }).format(new Date(v))
     : '—'
 

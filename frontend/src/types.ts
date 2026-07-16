@@ -3,7 +3,7 @@ export interface Page<T>{items:T[];page:number;page_size:number;total:number}
 export interface Dashboard{today_events:number;succeeded_deliveries:number;failed_deliveries:number;retry_wait:number;failed_plugins:number;recent_errors:Array<{id:string;message:string;occurred_at:string;type?:string}>}
 export interface Notification{id:string;title:string;content:string;message_type:string;priority:string;status?:Status;created_at:string;event?:Record<string,unknown>;deliveries?:Delivery[]}
 export interface Delivery{id:string;recipient_name?:string;recipient_id?:string;status:Status;attempts_count?:number;next_attempt_at?:string;last_error_code?:string;last_error_message?:string;attempts?:Attempt[]}
-export interface Attempt{id:string;attempt_no:number;status:Status;started_at:string;finished_at?:string;error_code?:string;error_message?:string}
+export interface Attempt{id:string;attempt_no:number;status:Status;started_at:string;finished_at?:string;error_code?:string;error_message?:string;queue_latency_ms?:number;send_latency_ms?:number;total_latency_ms?:number}
 export interface Person{id:string;name:string;is_default?:boolean;enabled?:boolean;wecom_identities?:Array<{id:string;user_id:string;active?:boolean;verified?:boolean}>}
 export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allowed_recipient_ids?:string[];allow_broadcast?:boolean;allow_media?:boolean;allow_reminders?:boolean;allow_recurring?:boolean;allow_cron?:boolean;allow_interactive?:boolean;max_active_reminders?:number;rate_limit_per_minute?:number;last_used_at?:string}
 export type PluginSchedule =

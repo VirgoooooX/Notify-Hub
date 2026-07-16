@@ -11,7 +11,7 @@ Build plugins as event discoverers inside Notify Hub's trusted plugin runtime. K
 
 1. Read the repository `AGENTS.md` and `PROJECT_GUIDE.md`.
 2. If `.codegraph/` exists, use CodeGraph before broad text searches.
-3. Read `.codex/PROJECT_ACHIEVEMENTS.md` only when historical project context is useful, then inspect one similar built-in plugin.
+3. Read `docs/project-log.md` only when historical project context is useful, then inspect one similar built-in plugin.
 4. Verify current contracts in `backend/app/plugin_runtime` and `backend/tests/test_plugin_runtime.py` before changing Manifest fields, `PluginContext`, media, AI, reminders, or runtime wiring.
 5. Inspect the dirty worktree and preserve unrelated changes.
 

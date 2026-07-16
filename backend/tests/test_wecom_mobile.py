@@ -379,8 +379,15 @@ async def test_menu_completes_latest_occurrence_and_names_task(api) -> None:
     assert result.text == "✅ 已完成：提交月度报表，本次持续提醒已停止。"
     async with app.state.session_factory() as session:
         stored = await session.get(ReminderOccurrenceRecipient, recipient.id)
+        stored_identity = await session.get(WeComIdentity, identity.id)
         assert stored is not None
         assert stored.status == "acknowledged"
+        assert stored_identity is not None
+        assert stored_identity.latest_interactive_occurrence_id is None
+
+    repeated = await app.state.wecom_menu_service.handle("completer", MENU_COMPLETE)
+    assert repeated.code == "not_found"
+    assert repeated.text == "当前没有可操作的交互式提醒。"
 
 
 @pytest.mark.asyncio
@@ -445,8 +452,8 @@ async def test_web_broadcast_tracks_all_members_and_announces_completion(api) ->
         assert {item.person_id for item in recipients} == {first.id, second.id}
         assert notification is not None
         assert "全员持续提醒" in notification.title
-        assert "这不是一次性通知" in notification.content
-        assert "请尽快点击" in notification.content
+        assert "⏳ 未完成成员将继续收到提醒" in notification.content
+        assert "📍 完成入口：底部【快捷操作】→【完成本次】" in notification.content
         assert delivery is not None
         assert delivery.recipient_type == RecipientType.BROADCAST.value
 
@@ -586,7 +593,7 @@ async def test_plain_broadcast_is_a_one_time_notification_without_interaction(ap
         assert occurrence is not None and occurrence.status == "acknowledged"
         assert notification is not None and notification.require_ack is False
         assert "持续提醒" not in notification.title
-        assert "请尽快点击" not in notification.content
+        assert "📍 完成入口：底部【快捷操作】→【完成本次】" not in notification.content
         assert stored_identity is not None
         assert stored_identity.latest_interactive_occurrence_id is None
 
@@ -690,14 +697,14 @@ async def test_inactive_latest_pointer_does_not_fall_back_to_older_active_occurr
 
     assert result.code == "not_active"
     assert "最近但已结束的提醒" in result.text
-    assert "不会自动回退" in result.text
+    assert "已从快捷操作中移除" in result.text
     async with app.state.session_factory() as session:
         older_stored = await session.get(ReminderOccurrenceRecipient, older_recipient.id)
         assert older_stored is not None
         assert older_stored.status == "pending"
         pointer = await session.get(WeComIdentity, identity.id)
         assert pointer is not None
-        assert pointer.latest_interactive_occurrence_id == latest.id
+        assert pointer.latest_interactive_occurrence_id is None
 
 
 @pytest.mark.asyncio

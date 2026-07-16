@@ -59,7 +59,7 @@ async function load() {
   try {
     const data = await api.get<Person[] | { items: Person[] }>('/admin/people')
     items.value = Array.isArray(data) ? data : data.items
-    items.value.forEach(p => {
+    items.value.forEach((p: Person) => {
       if (!(p.id in bindForms)) {
         bindForms[p.id] = ''
       }

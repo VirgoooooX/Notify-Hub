@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
 from app.api.schemas import (
@@ -27,6 +29,15 @@ from app.infrastructure.security.tokens import create_api_key, hash_token
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _duration_ms(finished: datetime, started: datetime) -> int:
+    return max(0, round((_utc(finished) - _utc(started)).total_seconds() * 1000))
+
 
 router = APIRouter(tags=["admin"])
 
@@ -392,7 +403,8 @@ async def delivery_attempts(
     delivery_id: str, request: Request, _admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
     async with request.app.state.session_factory() as session:
-        if await session.get(Delivery, delivery_id) is None:
+        delivery = await session.get(Delivery, delivery_id)
+        if delivery is None:
             raise AppError("not_found", "Delivery not found", 404)
         rows = (
             await session.scalars(
@@ -412,6 +424,11 @@ async def delivery_attempts(
                 "error_code": a.error_code,
                 "error_message": a.error_message,
                 "provider_status": a.provider_status,
+                "queue_latency_ms": (
+                    _duration_ms(a.started_at, delivery.created_at) if a.attempt_no == 1 else None
+                ),
+                "send_latency_ms": _duration_ms(a.finished_at, a.started_at),
+                "total_latency_ms": _duration_ms(a.finished_at, delivery.created_at),
             }
             for a in rows
         ],

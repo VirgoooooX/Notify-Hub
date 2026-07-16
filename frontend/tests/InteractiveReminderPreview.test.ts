@@ -14,10 +14,9 @@ describe('InteractiveReminderPreview', () => {
     })
 
     expect(wrapper.text()).toContain('普通图文')
-    expect(wrapper.text()).toContain('🔁【持续提醒｜需要你确认完成】')
-    expect(wrapper.text()).toContain('这不是一次性通知')
-    expect(wrapper.text()).toContain('【快捷操作】→【完成本次】')
-    expect(wrapper.text()).toContain('菜单默认操作最近收到的一条交互式提醒。')
+    expect(wrapper.text()).toContain('⏳ 本提醒将在完成前持续发送')
+    expect(wrapper.text()).toContain('📍 完成入口：底部【快捷操作】→【完成本次】')
+    expect(wrapper.text()).not.toContain('这不是一次性通知')
     for (const series of ['新建提醒', '我的提醒', '快捷操作']) {
       expect(wrapper.text()).toContain(series)
     }
@@ -38,8 +37,8 @@ describe('InteractiveReminderPreview', () => {
     })
 
     expect(wrapper.text()).toContain('📣 全员持续提醒｜全员提交安全确认')
-    expect(wrapper.text()).toContain('📣【全员持续提醒｜需要每个人确认】')
-    expect(wrapper.text()).toContain('所有登记接收人完成后，系统会广播“所有人都完成”。')
+    expect(wrapper.text()).toContain('⏳ 未完成成员将继续收到提醒')
+    expect(wrapper.text()).toContain('全部成员完成后，将发送全员完成通知')
   })
 
   it('does not promise an all-completed broadcast when the option is off', () => {
@@ -51,8 +50,8 @@ describe('InteractiveReminderPreview', () => {
       },
     })
 
-    expect(wrapper.text()).toContain('📣【全员持续提醒｜需要每个人确认】')
-    expect(wrapper.text()).not.toContain('所有登记接收人完成后')
+    expect(wrapper.text()).toContain('⏳ 未完成成员将继续收到提醒')
+    expect(wrapper.text()).not.toContain('全部成员完成后')
   })
 
   it('explains that a normal notification does not replace the interactive target', () => {

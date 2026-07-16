@@ -198,7 +198,7 @@ npm run build
 - `PROJECT_GUIDE.md`：当前长期有效的开发约束。
 - `docs/DECISIONS.md`：重要架构决策、原因和迁移影响。
 - `docs/operations.md`：部署、备份、恢复和故障处理。
-- `.codex/PROJECT_ACHIEVEMENTS.md`：从 Git 历史整理的每日完成事项与工程收获，不作为实现规范。
+- `docs/project-log.md`：由 Agent 主动记录、并可从 Git 补齐的功能进展、优化和重要 Debug 复盘，不作为实现规范。
 - `docs/archive/design-phase/`：历史设计和开发计划，仅供追溯。
 
 普通实现调整不要求更新历史设计。只有架构、领域状态机、安全边界、平台能力或验收流程改变时才更新总纲；改变已接受决策时新增 ADR，不静默改写历史。

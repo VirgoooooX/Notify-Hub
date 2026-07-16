@@ -44,7 +44,7 @@ async def test_interactive_image_sends_image_then_plain_text_menu_hint() -> None
         ChannelMessage(
             "image",
             "提交月度报表",
-            "🔁【持续提醒｜需要你确认完成】\n这不是一次性通知；在你完成前，系统会按设定间隔继续提醒。\n完成后请尽快点击底部【快捷操作】→【完成本次】。\n菜单默认操作最近收到的一条交互式提醒。",
+            "⏳ 本提醒将在完成前持续发送\n📍 完成入口：底部【快捷操作】→【完成本次】",
             ["user-1"],
             payload={"interactive_reminder": True},
             media_asset_id="asset-1",
@@ -55,7 +55,7 @@ async def test_interactive_image_sends_image_then_plain_text_menu_hint() -> None
     assert [payload["msgtype"] for payload in client.payloads] == ["image", "text"]
     assert "提交月度报表" in client.payloads[1]["text"]["content"]  # type: ignore[index]
     assert "【快捷操作】" in client.payloads[1]["text"]["content"]  # type: ignore[index]
-    assert "最近收到的一条交互式提醒" in client.payloads[1]["text"]["content"]  # type: ignore[index]
+    assert "📍 完成入口：底部【快捷操作】→【完成本次】" in client.payloads[1]["text"]["content"]  # type: ignore[index]
 
 
 @pytest.mark.asyncio
@@ -74,7 +74,7 @@ async def test_interactive_article_uses_news_and_keeps_menu_hint() -> None:
         ChannelMessage(
             "article",
             "提交月度报表",
-            "正文\n\n🔁【持续提醒｜需要你确认完成】\n这不是一次性通知；在你完成前，系统会按设定间隔继续提醒。\n完成后请尽快点击底部【快捷操作】→【完成本次】。\n菜单默认操作最近收到的一条交互式提醒。",
+            "正文\n\n⏳ 本提醒将在完成前持续发送\n📍 完成入口：底部【快捷操作】→【完成本次】",
             ["user-1"],
             url="https://example.com/report",
             image_url="https://example.com/report.png",
@@ -88,7 +88,7 @@ async def test_interactive_article_uses_news_and_keeps_menu_hint() -> None:
     article = client.payloads[0]["news"]["articles"][0]  # type: ignore[index]
     assert article["title"] == "提交月度报表"
     assert "【快捷操作】" in article["description"]
-    assert "最近收到的一条交互式提醒" in article["description"]
+    assert "📍 完成入口：底部【快捷操作】→【完成本次】" in article["description"]
 
 
 @pytest.mark.asyncio

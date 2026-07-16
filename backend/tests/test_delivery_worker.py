@@ -1,13 +1,20 @@
+import asyncio
 from typing import Any
 
 import pytest
-from app.channels.base import ChannelResult, FakeChannel
+from app.channels.base import ChannelMessage, ChannelResult, FakeChannel
 from app.infrastructure.database.models import Delivery, DeliveryStatus
 from app.workers.delivery_worker import DeliveryWorker
 from sqlalchemy import select, update
 from sqlalchemy.orm import selectinload
 
 from tests.test_core_api import initialize_and_login
+
+
+class DelayedFakeChannel(FakeChannel):
+    async def send(self, message: ChannelMessage) -> ChannelResult:
+        await asyncio.sleep(0.02)
+        return await super().send(message)
 
 
 @pytest.mark.integration
@@ -51,7 +58,7 @@ async def test_worker_sends_outside_transaction_and_records_attempt(api: tuple[A
             .values(claim_expires_at=app.state.clock.now().replace(year=2000))
         )
 
-    fake = FakeChannel()
+    fake = DelayedFakeChannel()
     worker = DeliveryWorker(app.state.session_factory, fake, app.state.clock, "worker-test")
     assert await worker.reclaim_expired() == 1
     assert await worker.process_one() is True
@@ -60,6 +67,13 @@ async def test_worker_sends_outside_transaction_and_records_attempt(api: tuple[A
         assert delivery is not None and delivery.status == DeliveryStatus.SUCCEEDED.value
         assert delivery.attempt_count == 1
     assert fake.messages[0].recipients == ["WeComWorker"]
+
+    attempts = await client.get(f"/api/v1/admin/deliveries/{delivery_id}/attempts", headers=auth)
+    assert attempts.status_code == 200
+    timing = attempts.json()["data"][0]
+    assert timing["queue_latency_ms"] >= 0
+    assert timing["send_latency_ms"] >= 10
+    assert timing["total_latency_ms"] >= timing["send_latency_ms"]
 
 
 @pytest.mark.integration

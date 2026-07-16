@@ -170,7 +170,7 @@ class WeComMenuService:
             "ignored_today": f"🌙 今日已忽略：{title}，今天不会再次催办。",
             "stopped": f"⏹️ 已停止本次：{title}，不影响后续周期提醒。",
             "not_active": (
-                f"ℹ️ 无法操作：{title}\n\n这条交互式提醒已经结束，菜单不会自动回退到更早的提醒。"
+                f"ℹ️ 当前没有待你处理的提醒。\n\n最近收到的“{title}”已经结束，已从快捷操作中移除。"
             ),
         }
         return MenuResult(result.code, messages[result.code])

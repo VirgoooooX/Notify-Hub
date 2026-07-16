@@ -40,12 +40,12 @@ const modelsSaving = ref(false)
 const form = reactive(defaultAIProviderForm())
 
 const keyForm = reactive({ value: '' })
-const modelProvider = computed(() => items.value.find((item) => item.id === modelTarget.value))
-const availableCount = computed(() => models.value.filter((model) => model.available).length)
+const modelProvider = computed(() => items.value.find((item: AIProvider) => item.id === modelTarget.value))
+const availableCount = computed(() => models.value.filter((model: AIProviderModel) => model.available).length)
 
 watch(
   () => form.preset,
-  (preset) => {
+  (preset: string) => {
     if (presetUrls[preset]) {
       form.base_url = presetUrls[preset]
     }

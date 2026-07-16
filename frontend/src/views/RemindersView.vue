@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { Pause, Pencil, Play, Trash2 } from 'lucide-vue-next'
 import { api, query } from '@/lib/api'
 import type { Page, Person, Reminder } from '@/types'
 import PageHeader from '@/components/PageHeader.vue'
@@ -12,6 +13,8 @@ import AppSelect from '@/components/ui/AppSelect.vue'
 import AppTextarea from '@/components/ui/AppTextarea.vue'
 import AppCheckbox from '@/components/ui/AppCheckbox.vue'
 import AppCard from '@/components/ui/AppCard.vue'
+import AppDrawer from '@/components/ui/AppDrawer.vue'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import DataTable from '@/components/data/DataTable.vue'
 import TableToolbar from '@/components/data/TableToolbar.vue'
 import { useUiStore } from '@/stores/ui'
@@ -33,6 +36,12 @@ const { pending: busy, run: runCreate } = useAsyncAction()
 const broadcastAudienceCount = ref(0)
 
 const form = reactive(defaultReminderForm())
+const editing = ref<Reminder | null>(null)
+const editForm = reactive({ title: '', content: '' })
+const editBusy = ref(false)
+const actionBusyId = ref('')
+const deleting = ref<Reminder | null>(null)
+const deleteBusy = ref(false)
 
 const previewTriggers = ref<string[]>([])
 const mediaPreviewUrl = ref('')
@@ -149,15 +158,71 @@ async function create() {
   }
 }
 
+function openEdit(item: Reminder) {
+  editing.value = item
+  editForm.title = item.title
+  editForm.content = item.content ?? ''
+}
+
+async function saveEdit() {
+  if (!editing.value) return
+  editBusy.value = true
+  try {
+    await api.patch(`/admin/reminders/${editing.value.id}`, {
+      title: editForm.title,
+      content: editForm.content,
+    })
+    ui.toast('提醒内容已更新', 'success')
+    editing.value = null
+    await load()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '编辑失败', 'danger')
+  } finally {
+    editBusy.value = false
+  }
+}
+
+async function changeState(item: Reminder, operation: 'pause' | 'resume') {
+  actionBusyId.value = item.id
+  try {
+    await api.post(`/admin/reminders/${item.id}/${operation}`)
+    ui.toast(operation === 'pause' ? '提醒已停用' : '提醒已启用', 'success')
+    await load()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '状态更新失败', 'danger')
+  } finally {
+    actionBusyId.value = ''
+  }
+}
+
+async function removeReminder() {
+  if (!deleting.value) return
+  deleteBusy.value = true
+  try {
+    await api.delete(`/admin/reminders/${deleting.value.id}`)
+    ui.toast('提醒已删除', 'success')
+    deleting.value = null
+    await load()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '删除失败', 'danger')
+  } finally {
+    deleteBusy.value = false
+  }
+}
+
+const canEdit = (item: Reminder) => ['active', 'awaiting_ack', 'paused'].includes(item.status)
+const canPause = (item: Reminder) => ['active', 'awaiting_ack'].includes(item.status)
+
 onMounted(() => {
   void Promise.all([load(), loadBroadcastAudience()])
 })
 
-const time = (v?: string) =>
+const time = (v?: string, timezone?: string) =>
   v
     ? new Intl.DateTimeFormat('zh-CN', {
         dateStyle: 'short',
-        timeStyle: 'short'
+        timeStyle: 'short',
+        timeZone: timezone || 'Asia/Shanghai'
       }).format(new Date(v))
     : '—'
 
@@ -466,6 +531,7 @@ const contentLabel = (type?: string) => {
           <th>催办进度</th>
           <th>下次触发</th>
           <th>状态</th>
+          <th class="actions-heading">操作</th>
         </template>
         <tr v-for="item in items.items" :key="item.id">
           <td>
@@ -497,10 +563,56 @@ const contentLabel = (type?: string) => {
             </span>
           </td>
           <td>
-            <span class="time-label">{{ time(item.next_run_at) }}</span>
+            <span class="time-label">{{ time(item.next_run_at, item.timezone) }}</span>
           </td>
           <td>
             <StatusBadge :status="item.status" />
+          </td>
+          <td>
+            <div class="row-actions">
+              <button
+                class="icon-action"
+                type="button"
+                title="编辑提醒"
+                aria-label="编辑提醒"
+                :disabled="!canEdit(item) || actionBusyId === item.id"
+                @click="openEdit(item)"
+              >
+                <Pencil :size="15" />
+              </button>
+              <button
+                v-if="canPause(item)"
+                class="icon-action"
+                type="button"
+                title="停用提醒"
+                aria-label="停用提醒"
+                :disabled="actionBusyId === item.id"
+                @click="changeState(item, 'pause')"
+              >
+                <Pause :size="15" />
+              </button>
+              <button
+                v-else-if="item.status === 'paused'"
+                class="icon-action icon-action--positive"
+                type="button"
+                title="启用提醒"
+                aria-label="启用提醒"
+                :disabled="actionBusyId === item.id"
+                @click="changeState(item, 'resume')"
+              >
+                <Play :size="15" />
+              </button>
+              <button
+                class="icon-action icon-action--danger"
+                type="button"
+                title="删除提醒"
+                aria-label="删除提醒"
+                :disabled="actionBusyId === item.id"
+                @click="deleting = item"
+              >
+                <Trash2 :size="15" />
+              </button>
+            </div>
           </td>
         </tr>
       </DataTable>
@@ -513,6 +625,42 @@ const contentLabel = (type?: string) => {
       />
     </template>
   </AppCard>
+
+  <AppDrawer
+    :model-value="Boolean(editing)"
+    title="编辑提醒"
+    size="sm"
+    :close-on-backdrop="!editBusy"
+    @update:model-value="editing = null"
+    @close="editing = null"
+  >
+    <form class="edit-form" @submit.prevent="saveEdit">
+      <div class="field">
+        <label>标题</label>
+        <AppInput v-model="editForm.title" required />
+      </div>
+      <div class="field">
+        <label>内容</label>
+        <AppTextarea v-model="editForm.content" :rows="8" />
+      </div>
+      <p class="edit-note">编辑只影响后续尚未生成的提醒实例；已经发送的历史消息不会被改写。</p>
+    </form>
+    <template #footer>
+      <AppButton :disabled="editBusy" @click="editing = null">取消</AppButton>
+      <AppButton variant="primary" :loading="editBusy" @click="saveEdit">保存修改</AppButton>
+    </template>
+  </AppDrawer>
+
+  <ConfirmDialog
+    :open="Boolean(deleting)"
+    title="删除提醒"
+    :description="`将删除“${deleting?.title ?? ''}”。运行中的提醒会先停止，尚未发送的投递会被取消；历史投递记录仍保留。`"
+    confirm-text="删除提醒"
+    danger
+    :busy="deleteBusy"
+    @confirm="removeReminder"
+    @cancel="deleting = null"
+  />
 </template>
 
 <style scoped>
@@ -687,6 +835,70 @@ const contentLabel = (type?: string) => {
 
 .time-label {
   color: var(--text-secondary);
+}
+
+.actions-heading {
+  width: 132px;
+  text-align: right;
+}
+
+.row-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 126px;
+}
+
+.icon-action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: 120ms ease;
+}
+
+.icon-action:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.icon-action--positive:hover:not(:disabled) {
+  border-color: rgba(31, 107, 79, 0.35);
+  background: rgba(31, 107, 79, 0.08);
+  color: #1f6b4f;
+}
+
+.icon-action--danger:hover:not(:disabled) {
+  border-color: rgba(177, 69, 47, 0.35);
+  background: rgba(177, 69, 47, 0.08);
+  color: #9a3f2c;
+}
+
+.icon-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.edit-note {
+  margin: 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  line-height: 1.6;
 }
 
 .delivery-cell {

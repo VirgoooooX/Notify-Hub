@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -31,7 +31,7 @@ from app.infrastructure.database.reminder_models import (
     ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import select
 
@@ -123,6 +123,14 @@ class ReminderPatchInput(BaseModel):
     repeat: RepeatInput | None = None
 
 
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _view(reminder: Reminder) -> dict[str, object]:
     item = reminder
     return {
@@ -134,14 +142,14 @@ def _view(reminder: Reminder) -> dict[str, object]:
         "media_asset_id": item.media_asset_id,
         "url": item.url,
         "schedule_type": item.schedule_type,
-        "scheduled_at": item.scheduled_at,
+        "scheduled_at": _utc(item.scheduled_at),
         "recurrence_rule": item.recurrence_rule,
         "schedule_config": item.schedule_config,
         "timezone": item.timezone,
-        "start_at": item.start_at,
-        "end_at": item.end_at,
+        "start_at": _utc(item.start_at),
+        "end_at": _utc(item.end_at),
         "misfire_policy": item.misfire_policy,
-        "next_run_at": item.next_run_at,
+        "next_run_at": _utc(item.next_run_at),
         "status": "awaiting_ack"
         if item.status == "active" and item.require_ack and item.reminder_count
         else item.status,
@@ -155,7 +163,7 @@ def _view(reminder: Reminder) -> dict[str, object]:
         "max_attempts": item.max_reminders,
         "reminder_count": item.reminder_count,
         "attempt_count": item.reminder_count,
-        "stop_at": item.stop_at,
+        "stop_at": _utc(item.stop_at),
         "escalation_stop_after_seconds": item.escalation_stop_after_seconds,
         "interaction_mode": (
             "latest_menu"
@@ -577,6 +585,23 @@ async def cancel_reminder(
     reminder_id: str, request: Request, admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
     return await _transition(reminder_id, "cancel", request, admin)
+
+
+@router.delete("/reminders/{reminder_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_reminder(
+    reminder_id: str, request: Request, admin: Admin = Depends(require_admin)
+) -> Response:
+    try:
+        await request.app.state.reminder_service.delete(reminder_id)
+    except ReminderError as exc:
+        raise _service_error(exc) from exc
+    await _audit_reminder(
+        request,
+        admin,
+        action="reminder.delete",
+        reminder_id=reminder_id,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/reminders/{reminder_id}/snooze")

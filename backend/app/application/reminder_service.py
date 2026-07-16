@@ -164,17 +164,12 @@ class InteractiveOccurrenceResult:
 
 
 INTERACTIVE_REMINDER_HINT = (
-    "🔁【持续提醒｜需要你确认完成】\n"
-    "这不是一次性通知；在你完成前，系统会按设定间隔继续提醒。\n"
-    "完成后请尽快点击底部【快捷操作】→【完成本次】。\n"
-    "菜单默认操作最近收到的一条交互式提醒。"
+    "⏳ 本提醒将在完成前持续发送\n📍 完成入口：底部【快捷操作】→【完成本次】"
 )
 BROADCAST_INTERACTIVE_REMINDER_HINT = (
-    "📣【全员持续提醒｜需要每个人确认】\n"
-    "这不是一次性通知；未完成的成员会继续收到催办。\n"
-    "完成后请尽快点击底部【快捷操作】→【完成本次】。"
+    "⏳ 未完成成员将继续收到提醒\n📍 完成入口：底部【快捷操作】→【完成本次】"
 )
-ALL_COMPLETED_NOTIFICATION_HINT = "所有登记接收人完成后，系统会广播“所有人都完成”。"
+ALL_COMPLETED_NOTIFICATION_HINT = "全部成员完成后，将发送全员完成通知"
 
 
 def _broadcast_interactive_hint(notify_on_all_completed: bool) -> str:
@@ -565,6 +560,25 @@ class ReminderService:
         await self._cancel_active_occurrences(reminder_id, now=now)
         await self._cancel_pending_deliveries(reminder_id)
         return reminder
+
+    async def delete(self, reminder_id: str, *, now: datetime | None = None) -> None:
+        instant = _utc(now or self._clock.now())
+        async with self._sessions() as session:
+            reminder = await session.get(Reminder, reminder_id)
+            if reminder is None:
+                raise ReminderNotFound(reminder_id)
+            current_status = reminder.status
+
+        if current_status in {ReminderStatus.ACTIVE.value, ReminderStatus.PAUSED.value}:
+            await self.cancel(reminder_id, now=instant)
+        else:
+            await self._cancel_pending_deliveries(reminder_id)
+
+        async with self._sessions() as session, session.begin():
+            reminder = await session.get(Reminder, reminder_id)
+            if reminder is None:
+                raise ReminderNotFound(reminder_id)
+            await session.delete(reminder)
 
     async def _cancel_active_occurrences(
         self, reminder_id: str, *, now: datetime | None = None
@@ -1331,6 +1345,7 @@ class ReminderService:
                 "not_active", occurrence.title_snapshot, reminder.id, occurrence.id
             )
             if occurrence.status != "active" or recipient.status != RecipientStatus.PENDING.value:
+                identity.latest_interactive_occurrence_id = None
                 if incoming is not None:
                     incoming.event_payload = {
                         **incoming.event_payload,
@@ -1399,6 +1414,8 @@ class ReminderService:
             result = InteractiveOccurrenceResult(
                 result_code, occurrence.title_snapshot, reminder.id, occurrence.id
             )
+            if operation in {"complete", "stop"}:
+                identity.latest_interactive_occurrence_id = None
             cancel_recipient_id: str | None = identity.person_id
             if operation == "complete":
                 if occurrence.ack_policy_snapshot == AckPolicy.ANY.value:

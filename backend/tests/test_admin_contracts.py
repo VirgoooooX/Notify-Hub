@@ -108,6 +108,28 @@ async def test_admin_frontend_contracts_require_auth_and_round_trip(
     assert page.status_code == 200
     assert page.json()["data"]["total"] == 1
     assert page.json()["data"]["page_size"] == 20
+    next_run_at = page.json()["data"]["items"][0]["next_run_at"]
+    assert datetime.fromisoformat(next_run_at).utcoffset() == timedelta(0)
+
+    paused = await client.post(
+        f"/api/v1/admin/reminders/{reminder_data['id']}/pause", headers=headers
+    )
+    assert paused.status_code == 200
+    assert paused.json()["data"]["status"] == "paused"
+    resumed = await client.post(
+        f"/api/v1/admin/reminders/{reminder_data['id']}/resume", headers=headers
+    )
+    assert resumed.status_code == 200
+    assert resumed.json()["data"]["status"] == "active"
+
+    deleted = await client.delete(
+        f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers
+    )
+    assert deleted.status_code == 204
+    missing = await client.get(
+        f"/api/v1/admin/reminders/{reminder_data['id']}", headers=headers
+    )
+    assert missing.status_code == 404
 
 
 @pytest.mark.asyncio

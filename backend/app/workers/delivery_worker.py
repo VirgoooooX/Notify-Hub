@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import replace
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from app.channels.base import ChannelMessage, ChannelResult, NotificationChannel
@@ -141,6 +141,7 @@ class DeliveryWorker:
                 ChannelResult(
                     False, False, "RECIPIENT_INVALID", "Recipient identity is unavailable"
                 ),
+                started_at=self._clock.now(),
             )
             return True
         if message.message_type == "voice" and not message.media_asset_id:
@@ -153,6 +154,7 @@ class DeliveryWorker:
             except Exception:
                 await self._enable_text_fallback(delivery_id)
                 message = replace(message, message_type="text", media_asset_id=None)
+        attempt_started_at = self._clock.now()
         try:
             result = await self._channel.send(
                 message
@@ -177,7 +179,12 @@ class DeliveryWorker:
                     "CHANNEL_EXCEPTION",
                     f"Text fallback failed: {type(exc).__name__}",
                 )
-        await self._finish(delivery_id, result, sent_user_ids=message.recipients)
+        await self._finish(
+            delivery_id,
+            result,
+            sent_user_ids=message.recipients,
+            started_at=attempt_started_at,
+        )
         return True
 
     async def _set_media_asset(self, delivery_id: str, asset_id: str) -> None:
@@ -296,8 +303,10 @@ class DeliveryWorker:
         result: ChannelResult,
         *,
         sent_user_ids: list[str] | None = None,
+        started_at: datetime | None = None,
     ) -> None:
         now = self._clock.now()
+        attempt_started_at = started_at or now
         async with self._factory() as session, session.begin():
             delivery = await session.get(Delivery, delivery_id)
             if delivery is None or delivery.status != DeliveryStatus.PROCESSING.value:
@@ -356,7 +365,7 @@ class DeliveryWorker:
                         if result.retryable
                         else AttemptStatus.PERMANENT_FAILURE.value
                     ),
-                    started_at=now,
+                    started_at=attempt_started_at,
                     finished_at=now,
                     error_code=result.error_code,
                     error_message=result.error_message,
