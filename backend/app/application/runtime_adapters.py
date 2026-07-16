@@ -53,10 +53,14 @@ class ReminderEventEmitterAdapter:
             title=draft.title,
             content=draft.content,
             recipients=list(draft.recipients),
+            broadcast=draft.broadcast,
             message_type=draft.message_type,
             require_ack=draft.require_ack,
             ack_policy=draft.ack_policy,
             reminder_id=draft.source_id,
+            reminder_occurrence_id=draft.reminder_occurrence_id,
+            url=draft.url,
+            media_asset_id=draft.media_asset_id,
             payload=draft.payload,
         )
         return EventAcceptance(

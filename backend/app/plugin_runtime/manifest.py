@@ -34,6 +34,42 @@ class CronSchedule(BaseModel):
 PluginSchedule = IntervalSchedule | CronSchedule
 
 
+class PluginReminderPermissions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    create: bool = False
+    allow_recurring: bool = False
+    allow_cron: bool = False
+    allow_interactive: bool = False
+    allow_media: bool = False
+    allowed_recipients: list[str] = Field(default_factory=list, max_length=100)
+    max_active: int = Field(default=10, ge=1, le=1000)
+    min_interval_seconds: int = Field(default=300, ge=300, le=86400 * 30)
+    max_duration_seconds: int = Field(default=86400, ge=300, le=86400 * 366)
+    max_notifications: int = Field(default=12, ge=1, le=100)
+
+    @field_validator("allowed_recipients")
+    @classmethod
+    def unique_recipients(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("reminder recipients cannot be empty")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("reminder recipients must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def coherent_permissions(self) -> PluginReminderPermissions:
+        if not self.create and any(
+            (self.allow_recurring, self.allow_cron, self.allow_interactive, self.allow_media)
+        ):
+            raise ValueError("reminder capabilities require create=true")
+        if self.allow_cron and not self.allow_recurring:
+            raise ValueError("cron permission requires allow_recurring=true")
+        if self.create and not self.allowed_recipients:
+            raise ValueError("reminder creation requires an explicit recipient allowlist")
+        return self
+
+
 class PluginPermissions(BaseModel):
     model_config = ConfigDict(extra="forbid")
     network: list[str] = Field(default_factory=list)
@@ -43,6 +79,7 @@ class PluginPermissions(BaseModel):
     private_network: list[str] = Field(default_factory=list)
     ai_profiles: list[str] = Field(default_factory=list)
     ai_capabilities: list[Literal["classify", "extract", "summarize"]] = Field(default_factory=list)
+    reminders: PluginReminderPermissions = Field(default_factory=PluginReminderPermissions)
 
     @field_validator("network", "secrets", "private_network", "ai_profiles", "ai_capabilities")
     @classmethod

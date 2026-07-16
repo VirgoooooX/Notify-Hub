@@ -5,8 +5,13 @@ startup are explicit application-lifecycle operations.
 """
 
 from app.plugin_runtime.base import EventDraft, EventReceipt, NotifyPlugin, PluginRunResult
-from app.plugin_runtime.context import PluginContext
-from app.plugin_runtime.manifest import PluginManifest
+from app.plugin_runtime.context import (
+    PluginContext,
+    PluginReminderClient,
+    PluginReminderDraft,
+    PluginReminderReceipt,
+)
+from app.plugin_runtime.manifest import PluginManifest, PluginReminderPermissions
 from app.plugin_runtime.registry import PluginRegistry
 
 __all__ = [
@@ -16,5 +21,9 @@ __all__ = [
     "PluginContext",
     "PluginManifest",
     "PluginRegistry",
+    "PluginReminderClient",
+    "PluginReminderDraft",
+    "PluginReminderPermissions",
+    "PluginReminderReceipt",
     "PluginRunResult",
 ]

@@ -40,6 +40,7 @@ class WeComCallbackService:
             media_refs=callback.media_refs,
             event_payload={
                 "event": callback.event,
+                "event_key": callback.event_key,
                 "has_action": callback.action_token is not None,
             },
             received_at=callback.received_at,

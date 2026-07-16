@@ -31,6 +31,8 @@ class ReminderStatus(str, enum.Enum):
 
 class ScheduleType(str, enum.Enum):
     ONCE = "once"
+    INTERVAL = "interval"
+    CRON = "cron"
     RECURRING = "recurring"
 
 
@@ -44,6 +46,7 @@ class RecipientStatus(str, enum.Enum):
     PENDING = "pending"
     ACKNOWLEDGED = "acknowledged"
     EXPIRED = "expired"
+    CANCELLED = "cancelled"
 
 
 class ConversationState(str, enum.Enum):

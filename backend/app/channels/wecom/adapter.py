@@ -103,7 +103,7 @@ class WeComAdapter:
                 media_id = await self._media.media_id(message.media_asset_id, now=datetime.now(UTC))
             except (OSError, RuntimeError, ValueError):
                 return ChannelResult(False, False, "MEDIA_NOT_SENT", "Media preparation failed")
-            return await self._client.send(
+            media_result = await self._client.send(
                 {
                     "touser": touser,
                     "msgtype": message.message_type,
@@ -112,6 +112,23 @@ class WeComAdapter:
                     "enable_duplicate_check": 1,
                 }
             )
+            if not media_result.success or not message.payload.get("interactive_reminder"):
+                return media_result
+            companion = "\n".join(part for part in [message.title, message.content] if part)
+            final = media_result
+            for chunk in split_utf8(companion):
+                final = await self._client.send(
+                    {
+                        "touser": touser,
+                        "msgtype": "text",
+                        "agentid": self._settings.wecom_agent_id,
+                        "text": {"content": chunk},
+                        "enable_duplicate_check": 1,
+                    }
+                )
+                if not final.success:
+                    return final
+            return final
         text = "\n".join(part for part in [message.title, message.content, message.url] if part)
         final = ChannelResult(True)
         for chunk in split_utf8(text):

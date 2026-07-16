@@ -38,6 +38,11 @@ class ApiClientCreate(BaseModel):
     allow_critical: bool = False
     allow_media: bool = False
     allow_voice: bool = False
+    allow_reminders: bool = False
+    allow_recurring: bool = False
+    allow_cron: bool = False
+    allow_interactive: bool = False
+    max_active_reminders: int = Field(default=10, ge=1, le=1000)
     rate_limit_per_minute: int = Field(default=60, ge=1, le=10000)
 
 
@@ -49,6 +54,11 @@ class ApiClientUpdate(BaseModel):
     allow_critical: bool | None = None
     allow_media: bool | None = None
     allow_voice: bool | None = None
+    allow_reminders: bool | None = None
+    allow_recurring: bool | None = None
+    allow_cron: bool | None = None
+    allow_interactive: bool | None = None
+    max_active_reminders: int | None = Field(default=None, ge=1, le=1000)
     rate_limit_per_minute: int | None = Field(default=None, ge=1, le=10000)
 
 

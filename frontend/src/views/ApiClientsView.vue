@@ -25,8 +25,15 @@ const busy = ref(false)
 const form = reactive({
   name: '',
   allowed_event_types: '',
+  allowed_recipient_ids: '',
   rate_limit_per_minute: 60,
-  allow_broadcast: false
+  allow_broadcast: false,
+  allow_media: false,
+  allow_reminders: false,
+  allow_recurring: false,
+  allow_cron: false,
+  allow_interactive: false,
+  max_active_reminders: 10
 })
 
 async function load() {
@@ -47,16 +54,33 @@ async function create() {
         .split(',')
         .map((v) => v.trim())
         .filter(Boolean),
+      allowed_recipient_ids: form.allowed_recipient_ids
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean),
       rate_limit_per_minute: form.rate_limit_per_minute,
-      allow_broadcast: form.allow_broadcast
+      allow_broadcast: form.allow_broadcast,
+      allow_media: form.allow_media,
+      allow_reminders: form.allow_reminders,
+      allow_recurring: form.allow_recurring,
+      allow_cron: form.allow_cron,
+      allow_interactive: form.allow_interactive,
+      max_active_reminders: form.max_active_reminders
     })
     secret.value = data.api_key
     show.value = false
     // Reset form fields
     form.name = ''
     form.allowed_event_types = ''
+    form.allowed_recipient_ids = ''
     form.rate_limit_per_minute = 60
     form.allow_broadcast = false
+    form.allow_media = false
+    form.allow_reminders = false
+    form.allow_recurring = false
+    form.allow_cron = false
+    form.allow_interactive = false
+    form.max_active_reminders = 10
     ui.toast('Client 已创建，请立即保存 Key', 'success')
     await load()
   } catch (e) {
@@ -124,6 +148,10 @@ onMounted(load)
         <AppInput v-model="form.allowed_event_types" placeholder="home.alert, nas.health" />
       </div>
       <div class="field">
+        <label>允许接收人 ID（逗号分隔）</label>
+        <AppInput v-model="form.allowed_recipient_ids" placeholder="person_alice, person_bob" />
+      </div>
+      <div class="field">
         <label>每分钟限额</label>
         <AppInput v-model.number="form.rate_limit_per_minute" type="number" min="1" max="10000" />
       </div>
@@ -131,6 +159,25 @@ onMounted(load)
         <AppCheckbox v-model="form.allow_broadcast">
           允许广播（高危）
         </AppCheckbox>
+        <AppCheckbox v-model="form.allow_media">
+          允许媒体
+        </AppCheckbox>
+        <AppCheckbox v-model="form.allow_reminders">
+          允许创建提醒
+        </AppCheckbox>
+        <AppCheckbox v-model="form.allow_recurring">
+          允许周期提醒
+        </AppCheckbox>
+        <AppCheckbox v-model="form.allow_cron">
+          允许 Cron
+        </AppCheckbox>
+        <AppCheckbox v-model="form.allow_interactive">
+          允许持续催办
+        </AppCheckbox>
+      </div>
+      <div v-if="form.allow_reminders" class="field">
+        <label>活动提醒配额</label>
+        <AppInput v-model.number="form.max_active_reminders" type="number" min="1" max="1000" />
       </div>
       <div class="form-actions-row">
         <AppButton type="submit" variant="primary" :loading="busy">
@@ -168,6 +215,9 @@ onMounted(load)
               {{ item.allowed_event_types?.join(', ') || '未限定' }}
             </span>
             <span v-if="item.allow_broadcast" class="danger-badge"> · 可广播</span>
+            <span v-if="item.allow_reminders" class="reminder-badge">
+              · 提醒 {{ item.max_active_reminders ?? 10 }} 条
+            </span>
           </td>
           <td>
             <span class="mono">{{ item.rate_limit_per_minute ?? '—' }} / min</span>
@@ -243,7 +293,9 @@ onMounted(load)
   grid-column: 1 / -1;
   display: flex;
   align-items: center;
-  height: 38px;
+  min-height: 38px;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .form-actions-row {
@@ -272,6 +324,11 @@ onMounted(load)
 .danger-badge {
   color: var(--status-danger);
   font-weight: bold;
+}
+
+.reminder-badge {
+  color: var(--status-info);
+  font-weight: 600;
 }
 
 .actions-cell {

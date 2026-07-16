@@ -10,14 +10,18 @@ import AppCard from '@/components/ui/AppCard.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
 import DescriptionList from '@/components/data/DescriptionList.vue'
 import { useUiStore } from '@/stores/ui'
+import type { AIProfile } from '@/types'
 
 const ui = useUiStore()
 const busy = ref(false)
 const testing = ref(false)
+const publishingMenu = ref(false)
+const parserProfiles = ref<AIProfile[]>([])
 
 const settings = reactive({
   timezone: 'Asia/Shanghai',
   retention_days: 90,
+  default_reminder_parser_profile_id: '',
   version: '0.7.2',
   wecom: {
     configured: false,
@@ -38,7 +42,18 @@ const test = reactive({
 
 onMounted(async () => {
   try {
-    Object.assign(settings, await api.get('/admin/settings'))
+    const [platformSettings, profiles] = await Promise.all([
+      api.get<Record<string, unknown>>('/admin/settings'),
+      api.get<AIProfile[]>('/admin/ai/profiles')
+    ])
+    Object.assign(settings, platformSettings)
+    settings.default_reminder_parser_profile_id =
+      typeof platformSettings.default_reminder_parser_profile_id === 'string'
+        ? platformSettings.default_reminder_parser_profile_id
+        : ''
+    parserProfiles.value = profiles.filter(
+      (profile) => profile.capability === 'extract' && profile.enabled
+    )
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '设置加载失败', 'danger')
   }
@@ -49,7 +64,9 @@ async function save() {
   try {
     await api.patch('/admin/settings', {
       timezone: settings.timezone,
-      retention_days: settings.retention_days
+      retention_days: settings.retention_days,
+      default_reminder_parser_profile_id:
+        settings.default_reminder_parser_profile_id || null
     })
     ui.toast('平台设置已保存', 'success')
   } catch (e) {
@@ -68,6 +85,18 @@ async function sendTest() {
     ui.toast(e instanceof Error ? e.message : '测试失败', 'danger')
   } finally {
     testing.value = false
+  }
+}
+
+async function publishReminderMenu() {
+  publishingMenu.value = true
+  try {
+    await api.post('/admin/wecom/menu/publish')
+    ui.toast('三系列提醒菜单已发布到企业微信应用', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '菜单发布失败', 'danger')
+  } finally {
+    publishingMenu.value = false
   }
 }
 </script>
@@ -92,6 +121,17 @@ async function sendTest() {
         <div class="field mt-4">
           <label>历史保留天数</label>
           <AppInput v-model.number="settings.retention_days" type="number" min="7" max="3650" />
+        </div>
+        <div class="field mt-4">
+          <label>提醒自然语言解析 Profile</label>
+          <AppSelect v-model="settings.default_reminder_parser_profile_id">
+            <option value="">
+              禁用 AI fallback
+            </option>
+            <option v-for="profile in parserProfiles" :key="profile.id" :value="profile.id">
+              {{ profile.name }} · {{ profile.model }}
+            </option>
+          </AppSelect>
         </div>
         
         <div class="panel-header-wrap mt-6">
@@ -208,6 +248,55 @@ async function sendTest() {
           图片和语音请通过媒体管理与通知接口验收；这里仅验证文本/图文渠道连通性。
         </AppAlert>
       </AppCard>
+
+      <AppCard padding="md" class="menu-publish-card">
+        <template #header>
+          <div class="panel-header-wrap">
+            <h3 class="panel-title">
+              企业微信三系列菜单
+            </h3>
+            <span class="mono muted title-info">WECOM MENU / GLOBAL</span>
+          </div>
+        </template>
+        <p class="desc-text">
+          发布后，企业微信应用底部会显示“新建提醒 / 我的提醒 / 快捷操作”三个系列。该操作会覆盖应用当前菜单，并写入管理员审计日志。
+        </p>
+        <div class="menu-tree" aria-label="企业微信三系列菜单结构">
+          <section>
+            <strong>新建提醒</strong>
+            <span>快速文字提醒</span>
+            <span>图文提醒</span>
+            <span>打开完整创建页</span>
+          </section>
+          <section>
+            <strong>我的提醒</strong>
+            <span>等待我完成</span>
+            <span>今天的提醒</span>
+            <span>全部提醒</span>
+          </section>
+          <section>
+            <strong>快捷操作</strong>
+            <span>完成本次</span>
+            <span>推迟10分钟</span>
+            <span>推迟30分钟</span>
+            <span>今日忽略</span>
+            <span>停止本次</span>
+          </section>
+        </div>
+        <AppAlert variant="warning" class="warning-alert mt-5">
+          只有【快捷操作】会操作当前 UserID 最近一次成功收到的交互式提醒；目标失效后不会回退到更早任务。创建页和列表页链接还需要配置公开访问地址。
+        </AppAlert>
+        <div class="form-actions mt-5">
+          <AppButton
+            variant="primary"
+            :loading="publishingMenu"
+            :disabled="!settings.wecom.configured"
+            @click="publishReminderMenu"
+          >
+            发布三系列菜单
+          </AppButton>
+        </div>
+      </AppCard>
     </article>
   </section>
 </template>
@@ -219,6 +308,48 @@ async function sendTest() {
   background-color: var(--color-neutral-100);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
+}
+
+.menu-publish-card {
+  margin-top: var(--space-4);
+}
+
+.menu-tree {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+.menu-tree section {
+  display: flex;
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid rgba(31, 107, 79, 0.2);
+  border-radius: var(--radius-md);
+}
+
+.menu-tree strong,
+.menu-tree span {
+  padding: 9px 11px;
+  background: #f8faf6;
+  font-size: var(--text-xs);
+}
+
+.menu-tree strong {
+  background: rgba(31, 107, 79, 0.1);
+  color: #1f6b4f;
+  letter-spacing: 0.04em;
+}
+
+.menu-tree span {
+  border-top: 1px solid rgba(31, 107, 79, 0.1);
+}
+
+@media (max-width: 700px) {
+  .menu-tree {
+    grid-template-columns: 1fr;
+  }
 }
 
 .panel-header-wrap {

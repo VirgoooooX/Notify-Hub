@@ -1,11 +1,21 @@
 from datetime import UTC, timedelta
+from functools import lru_cache
+from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from app.api.errors import AppError
 from app.infrastructure.database.models import WorkerHeartbeat
 from fastapi import APIRouter, Request
 from sqlalchemy import text
 
 router = APIRouter(tags=["health"])
+
+
+@lru_cache(maxsize=1)
+def _migration_heads() -> frozenset[str]:
+    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    return frozenset(ScriptDirectory.from_config(config).get_heads())
 
 
 @router.get("/health/live")
@@ -31,7 +41,7 @@ async def ready(request: Request) -> dict[str, object]:
         async with request.app.state.session_factory() as session:
             revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
             heartbeat = await session.get(WorkerHeartbeat, "delivery-main")
-        checks["migration"] = "ok" if revision == "0001_v0_3_0" else "outdated"
+        checks["migration"] = "ok" if revision in _migration_heads() else "outdated"
         heartbeat_at = heartbeat.heartbeat_at if heartbeat is not None else None
         if heartbeat_at is not None and heartbeat_at.tzinfo is None:
             heartbeat_at = heartbeat_at.replace(tzinfo=UTC)

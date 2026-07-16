@@ -13,11 +13,16 @@ from app.infrastructure.database.models import (
     Delivery,
     DeliveryAttempt,
     DeliveryStatus,
+    Notification,
     RecipientType,
     WeComIdentity,
     WorkerHeartbeat,
 )
-from app.infrastructure.database.reminder_models import Reminder, ReminderRecipient
+from app.infrastructure.database.reminder_models import (
+    Reminder,
+    ReminderOccurrenceRecipient,
+    ReminderRecipient,
+)
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -172,7 +177,7 @@ class DeliveryWorker:
                     "CHANNEL_EXCEPTION",
                     f"Text fallback failed: {type(exc).__name__}",
                 )
-        await self._finish(delivery_id, result)
+        await self._finish(delivery_id, result, sent_user_ids=message.recipients)
         return True
 
     async def _set_media_asset(self, delivery_id: str, asset_id: str) -> None:
@@ -207,7 +212,11 @@ class DeliveryWorker:
             if delivery is None or delivery.status != DeliveryStatus.PROCESSING.value:
                 return None
             notification = delivery.notification
-            if notification.reminder_id and delivery.recipient_id:
+            if (
+                notification.reminder_id
+                and notification.reminder_occurrence_id is None
+                and delivery.recipient_id
+            ):
                 reminder = await session.get(Reminder, notification.reminder_id)
                 if reminder is None or reminder.status != "active":
                     delivery.status = DeliveryStatus.CANCELLED.value
@@ -281,7 +290,13 @@ class DeliveryWorker:
                 media_asset_id=notification.media_asset_id,
             )
 
-    async def _finish(self, delivery_id: str, result: ChannelResult) -> None:
+    async def _finish(
+        self,
+        delivery_id: str,
+        result: ChannelResult,
+        *,
+        sent_user_ids: list[str] | None = None,
+    ) -> None:
         now = self._clock.now()
         async with self._factory() as session, session.begin():
             delivery = await session.get(Delivery, delivery_id)
@@ -290,6 +305,34 @@ class DeliveryWorker:
             delivery.attempt_count += 1
             if result.success:
                 delivery.status, delivery.sent_at = DeliveryStatus.SUCCEEDED.value, now
+                notification = await session.get(Notification, delivery.notification_id)
+                if (
+                    notification is not None
+                    and notification.require_ack
+                    and notification.reminder_occurrence_id is not None
+                    and notification.payload.get("interactive_reminder") is True
+                ):
+                    if notification.payload.get("broadcast_reminder") is True:
+                        audience = select(ReminderOccurrenceRecipient.person_id).where(
+                            ReminderOccurrenceRecipient.occurrence_id
+                            == notification.reminder_occurrence_id
+                        )
+                        identity_filter = WeComIdentity.person_id.in_(audience)
+                    elif sent_user_ids:
+                        identity_filter = WeComIdentity.user_id.in_(sent_user_ids)
+                    else:
+                        identity_filter = None
+                    if identity_filter is not None:
+                        await session.execute(
+                            update(WeComIdentity)
+                            .where(identity_filter, WeComIdentity.active.is_(True))
+                            .values(
+                                latest_interactive_occurrence_id=(
+                                    notification.reminder_occurrence_id
+                                ),
+                                updated_at=now,
+                            )
+                        )
             elif result.retryable and delivery.attempt_count < delivery.max_attempts:
                 delivery.status = DeliveryStatus.RETRY_WAIT.value
                 index = min(delivery.attempt_count - 1, len(BACKOFF_SECONDS) - 1)

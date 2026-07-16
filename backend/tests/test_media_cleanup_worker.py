@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from app.application.media_service import MediaService
+from app.infrastructure.database.base import Base
 from app.infrastructure.database.media_models import MediaAsset
 from app.media.storage import MediaStorage
 from app.media.validation import MediaKind
@@ -28,7 +29,7 @@ def amr_frame() -> bytes:
 async def test_expired_media_is_deleted_in_a_bounded_cleanup_batch(tmp_path: Path) -> None:
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'media.db'}")
     async with engine.begin() as connection:
-        await connection.run_sync(lambda sync: MediaAsset.__table__.create(sync))
+        await connection.run_sync(Base.metadata.create_all)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     storage = MediaStorage(tmp_path / "storage")
     created_at = datetime(2026, 1, 1, tzinfo=UTC)

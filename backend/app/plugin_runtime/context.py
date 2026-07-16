@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.ai.schemas import (
     AIClassificationItem,
@@ -41,6 +43,81 @@ class ConfigStore(Protocol):
 
 class EventEmitter(Protocol):
     async def emit(self, plugin_id: str, event: EventDraft) -> EventReceipt: ...
+
+
+class PluginReminderDraft(BaseModel):
+    """Channel-neutral reminder input accepted from a trusted plugin."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    creator_person_id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(default="", max_length=20_000)
+    schedule_type: Literal["once", "interval", "cron", "recurring"]
+    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    recipient_ids: tuple[str, ...] = Field(min_length=1, max_length=100)
+    scheduled_at: datetime | None = None
+    recurrence_rule: str | None = Field(default=None, max_length=500)
+    interval_seconds: int | None = Field(default=None, ge=300)
+    cron_expression: str | None = Field(default=None, max_length=200)
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    misfire_policy: Literal["fire_once", "skip"] = "fire_once"
+    schedule_mode: Literal["once", "interval", "cron", "recurring"] | None = None
+    require_ack: bool = False
+    ack_policy: Literal["any", "all", "each"] = "any"
+    repeat_interval_seconds: int | None = None
+    max_reminders: int | None = None
+    stop_at: datetime | None = None
+    content_type: Literal["text", "image", "article"] = "text"
+    media_asset_id: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_schedule(self) -> PluginReminderDraft:
+        if self.schedule_type == "once" and (
+            self.scheduled_at is None or self.recurrence_rule is not None
+        ):
+            raise ValueError("once schedule requires scheduled_at and forbids recurrence_rule")
+        if self.schedule_type == "recurring" and not self.recurrence_rule:
+            raise ValueError("recurring schedule requires recurrence_rule")
+        if self.schedule_type == "interval" and (
+            self.interval_seconds is None or self.start_at is None
+        ):
+            raise ValueError("interval schedule requires interval_seconds and start_at")
+        if self.schedule_type == "cron" and not self.cron_expression:
+            raise ValueError("cron schedule requires cron_expression")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class PluginReminderReceipt:
+    reminder_id: str
+    status: str
+    duplicate: bool = False
+
+
+class ReminderCreator(Protocol):
+    async def create(self, draft: PluginReminderDraft) -> PluginReminderReceipt: ...
+
+
+class PluginReminderClient:
+    def __init__(self, creator: ReminderCreator | None) -> None:
+        self._creator = creator
+
+    async def create(self, draft: Any = None, **values: Any) -> PluginReminderReceipt:
+        if self._creator is None:
+            raise PermissionError("plugin does not have reminder creation permission")
+        if draft is not None and values:
+            raise ValueError("pass either a reminder draft or keyword fields")
+        raw = values if draft is None else draft
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()
+        normalized = PluginReminderDraft.model_validate(
+            raw, from_attributes=not isinstance(raw, dict)
+        )
+        return await self._creator.create(normalized)
 
 
 class SecretResolver(Protocol):
@@ -221,6 +298,7 @@ class PluginContext:
         "logger",
         "media",
         "plugin_id",
+        "reminders",
         "run_id",
     )
 
@@ -236,6 +314,7 @@ class PluginContext:
         http: RestrictedHttpClient,
         ai: PluginAIClient,
         media: PluginMediaPublisher | None = None,
+        reminders: PluginReminderClient | None = None,
     ) -> None:
         self.plugin_id = plugin_id
         self.run_id = run_id
@@ -246,6 +325,7 @@ class PluginContext:
         self.http = http
         self.media = media
         self.ai = ai
+        self.reminders = reminders or PluginReminderClient(None)
         self.logger = structlog.get_logger().bind(plugin_id=plugin_id, plugin_run_id=run_id)
 
     async def emit_event(self, event: Any) -> EventReceipt:

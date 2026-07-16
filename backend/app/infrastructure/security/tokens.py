@@ -43,6 +43,36 @@ def decode_access_token(token: str, settings: Settings) -> str:
     return str(payload["sub"])
 
 
+def create_mobile_identity_token(
+    identity_id: str,
+    settings: Settings,
+    clock: Clock,
+    *,
+    lifetime: timedelta = timedelta(minutes=30),
+) -> str:
+    """Issue a short-lived token for a verified WeCom identity.
+
+    The identity is looked up again on every request, so disabling either the
+    identity or its person immediately revokes access.
+    """
+    now = clock.now()
+    payload: dict[str, Any] = {
+        "sub": identity_id,
+        "type": "wecom_mobile",
+        "iat": now,
+        "exp": now + lifetime,
+        "jti": secrets.token_hex(16),
+    }
+    return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm="HS256")
+
+
+def decode_mobile_identity_token(token: str, settings: Settings) -> str:
+    payload = jwt.decode(token, settings.jwt_secret.get_secret_value(), algorithms=["HS256"])
+    if payload.get("type") != "wecom_mobile" or not isinstance(payload.get("sub"), str):
+        raise jwt.InvalidTokenError("invalid token type")
+    return str(payload["sub"])
+
+
 def create_refresh_token() -> str:
     return f"nfr_{secrets.token_urlsafe(48)}"
 

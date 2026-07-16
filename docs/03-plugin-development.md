@@ -146,6 +146,7 @@ class PluginContext:
     logger: PluginLogger
     http: RestrictedHttpClient
     ai: PluginAIClient
+    reminders: PluginReminderClient
 
     async def emit_event(self, event: EventDraft) -> EventReceipt: ...
     async def get_state(self, key: str, default: Any = None) -> Any: ...
@@ -167,6 +168,29 @@ class PluginContext:
 `context.ai` 每次调用都检查 Manifest 中的 `ai_profiles` 或 `ai_capabilities`，配置页面选中 Profile 不能替代运行时授权。`ai_profiles` 适合绑定固定 Profile；`ai_capabilities` 允许管理员从对应能力的启用 Profile 中选择。插件提供具体业务 instruction、内容、标签/字段和缓存键；平台 Profile 决定能力类型、Provider、模型、Key、输出策略、预算、超时与缓存。调用方法必须与 Profile 能力一致，例如 `context.ai.classify()` 只能使用 classify Profile。通用防提示注入、禁用工具和结构化校验由 Gateway 强制执行，插件无需重复声明，也不能关闭。AI 只返回建议，插件仍通过确定性代码决定是否 emit 和何时 checkpoint。
 
 Manifest 的 `permissions.ai_profiles` 与 `permissions.ai_capabilities` 同时是插件的 AI 权限声明。平台会从已校验配置中解析实际选择；使用能力授权时，只允许选择能力匹配且已启用的 Profile。保存配置和启用插件时都会验证依赖仍可用，防止软删除后重新产生悬空引用。
+
+`context.reminders.create(...)` 只对 Manifest 显式声明 `permissions.reminders.create=true` 的插件开放。运行时会再次校验接收人白名单、周期/Cron、媒体、持续催办、最短间隔、最长持续时间、最大通知次数和活动提醒配额；成功创建后写入 `reminder.create` 审计。插件仍拿不到 ORM Session，所有请求最终转换为 `ReminderCreate` 并调用核心 `ReminderService.create()`。
+
+插件对可重试的创建操作应提供来源稳定的 `idempotency_key`；同一插件重复提交相同 Key 会返回原 `reminder_id`，并在 receipt 中标记 `duplicate=true`，不会重复占用配额。
+
+```json
+{
+  "permissions": {
+    "reminders": {
+      "create": true,
+      "allow_recurring": false,
+      "allow_cron": false,
+      "allow_interactive": true,
+      "allow_media": false,
+      "allowed_recipients": ["person_plugin_owner"],
+      "max_active": 10,
+      "min_interval_seconds": 300,
+      "max_duration_seconds": 86400,
+      "max_notifications": 12
+    }
+  }
+}
+```
 
 ## 6. EventDraft
 

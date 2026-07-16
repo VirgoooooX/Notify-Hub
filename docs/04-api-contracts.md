@@ -124,6 +124,20 @@ Idempotency-Key: optional-compatible-header
 }
 ```
 
+## 3.1 创建提醒
+
+```http
+POST /api/v1/reminders
+X-API-Key: nfy_...
+Idempotency-Key: source-stable-reminder-key
+```
+
+Client 必须显式启用 `allow_reminders`，接收人必须属于 `allowed_recipient_ids`。周期、Cron、持续催办和媒体分别要求 `allow_recurring`、`allow_cron`、`allow_interactive` 和 `allow_media`；活动提醒数量受 `max_active_reminders` 限制。创建成功进入与管理端、企业微信和插件相同的 Reminder Planner/Delivery 链路，并写入 actor_type=`api_client` 的审计记录。
+
+建议所有自动化调用携带 1～200 字符的稳定 `Idempotency-Key`。同一 Client 重试相同 Key 返回原提醒并设置 `duplicate=true`，不会创建第二条提醒或重复占用活动配额。
+
+当前兼容请求使用 `schedule.type=once|recurring` 与 RRULE；`schedule.mode=cron` 会额外触发 Cron 权限检查。独立 Interval/Cron 调度 Schema 完成整合后，本兼容形态继续保留一个发布周期。
+
 重复提交不得创建新的 Notification 或 Delivery。
 
 ## 4. 直接发送通知

@@ -1,15 +1,27 @@
 from __future__ import annotations
 
+import logging
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, cast
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ai.service import AIService
+from app.application.reminder_draft_service import ReminderDraftCreate, ReminderDraftService
 from app.application.reminder_service import ReminderCreate, ReminderService
+from app.domain.clock import Clock, SystemClock
+from app.domain.reminder_drafts import (
+    ReminderDraftError,
+    ReminderDraftParseMethod,
+    ReminderDraftSourceType,
+    ReminderDraftStatus,
+)
 from app.domain.reminders import AckPolicy, ConversationState, ReminderError, ScheduleType
+from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
-from app.infrastructure.database.models import WeComIdentity
+from app.infrastructure.database.models import Person, WeComIdentity
 from app.infrastructure.database.reminder_models import (
     ConversationSession,
     Reminder,
@@ -17,6 +29,15 @@ from app.infrastructure.database.reminder_models import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+logger = logging.getLogger(__name__)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize SQLite's timezone-naive datetime values to UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,13 +170,24 @@ class ConversationService:
         session_factory: async_sessionmaker[AsyncSession],
         reminders: ReminderService,
         *,
+        drafts: ReminderDraftService | None = None,
+        ai: AIService | None = None,
+        ai_profile_id: str | None = None,
+        clock: Clock | None = None,
         session_ttl: timedelta = timedelta(minutes=10),
         default_timezone: str = "Asia/Shanghai",
     ) -> None:
         self._sessions = session_factory
         self._reminders = reminders
+        self._drafts = drafts
+        self._ai = ai
+        self._ai_profile_id = ai_profile_id
+        self._clock = clock or SystemClock()
         self._ttl = session_ttl
         self._timezone = default_timezone
+
+    def set_ai_profile(self, profile_id: str | None) -> None:
+        self._ai_profile_id = profile_id
 
     def set_timezone(self, timezone: str) -> None:
         ZoneInfo(timezone)
@@ -168,7 +200,7 @@ class ConversationService:
         text: str,
         now: datetime | None = None,
     ) -> ConversationReply:
-        instant = now or datetime.now(UTC)
+        instant = now or self._clock.now()
         identity = await self._identity(sender_wecom_userid)
         if identity is None:
             return ConversationReply("forbidden", "你的企业微信身份尚未关联，无法管理提醒。")
@@ -190,6 +222,11 @@ class ConversationService:
             return await self._snooze_owned(command, identity.person_id, instant)
         if command in {"取消", "/取消"}:
             if session:
+                if session.draft_id and self._drafts:
+                    with suppress(ReminderDraftError):
+                        await self._drafts.cancel(
+                            session.draft_id, created_by=identity.person_id, now=instant
+                        )
                 await self._set_session(session, ConversationState.CANCELLED, {}, instant)
             return ConversationReply("cancelled", "已取消当前提醒草稿。")
 
@@ -201,16 +238,53 @@ class ConversationService:
                     "confirmation_required", "请回复“确认”创建，或回复“取消”。"
                 )
 
-        draft = parse_reminder_text(command, now=instant, timezone=self._timezone)
+        try:
+            draft = parse_reminder_text(command, now=instant, timezone=self._timezone)
+        except (ReminderError, ValueError):
+            draft = ParsedReminderDraft("", "", None, self._timezone, ambiguous=True)
+
+        parse_method = ReminderDraftParseMethod.RULES
         if draft.scheduled_at is None or draft.ambiguous:
+            ai_draft = await self._ai_parse_reminder(command, instant)
+            if ai_draft and ai_draft.scheduled_at is not None:
+                draft = ai_draft
+                parse_method = ReminderDraftParseMethod.AI
+
+        if draft.scheduled_at is None or draft.ambiguous:
+            persisted = await self._persist_draft(
+                command,
+                draft,
+                identity.person_id,
+                parse_method,
+                ReminderDraftStatus.EDITING,
+                ("ambiguous_time",),
+                instant,
+            )
             await self._upsert_session(
-                identity.id, ConversationState.AWAITING_TIME, draft.as_json(), instant
+                identity.id,
+                ConversationState.AWAITING_TIME,
+                draft.as_json(),
+                instant,
+                draft_id=persisted,
             )
             return ConversationReply(
                 "ambiguous_time", "提醒时间不够明确，请写明上午/下午和具体时间。"
             )
+        persisted = await self._persist_draft(
+            command,
+            draft,
+            identity.person_id,
+            parse_method,
+            ReminderDraftStatus.AWAITING_CONFIRMATION,
+            (),
+            instant,
+        )
         await self._upsert_session(
-            identity.id, ConversationState.AWAITING_CONFIRMATION, draft.as_json(), instant
+            identity.id,
+            ConversationState.AWAITING_CONFIRMATION,
+            draft.as_json(),
+            instant,
+            draft_id=persisted,
         )
         local = draft.scheduled_at.astimezone(ZoneInfo(draft.timezone))
         return ConversationReply(
@@ -226,34 +300,135 @@ class ConversationService:
         if not isinstance(scheduled_raw, str):
             await self._set_session(session, ConversationState.EXPIRED, {}, now)
             return ConversationReply("expired", "草稿已失效，请重新创建。")
-        reminder = await self._reminders.create(
-            ReminderCreate(
-                creator_person_id=person_id,
-                title=str(draft["title"]),
-                content=str(draft.get("content", "")),
-                schedule_type=ScheduleType(str(draft.get("schedule_type", "once"))),
-                timezone=str(draft["timezone"]),
-                recipient_ids=(person_id,),
-                scheduled_at=datetime.fromisoformat(scheduled_raw),
-                recurrence_rule=draft.get("recurrence_rule"),
-                require_ack=False,
-                ack_policy=AckPolicy.ANY,
-            ),
-            now=now,
+        command = ReminderCreate(
+            creator_person_id=person_id,
+            title=str(draft["title"]),
+            content=str(draft.get("content", "")),
+            schedule_type=ScheduleType(str(draft.get("schedule_type", "once"))),
+            timezone=str(draft["timezone"]),
+            recipient_ids=(person_id,),
+            scheduled_at=datetime.fromisoformat(scheduled_raw),
+            recurrence_rule=draft.get("recurrence_rule"),
+            require_ack=False,
+            ack_policy=AckPolicy.ANY,
         )
+        if session.draft_id and self._drafts:
+            reminder = await self._drafts.confirm(
+                session.draft_id, command, created_by=person_id, now=now
+            )
+        else:
+            reminder = await self._reminders.create(command, now=now)
         await self._set_session(session, ConversationState.COMPLETED, {}, now)
         return ConversationReply("created", f"提醒已创建：{reminder.title}", reminder.id)
+
+    async def _ai_parse_reminder(self, text: str, now: datetime) -> ParsedReminderDraft | None:
+        if self._ai is None or self._ai_profile_id is None:
+            return None
+        async with self._sessions() as db_session:
+            profile = await db_session.scalar(
+                select(AIProfile.id).where(
+                    AIProfile.id == self._ai_profile_id,
+                    AIProfile.capability == "extract",
+                    AIProfile.enabled.is_(True),
+                    AIProfile.deleted_at.is_(None),
+                )
+            )
+        if not profile:
+            return None
+        try:
+            instruction = (
+                "当前时间为: "
+                f"{now.astimezone(ZoneInfo(self._timezone)).isoformat()}。"
+                f"时区为: {self._timezone}。\n"
+                "请从用户的文本中提取以下提醒任务字段：\n"
+                "- title: 提醒任务的标题。\n"
+                "- content: 提醒任务的完整内容。\n"
+                "- scheduled_at: 提醒触发的 ISO 8601 绝对时间。"
+                "未指定日期时默认今天，若时间已过则使用明天。\n"
+                "- recurrence_rule: 循环提醒输出 RFC 5545 RRULE，"
+                "否则输出 null。"
+            )
+            result = await self._ai.extract(
+                profile=profile,
+                plugin_id=None,
+                plugin_run_id=None,
+                use_case="reminder_parse",
+                content=text,
+                instruction=instruction,
+                fields=["title", "content", "scheduled_at", "recurrence_rule"],
+            )
+            title = result.values.get("title")
+            content = result.values.get("content") or ""
+            scheduled_at_value = result.values.get("scheduled_at")
+            recurrence_rule = result.values.get("recurrence_rule")
+            if isinstance(title, str) and isinstance(scheduled_at_value, str):
+                try:
+                    scheduled_dt = datetime.fromisoformat(scheduled_at_value)
+                    if scheduled_dt.tzinfo is None:
+                        scheduled_dt = scheduled_dt.replace(tzinfo=ZoneInfo(self._timezone))
+                    scheduled_utc = scheduled_dt.astimezone(UTC)
+                    return ParsedReminderDraft(
+                        title=title.strip(),
+                        content=str(content).strip(),
+                        scheduled_at=scheduled_utc,
+                        timezone=self._timezone,
+                        schedule_type=ScheduleType.RECURRING
+                        if recurrence_rule
+                        else ScheduleType.ONCE,
+                        recurrence_rule=(
+                            recurrence_rule.strip()
+                            if isinstance(recurrence_rule, str) and recurrence_rule
+                            else None
+                        ),
+                        ambiguous=False,
+                    )
+                except (TypeError, ValueError, ZoneInfoNotFoundError):
+                    logger.warning("reminder_ai_parse_invalid_result", exc_info=True)
+        except Exception:
+            logger.warning("reminder_ai_parse_failed", exc_info=True)
+        return None
 
     async def _identity(self, user_id: str) -> WeComIdentity | None:
         async with self._sessions() as session:
             return cast(
                 WeComIdentity | None,
                 await session.scalar(
-                    select(WeComIdentity).where(
-                        WeComIdentity.user_id == user_id, WeComIdentity.active.is_(True)
+                    select(WeComIdentity)
+                    .join(Person, Person.id == WeComIdentity.person_id)
+                    .where(
+                        WeComIdentity.user_id == user_id,
+                        WeComIdentity.active.is_(True),
+                        Person.active.is_(True),
                     )
                 ),
             )
+
+    async def _persist_draft(
+        self,
+        source_text: str,
+        draft: ParsedReminderDraft,
+        person_id: str,
+        parse_method: ReminderDraftParseMethod,
+        status: ReminderDraftStatus,
+        validation_errors: tuple[str, ...],
+        now: datetime,
+    ) -> str | None:
+        if self._drafts is None:
+            return None
+        persisted = await self._drafts.create(
+            ReminderDraftCreate(
+                source_type=ReminderDraftSourceType.WECOM_TEXT,
+                source_text=source_text,
+                parsed_data=draft.as_json(),
+                parse_method=parse_method,
+                validation_errors=validation_errors,
+                created_by=person_id,
+                status=status,
+                expires_at=now + self._ttl,
+            ),
+            now=now,
+        )
+        return persisted.id
 
     async def _session(self, identity_id: str, now: datetime) -> ConversationSession | None:
         async with self._sessions() as session, session.begin():
@@ -262,7 +437,7 @@ class ConversationService:
                     ConversationSession.wecom_identity_id == identity_id
                 )
             )
-            if item and item.expires_at <= now:
+            if item and _as_utc(item.expires_at) <= _as_utc(now):
                 item.state = ConversationState.EXPIRED.value
                 item.draft = {}
                 item.updated_at = now
@@ -275,6 +450,8 @@ class ConversationService:
         state: ConversationState,
         draft: dict[str, Any],
         now: datetime,
+        *,
+        draft_id: str | None = None,
     ) -> None:
         async with self._sessions() as session, session.begin():
             item = await session.scalar(
@@ -287,6 +464,7 @@ class ConversationService:
                     id=new_id("cvs"),
                     wecom_identity_id=identity_id,
                     state=state.value,
+                    draft_id=draft_id,
                     draft=draft,
                     last_message_at=now,
                     expires_at=now + self._ttl,
@@ -296,6 +474,7 @@ class ConversationService:
                 session.add(item)
             else:
                 item.state = state.value
+                item.draft_id = draft_id
                 item.draft = draft
                 item.last_message_at = now
                 item.expires_at = now + self._ttl
@@ -381,7 +560,7 @@ class ConversationService:
         if not rows:
             return ConversationReply("today", "今天没有待执行提醒。")
         lines = [
-            f"{item.next_run_at.astimezone(zone):%H:%M} {item.title} ({item.id})"
+            f"{_as_utc(item.next_run_at).astimezone(zone):%H:%M} {item.title} ({item.id})"
             for item in rows
             if item.next_run_at
         ]

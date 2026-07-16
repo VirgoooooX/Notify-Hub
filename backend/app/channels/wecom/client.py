@@ -96,6 +96,56 @@ class WeComClient:
         except RuntimeError as exc:
             return ChannelResult(False, False, "AUTH_INVALID", str(exc))
 
+    async def update_template_card(
+        self, *, response_code: str, user_ids: list[str]
+    ) -> ChannelResult:
+        payload = {"userids": list(dict.fromkeys(user_ids)), "response_code": response_code}
+        try:
+            token = await self.get_access_token()
+            result = await self._post_template_card_update(token, payload)
+            if result.response_metadata.get("errcode") in TOKEN_INVALID_CODES:
+                token = await self.get_access_token(force=True)
+                result = await self._post_template_card_update(token, payload)
+            return result
+        except (httpx.TimeoutException, httpx.NetworkError):
+            return ChannelResult(False, True, "NETWORK_ERROR", "WeCom card update failed")
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code >= 500 or exc.response.status_code == 429
+            return ChannelResult(
+                False,
+                retryable,
+                "PROVIDER_TEMPORARY" if retryable else "UNKNOWN_PROVIDER_ERROR",
+                f"WeCom card update HTTP error {exc.response.status_code}",
+                provider_status=exc.response.status_code,
+            )
+        except RuntimeError as exc:
+            return ChannelResult(False, False, "AUTH_INVALID", str(exc))
+
+    async def create_menu(self, payload: dict[str, Any]) -> ChannelResult:
+        """Publish the application menu, refreshing an expired token once."""
+        try:
+            if self._settings.wecom_agent_id is None:
+                raise RuntimeError("WeCom agent ID is not configured")
+            token = await self.get_access_token()
+            result = await self._post_menu(token, payload)
+            if result.response_metadata.get("errcode") in TOKEN_INVALID_CODES:
+                token = await self.get_access_token(force=True)
+                result = await self._post_menu(token, payload)
+            return result
+        except (httpx.TimeoutException, httpx.NetworkError):
+            return ChannelResult(False, True, "NETWORK_ERROR", "WeCom menu publish failed")
+        except httpx.HTTPStatusError as exc:
+            retryable = exc.response.status_code >= 500 or exc.response.status_code == 429
+            return ChannelResult(
+                False,
+                retryable,
+                "PROVIDER_TEMPORARY" if retryable else "UNKNOWN_PROVIDER_ERROR",
+                f"WeCom menu publish HTTP error {exc.response.status_code}",
+                provider_status=exc.response.status_code,
+            )
+        except RuntimeError as exc:
+            return ChannelResult(False, False, "AUTH_INVALID", str(exc))
+
     async def upload_temporary_media(
         self, *, media_type: str, filename: str, mime_type: str, content: bytes
     ) -> str:
@@ -133,8 +183,20 @@ class WeComClient:
         response.raise_for_status()
         data = response.json()
         code = int(data.get("errcode", -999))
-        metadata = {"errcode": code}
+        invalid_users = [
+            user_id for user_id in str(data.get("invaliduser") or "").split("|") if user_id
+        ]
+        metadata = {"errcode": code, "invalid_user_ids": invalid_users}
         if code == 0:
+            if invalid_users:
+                return ChannelResult(
+                    False,
+                    False,
+                    "RECIPIENT_INVALID",
+                    "WeCom did not deliver to one or more recipients",
+                    provider_status=response.status_code,
+                    response_metadata=metadata,
+                )
             return ChannelResult(
                 True,
                 provider_message_id=str(data.get("msgid")) if data.get("msgid") else None,
@@ -156,6 +218,60 @@ class WeComClient:
             retryable,
             category,
             f"WeCom rejected the request (code {code})",
+            provider_status=response.status_code,
+            response_metadata=metadata,
+        )
+
+    async def _post_menu(self, token: str, payload: dict[str, Any]) -> ChannelResult:
+        response = await self._http.post(
+            "cgi-bin/menu/create",
+            params={"access_token": token, "agentid": self._settings.wecom_agent_id},
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+        code = int(data.get("errcode", -999))
+        metadata = {"errcode": code}
+        if code == 0:
+            return ChannelResult(
+                True,
+                provider_status=response.status_code,
+                response_metadata=metadata,
+            )
+        retryable = code in TOKEN_INVALID_CODES or code in RETRYABLE_CODES
+        return ChannelResult(
+            False,
+            retryable,
+            "PROVIDER_TEMPORARY" if retryable else "UNKNOWN_PROVIDER_ERROR",
+            f"WeCom rejected the menu publish (code {code})",
+            provider_status=response.status_code,
+            response_metadata=metadata,
+        )
+
+    async def _post_template_card_update(
+        self, token: str, payload: dict[str, Any]
+    ) -> ChannelResult:
+        response = await self._http.post(
+            "cgi-bin/message/update_template_card",
+            params={"access_token": token},
+            json=payload,
+        )
+        response.raise_for_status()
+        data = response.json()
+        code = int(data.get("errcode", -999))
+        metadata = {"errcode": code}
+        if code == 0:
+            return ChannelResult(
+                True,
+                provider_status=response.status_code,
+                response_metadata=metadata,
+            )
+        retryable = code in TOKEN_INVALID_CODES or code in RETRYABLE_CODES
+        return ChannelResult(
+            False,
+            retryable,
+            "PROVIDER_TEMPORARY" if retryable else "UNKNOWN_PROVIDER_ERROR",
+            f"WeCom rejected the card update (code {code})",
             provider_status=response.status_code,
             response_metadata=metadata,
         )

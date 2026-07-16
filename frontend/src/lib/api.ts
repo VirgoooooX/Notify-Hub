@@ -48,7 +48,9 @@ export async function request<T>(
   allowRefresh = true,
 ): Promise<T> {
   const headers = new Headers(options.headers)
-  if (!headers.has('Content-Type') && options.body) headers.set('Content-Type', 'application/json')
+  if (!headers.has('Content-Type') && options.body && !(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json')
+  }
   const auth = accessToken()
   if (auth) headers.set('Authorization', `Bearer ${auth}`)
   const response = await fetcher(`/api/v1${path}`, { ...options, headers })
@@ -81,6 +83,8 @@ export const api = {
     request<T>(path, { method: 'PUT', body: JSON.stringify(data) }),
   patch: <T>(path: string, data: unknown) =>
     request<T>(path, { method: 'PATCH', body: JSON.stringify(data) }),
+  upload: <T>(path: string, data: FormData) =>
+    request<T>(path, { method: 'POST', body: data }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
 }
 

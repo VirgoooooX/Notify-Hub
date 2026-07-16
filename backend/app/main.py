@@ -19,8 +19,13 @@ from app.application.ai_control_service import AIControlService
 from app.application.conversation_service import ConversationService
 from app.application.event_service import EventService
 from app.application.media_service import MediaService
+from app.application.mobile_identity_service import MobileIdentityService
+from app.application.mobile_reminder_query_service import MobileReminderQueryService
 from app.application.notification_service import NotificationService
 from app.application.plugin_service import PluginService
+from app.application.reminder_access import ReminderAccessService
+from app.application.reminder_draft_service import ReminderDraftService
+from app.application.reminder_maintenance_service import ReminderMaintenanceService
 from app.application.reminder_service import ReminderService
 from app.application.runtime_adapters import (
     ConversationReplyEmitterAdapter,
@@ -28,13 +33,13 @@ from app.application.runtime_adapters import (
     PluginSecretResolverAdapter,
     ReminderEventEmitterAdapter,
 )
-from app.application.speech_service import SpeechRecognitionService
 from app.application.tts_media_service import TtsMediaService
 from app.application.wecom_callback_service import WeComCallbackService
 from app.application.wecom_media_service import (
     DatabaseMediaCacheRepository,
     OutboundWeComMediaService,
 )
+from app.application.wecom_menu_service import WeComMenuService
 from app.channels.base import UnconfiguredChannel
 from app.channels.wecom.adapter import WeComAdapter
 from app.channels.wecom.client import WeComClient
@@ -49,7 +54,7 @@ from app.infrastructure.security.rate_limit import SlidingWindowLimiter
 from app.infrastructure.security.request_id import new_request_id
 from app.infrastructure.security.secret_store import SecretStore
 from app.media.downloader import SafeMediaDownloader
-from app.media.speech import LocalCommandAmrTranscoder, LocalCommandASR, LocalCommandTTS
+from app.media.speech import LocalCommandAmrTranscoder, LocalCommandTTS
 from app.media.storage import MediaStorage
 from app.plugin_runtime.registry import PluginRegistry
 from app.workers.delivery_worker import DeliveryWorker
@@ -82,16 +87,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ai_control_service = AIControlService(factory, clock.now)
     wecom_client = WeComClient(settings, clock)
     worker_stop = asyncio.Event()
+    secret_store = (
+        SecretStore(
+            factory,
+            clock,
+            settings.secret_encryption_key.get_secret_value(),
+        )
+        if settings.secret_encryption_key is not None
+        else None
+    )
+    ai_service = AIService(factory, secret_store=secret_store)
     reminder_service = ReminderService(
         factory,
         ReminderEventEmitterAdapter(event_service),
         settings.jwt_secret.get_secret_value(),
+        clock,
     )
+    reminder_access_service = ReminderAccessService(factory, reminder_service, clock)
+    reminder_draft_service = ReminderDraftService(factory, reminder_service, clock=clock)
+    reminder_maintenance_service = ReminderMaintenanceService(factory)
     conversation_service = ConversationService(
-        factory, reminder_service, default_timezone=settings.app_timezone
+        factory,
+        reminder_service,
+        drafts=reminder_draft_service,
+        ai=ai_service,
+        clock=clock,
+        default_timezone=settings.app_timezone,
     )
-    reminder_worker = ReminderWorker(reminder_service)
+    reminder_worker = ReminderWorker(reminder_service, clock=clock)
     callback_service = WeComCallbackService(factory)
+    mobile_identity_service = MobileIdentityService(factory, settings, clock)
+    mobile_reminder_query_service = MobileReminderQueryService(factory)
+    wecom_menu_service = WeComMenuService(
+        reminder_service,
+        mobile_identity_service,
+        settings.public_base_url,
+    )
     media_http = httpx.AsyncClient(follow_redirects=False)
     media_storage = MediaStorage(settings.media_root)
     media_service = MediaService(
@@ -111,11 +142,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         wecom_client,
         DatabaseMediaCacheRepository(factory),
     )
-    speech_recognition = (
-        SpeechRecognitionService(LocalCommandASR(settings.asr_command))
-        if settings.asr_command
-        else None
-    )
     tts_media_service = (
         TtsMediaService(
             LocalCommandTTS(settings.tts_command),
@@ -126,25 +152,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
-    async def transcribe_wecom_voice(media_id: str) -> str:
-        if speech_recognition is None:
-            raise RuntimeError("ASR adapter is not configured")
-        draft = await speech_recognition.recognize(
-            None,
-            download_voice=lambda: temporary_media.download_voice(
-                media_id,
-                max_bytes=settings.media_voice_max_bytes,
-                max_seconds=settings.media_voice_max_seconds,
-            ),
-        )
-        return draft.text
-
     interaction_worker = InteractionWorker(
         factory,
         reminder_service,
         conversation_service,
-        ConversationReplyEmitterAdapter(factory, event_service),
-        transcribe_wecom_voice if speech_recognition is not None else None,
+        emit_reply=ConversationReplyEmitterAdapter(factory, event_service),
+        update_card=lambda response_code, user_id: wecom_client.update_template_card(
+            response_code=response_code, user_ids=[user_id]
+        ),
+        menu_service=wecom_menu_service,
+        clock=clock,
     )
     outbound_media = OutboundWeComMediaService(
         factory,
@@ -176,16 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         action_token_for_id=reminder_service.action_token,
     )
     media_cleanup = MediaCleanupWorker(factory, media_storage, clock)
-    secret_store = (
-        SecretStore(
-            factory,
-            clock,
-            settings.secret_encryption_key.get_secret_value(),
-        )
-        if settings.secret_encryption_key is not None
-        else None
-    )
-    ai_service = AIService(factory, secret_store=secret_store)
+    # secret_store and ai_service are defined earlier in create_app
     plugin_service = PluginService(
         session_factory=factory,
         registry=PluginRegistry(),
@@ -195,6 +203,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         media_service=media_service,
         settings=settings,
         ai_service=ai_service,
+        reminder_access=reminder_access_service,
     )
     plugin_worker = PluginWorker(plugin_service, worker_id="plugin-main")
 
@@ -234,7 +243,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 row.key: row.value
                 for row in await session.scalars(
                     select(PlatformSetting).where(
-                        PlatformSetting.key.in_(["timezone", "retention_days"])
+                        PlatformSetting.key.in_(
+                            [
+                                "timezone",
+                                "retention_days",
+                                "default_reminder_parser_profile_id",
+                            ]
+                        )
                     )
                 )
             }
@@ -244,6 +259,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         retention_days = persisted_settings.get("retention_days")
         if isinstance(retention_days, int):
             media_service.retention_seconds = retention_days * 86400
+        reminder_parser_profile_id = persisted_settings.get("default_reminder_parser_profile_id")
+        conversation_service.set_ai_profile(
+            reminder_parser_profile_id if isinstance(reminder_parser_profile_id, str) else None
+        )
         await plugin_service.initialize()
         await interaction_worker.recover_stale_messages()
         if settings.environment != "test":
@@ -291,8 +310,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.notification_channel = channel
     app.state.delivery_worker = worker
     app.state.reminder_service = reminder_service
+    app.state.reminder_access_service = reminder_access_service
+    app.state.reminder_maintenance_service = reminder_maintenance_service
     app.state.conversation_service = conversation_service
     app.state.wecom_callback_service = callback_service
+    app.state.wecom_client = wecom_client
+    app.state.mobile_identity_service = mobile_identity_service
+    app.state.mobile_reminder_query_service = mobile_reminder_query_service
+    app.state.wecom_menu_service = wecom_menu_service
     app.state.media_service = media_service
     app.state.tts_media_service = tts_media_service
     app.state.plugin_service = plugin_service
@@ -329,21 +354,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
     from app.api.ai import router as ai_router
+    from app.api.client_reminders import router as client_reminders_router
     from app.api.events import router as events_router
     from app.api.media import public_router
     from app.api.media import router as media_router
     from app.api.plugins import router as plugins_router
     from app.api.reminders import router as reminders_router
     from app.api.wecom_callback import router as callback_router
+    from app.api.wecom_mobile import admin_router as wecom_menu_router
+    from app.api.wecom_mobile import mobile_router
 
     app.include_router(auth_router, prefix="/api/v1/admin/auth")
     app.include_router(ai_router, prefix="/api/v1/admin")
     app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(management_router, prefix="/api/v1/admin")
     app.include_router(events_router, prefix="/api/v1")
+    app.include_router(client_reminders_router, prefix="/api/v1")
     app.include_router(plugins_router, prefix="/api/v1/admin")
     app.include_router(reminders_router, prefix="/api/v1/admin")
     app.include_router(callback_router, prefix="/api/v1")
+    app.include_router(wecom_menu_router, prefix="/api/v1/admin")
+    app.include_router(mobile_router, prefix="/api/v1")
     app.include_router(media_router)
     app.include_router(public_router)
     install_error_handlers(app)

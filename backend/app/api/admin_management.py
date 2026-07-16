@@ -4,8 +4,10 @@ from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.api.dependencies import require_admin
+from app.api.errors import AppError
 from app.application.audit import add_audit
 from app.config import DEFAULT_WECOM_API_BASE_URL
+from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.models import (
     Admin,
     Delivery,
@@ -24,6 +26,7 @@ router = APIRouter(tags=["admin-management"])
 class SettingsUpdate(BaseModel):
     timezone: str | None = Field(default=None, max_length=100)
     retention_days: int | None = Field(default=None, ge=7, le=3650)
+    default_reminder_parser_profile_id: str | None = Field(default=None, max_length=64)
 
     @field_validator("timezone")
     @classmethod
@@ -130,6 +133,9 @@ async def get_settings(
             "retention_days": await _setting(
                 request, "retention_days", settings.media_retention_seconds // 86400
             ),
+            "default_reminder_parser_profile_id": await _setting(
+                request, "default_reminder_parser_profile_id", None
+            ),
             "version": request.app.version,
             "wecom": wecom,
         },
@@ -143,12 +149,32 @@ async def update_settings(
     request: Request,
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
+    if payload.default_reminder_parser_profile_id is not None:
+        async with request.app.state.session_factory() as session:
+            profile = await session.scalar(
+                select(AIProfile).where(
+                    AIProfile.id == payload.default_reminder_parser_profile_id,
+                    AIProfile.capability == "extract",
+                    AIProfile.enabled.is_(True),
+                    AIProfile.deleted_at.is_(None),
+                )
+            )
+        if profile is None:
+            raise AppError(
+                "invalid_reminder_parser_profile",
+                "Reminder parser profile must be an enabled extract profile",
+                422,
+            )
     for key, value in payload.model_dump(exclude_unset=True).items():
         await _write_setting(request, key, value)
         if key == "timezone" and isinstance(value, str):
             request.app.state.conversation_service.set_timezone(value)
         elif key == "retention_days" and isinstance(value, int):
             request.app.state.media_service.retention_seconds = value * 86400
+        elif key == "default_reminder_parser_profile_id":
+            request.app.state.conversation_service.set_ai_profile(
+                value if isinstance(value, str) else None
+            )
     async with request.app.state.session_factory() as session, session.begin():
         add_audit(
             session,

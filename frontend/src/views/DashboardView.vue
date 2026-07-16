@@ -88,17 +88,23 @@ const time = (v: string) =>
               <span class="step-badge">1</span>
               <span class="step-label">EVENT ACCEPTED</span>
             </div>
-            <div class="flow-divider">➔</div>
+            <div class="flow-divider">
+              ➔
+            </div>
             <div class="flow-step">
               <span class="step-badge">2</span>
               <span class="step-label">NOTIFICATION ROUTED</span>
             </div>
-            <div class="flow-divider">➔</div>
+            <div class="flow-divider">
+              ➔
+            </div>
             <div class="flow-step">
               <span class="step-badge">3</span>
               <span class="step-label">DELIVERY CLAIMED</span>
             </div>
-            <div class="flow-divider">➔</div>
+            <div class="flow-divider">
+              ➔
+            </div>
             <div class="flow-step">
               <span class="step-badge">4</span>
               <span class="step-label">PROVIDER ACK</span>

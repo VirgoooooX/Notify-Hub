@@ -6,9 +6,23 @@ import hashlib
 import hmac
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol, cast
+from zoneinfo import ZoneInfo
 
+from app.application.audit import add_audit
+from app.domain.clock import Clock, SystemClock
+from app.domain.reminder_schedules import (
+    CronSchedule,
+    IntervalSchedule,
+    MisfirePolicy,
+    OnceSchedule,
+    ReminderSchedule,
+    ScheduleValidationError,
+    next_occurrence,
+    resolve_due,
+    validate_minimum_frequency,
+)
 from app.domain.reminders import (
     AckPolicy,
     InvalidReminderTransition,
@@ -18,7 +32,6 @@ from app.domain.reminders import (
     ReminderStatus,
     ScheduleType,
     action_token_matches,
-    hash_action_token,
     next_rrule_occurrence,
     normalize_utc,
     validate_continuous_limits,
@@ -27,11 +40,14 @@ from app.domain.reminders import (
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import Delivery, Event, Notification, Person, WeComIdentity
 from app.infrastructure.database.reminder_models import (
+    IncomingMessage,
     NotificationAction,
     Reminder,
+    ReminderOccurrence,
+    ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
-from sqlalchemy import Select, delete, func, select, update
+from sqlalchemy import Select, delete, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -63,6 +79,10 @@ class ReminderEventDraft:
     message_type: str
     require_ack: bool
     ack_policy: str
+    broadcast: bool = False
+    reminder_occurrence_id: str | None = None
+    url: str | None = None
+    media_asset_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
 
 
@@ -78,13 +98,23 @@ class ReminderCreate:
     schedule_type: ScheduleType
     timezone: str
     recipient_ids: tuple[str, ...]
+    broadcast: bool = False
+    notify_on_all_completed: bool = False
     scheduled_at: datetime | None = None
     recurrence_rule: str | None = None
+    interval_seconds: int | None = None
+    cron_expression: str | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    misfire_policy: MisfirePolicy = MisfirePolicy.FIRE_ONCE
     require_ack: bool = False
     ack_policy: AckPolicy = AckPolicy.ANY
     repeat_interval_seconds: int | None = None
     max_reminders: int | None = None
     stop_at: datetime | None = None
+    content_type: str = "text"
+    media_asset_id: str | None = None
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,12 +125,20 @@ class ReminderUpdate:
     timezone: str | None = None
     scheduled_at: datetime | None = None
     recurrence_rule: str | None = None
+    interval_seconds: int | None = None
+    cron_expression: str | None = None
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    misfire_policy: MisfirePolicy | None = None
     recipient_ids: tuple[str, ...] | None = None
     require_ack: bool | None = None
     ack_policy: AckPolicy | None = None
     repeat_interval_seconds: int | None = None
     max_reminders: int | None = None
     stop_at: datetime | None = None
+    content_type: str | None = None
+    media_asset_id: str | None = None
+    url: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,10 +149,83 @@ class AcknowledgementResult:
     cancelled_deliveries: int
 
 
+@dataclass(frozen=True, slots=True)
+class InteractiveOccurrenceResult:
+    code: str
+    title: str
+    reminder_id: str
+    occurrence_id: str
+
+
+INTERACTIVE_REMINDER_HINT = (
+    "🔁【持续提醒｜需要你确认完成】\n"
+    "这不是一次性通知；在你完成前，系统会按设定间隔继续提醒。\n"
+    "完成后请尽快点击底部【快捷操作】→【完成本次】。\n"
+    "菜单默认操作最近收到的一条交互式提醒。"
+)
+BROADCAST_INTERACTIVE_REMINDER_HINT = (
+    "📣【全员持续提醒｜需要每个人确认】\n"
+    "这不是一次性通知；未完成的成员会继续收到催办。\n"
+    "完成后请尽快点击底部【快捷操作】→【完成本次】。"
+)
+ALL_COMPLETED_NOTIFICATION_HINT = "所有登记接收人完成后，系统会广播“所有人都完成”。"
+
+
+def _broadcast_interactive_hint(notify_on_all_completed: bool) -> str:
+    if notify_on_all_completed:
+        return f"{BROADCAST_INTERACTIVE_REMINDER_HINT}\n{ALL_COMPLETED_NOTIFICATION_HINT}"
+    return BROADCAST_INTERACTIVE_REMINDER_HINT
+
+
 def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _structured_schedule(
+    *,
+    schedule_type: ScheduleType,
+    timezone: str,
+    scheduled_at: datetime | None,
+    interval_seconds: int | None,
+    cron_expression: str | None,
+    start_at: datetime | None,
+) -> ReminderSchedule:
+    try:
+        if schedule_type is ScheduleType.ONCE:
+            if scheduled_at is None:
+                raise ReminderError("once schedule requires scheduled_at")
+            return OnceSchedule(scheduled_at, timezone)
+        if schedule_type is ScheduleType.INTERVAL:
+            if interval_seconds is None:
+                raise ReminderError("interval schedule requires interval_seconds")
+            anchor_at = start_at or scheduled_at
+            if anchor_at is None:
+                raise ReminderError("interval schedule requires start_at")
+            return IntervalSchedule(interval_seconds, anchor_at, timezone)
+        if schedule_type is ScheduleType.CRON:
+            if not cron_expression:
+                raise ReminderError("cron schedule requires cron_expression")
+            return CronSchedule(cron_expression, timezone)
+    except ScheduleValidationError as exc:
+        raise ReminderError(str(exc)) from exc
+    raise ReminderError("structured schedule type is required")
+
+
+def _schedule_from_reminder(reminder: Reminder) -> ReminderSchedule | None:
+    schedule_type = ScheduleType(reminder.schedule_type)
+    if schedule_type is ScheduleType.RECURRING:
+        return None
+    config = reminder.schedule_config or {}
+    return _structured_schedule(
+        schedule_type=schedule_type,
+        timezone=reminder.timezone,
+        scheduled_at=_utc(reminder.scheduled_at) if reminder.scheduled_at else None,
+        interval_seconds=cast(int | None, config.get("seconds")),
+        cron_expression=cast(str | None, config.get("expression")),
+        start_at=_utc(reminder.start_at) if reminder.start_at else None,
+    )
 
 
 class ReminderService:
@@ -123,10 +234,12 @@ class ReminderService:
         session_factory: async_sessionmaker[AsyncSession],
         emit_event: ReminderEventEmitter,
         action_token_secret: str,
+        clock: Clock | None = None,
     ) -> None:
         self._sessions = session_factory
         self._emit_event = emit_event
         self._action_token_secret = action_token_secret.encode()
+        self._clock = clock or SystemClock()
 
     def action_token(self, action_id: str) -> str:
         signature = (
@@ -139,7 +252,7 @@ class ReminderService:
         return f"v1.{action_id}.{signature}"
 
     async def create(self, command: ReminderCreate, *, now: datetime | None = None) -> Reminder:
-        instant = _utc(now or datetime.now(UTC))
+        instant = _utc(now or self._clock.now())
         validate_timezone(command.timezone)
         if not command.title.strip():
             raise ReminderError("title is required")
@@ -148,11 +261,42 @@ class ReminderService:
         if len(set(command.recipient_ids)) != len(command.recipient_ids):
             raise ReminderError("recipient IDs must be unique")
 
-        if command.schedule_type is ScheduleType.ONCE:
-            if command.scheduled_at is None or command.recurrence_rule is not None:
-                raise ReminderError("once schedule requires scheduled_at and forbids rrule")
-            first_run = normalize_utc(command.scheduled_at)
-        else:
+        schedule_config: dict[str, Any] = {}
+        start_at = normalize_utc(command.start_at) if command.start_at else None
+        end_at = normalize_utc(command.end_at) if command.end_at else None
+        if start_at and end_at and start_at > end_at:
+            raise ReminderError("start_at must not be after end_at")
+        if command.schedule_type in {
+            ScheduleType.ONCE,
+            ScheduleType.INTERVAL,
+            ScheduleType.CRON,
+        }:
+            schedule = _structured_schedule(
+                schedule_type=command.schedule_type,
+                timezone=command.timezone,
+                scheduled_at=command.scheduled_at,
+                interval_seconds=command.interval_seconds,
+                cron_expression=command.cron_expression,
+                start_at=start_at,
+            )
+            try:
+                validate_minimum_frequency(schedule, after=instant, minimum_seconds=300)
+                first_run = next_occurrence(
+                    schedule,
+                    after=instant,
+                    inclusive=True,
+                    start_at=start_at,
+                    end_at=end_at,
+                )
+            except ScheduleValidationError as exc:
+                raise ReminderError(str(exc)) from exc
+            if first_run is None:
+                raise ReminderError("schedule has no future occurrence")
+            if command.schedule_type is ScheduleType.INTERVAL:
+                schedule_config = {"seconds": command.interval_seconds}
+            elif command.schedule_type is ScheduleType.CRON:
+                schedule_config = {"expression": command.cron_expression}
+        elif command.schedule_type is ScheduleType.RECURRING:
             if not command.recurrence_rule:
                 raise ReminderError("recurring schedule requires rrule")
             start = normalize_utc(command.scheduled_at or instant)
@@ -165,6 +309,10 @@ class ReminderService:
             if recurring_first_run is None:
                 raise ReminderError("recurrence has no future occurrence")
             first_run = recurring_first_run
+        else:
+            raise ReminderError("unsupported schedule type")
+        if first_run < instant:
+            raise ReminderError("first reminder occurrence must not be in the past")
 
         interval, maximum, stop_at = validate_continuous_limits(
             require_ack=command.require_ack,
@@ -178,20 +326,30 @@ class ReminderService:
             creator_person_id=command.creator_person_id,
             title=command.title.strip(),
             content=command.content.strip(),
+            content_type=command.content_type,
+            media_asset_id=command.media_asset_id,
+            url=command.url,
             schedule_type=command.schedule_type.value,
-            scheduled_at=first_run
-            if command.schedule_type is ScheduleType.ONCE
-            else command.scheduled_at,
+            scheduled_at=first_run,
             recurrence_rule=command.recurrence_rule,
+            schedule_config=schedule_config,
             timezone=command.timezone,
+            start_at=start_at,
+            end_at=end_at,
+            misfire_policy=command.misfire_policy.value,
             next_run_at=first_run,
             status=ReminderStatus.ACTIVE.value,
+            broadcast=command.broadcast,
+            notify_on_all_completed=command.notify_on_all_completed,
             require_ack=command.require_ack,
             ack_policy=command.ack_policy.value,
             repeat_interval_seconds=interval,
             max_reminders=maximum,
             reminder_count=0,
             stop_at=stop_at,
+            escalation_stop_after_seconds=(
+                int((stop_at - first_run).total_seconds()) if stop_at else None
+            ),
             claimed_by=None,
             claim_expires_at=None,
             created_at=instant,
@@ -203,6 +361,20 @@ class ReminderService:
             )
             if people != set(command.recipient_ids):
                 raise ReminderError("one or more recipients do not exist")
+            if command.content_type not in {"text", "image", "article"}:
+                raise ReminderError("unsupported reminder content type")
+            if command.url and not command.url.startswith(("https://", "http://")):
+                raise ReminderError("reminder URL must use HTTP or HTTPS")
+            if command.content_type == "image" and not command.media_asset_id:
+                raise ReminderError("image reminders require a media asset")
+            if command.media_asset_id:
+                from app.infrastructure.database.media_models import MediaAsset
+
+                asset = await session.get(MediaAsset, command.media_asset_id)
+                if asset is None:
+                    raise ReminderError("media asset does not exist")
+                if asset.kind != "image":
+                    raise ReminderError("reminder media asset must be an image")
             session.add(reminder)
             session.add_all(
                 ReminderRecipient(
@@ -228,7 +400,7 @@ class ReminderService:
     async def update(
         self, reminder_id: str, command: ReminderUpdate, *, now: datetime | None = None
     ) -> Reminder:
-        instant = _utc(now or datetime.now(UTC))
+        instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
             reminder = await session.get(Reminder, reminder_id)
             if reminder is None:
@@ -241,16 +413,65 @@ class ReminderService:
                 reminder.title = command.title.strip()
             if command.content is not None:
                 reminder.content = command.content.strip()
+            if command.content_type is not None:
+                if command.content_type not in {"text", "image", "article"}:
+                    raise ReminderError("unsupported reminder content type")
+                reminder.content_type = command.content_type
+            if command.media_asset_id is not None:
+                if command.media_asset_id:
+                    from app.infrastructure.database.media_models import MediaAsset
+
+                    asset = await session.get(MediaAsset, command.media_asset_id)
+                    if asset is None:
+                        raise ReminderError("media asset does not exist")
+                    if asset.kind != "image":
+                        raise ReminderError("reminder media asset must be an image")
+                reminder.media_asset_id = command.media_asset_id or None
+            if command.url is not None:
+                if command.url and not command.url.startswith(("https://", "http://")):
+                    raise ReminderError("reminder URL must use HTTP or HTTPS")
+                reminder.url = command.url or None
             if command.schedule_type is not None:
                 timezone = command.timezone or reminder.timezone
                 validate_timezone(timezone)
-                if command.schedule_type is ScheduleType.ONCE:
-                    if command.scheduled_at is None:
-                        raise ReminderError("once schedule requires scheduled_at")
-                    first_run = normalize_utc(command.scheduled_at)
-                    reminder.scheduled_at = first_run
+                start_at = normalize_utc(command.start_at) if command.start_at else None
+                end_at = normalize_utc(command.end_at) if command.end_at else None
+                if start_at and end_at and start_at > end_at:
+                    raise ReminderError("start_at must not be after end_at")
+                if command.schedule_type in {
+                    ScheduleType.ONCE,
+                    ScheduleType.INTERVAL,
+                    ScheduleType.CRON,
+                }:
+                    schedule = _structured_schedule(
+                        schedule_type=command.schedule_type,
+                        timezone=timezone,
+                        scheduled_at=command.scheduled_at,
+                        interval_seconds=command.interval_seconds,
+                        cron_expression=command.cron_expression,
+                        start_at=start_at,
+                    )
+                    try:
+                        validate_minimum_frequency(schedule, after=instant, minimum_seconds=300)
+                        first_run = next_occurrence(
+                            schedule,
+                            after=instant,
+                            inclusive=True,
+                            start_at=start_at,
+                            end_at=end_at,
+                        )
+                    except ScheduleValidationError as exc:
+                        raise ReminderError(str(exc)) from exc
+                    if first_run is None:
+                        raise ReminderError("schedule has no future occurrence")
                     reminder.recurrence_rule = None
-                else:
+                    if command.schedule_type is ScheduleType.INTERVAL:
+                        reminder.schedule_config = {"seconds": command.interval_seconds}
+                    elif command.schedule_type is ScheduleType.CRON:
+                        reminder.schedule_config = {"expression": command.cron_expression}
+                    else:
+                        reminder.schedule_config = {}
+                elif command.schedule_type is ScheduleType.RECURRING:
                     if not command.recurrence_rule:
                         raise ReminderError("recurring schedule requires rrule")
                     start = normalize_utc(command.scheduled_at or instant)
@@ -263,10 +484,18 @@ class ReminderService:
                     if recurring_first_run is None:
                         raise ReminderError("recurrence has no future occurrence")
                     first_run = recurring_first_run
-                    reminder.scheduled_at = command.scheduled_at
                     reminder.recurrence_rule = command.recurrence_rule
+                    reminder.schedule_config = {}
+                else:
+                    raise ReminderError("unsupported schedule type")
+                reminder.scheduled_at = first_run
                 reminder.schedule_type = command.schedule_type.value
                 reminder.timezone = timezone
+                reminder.start_at = start_at
+                reminder.end_at = end_at
+                reminder.misfire_policy = (
+                    command.misfire_policy or MisfirePolicy(reminder.misfire_policy)
+                ).value
                 reminder.next_run_at = first_run
             require_ack = (
                 reminder.require_ack if command.require_ack is None else command.require_ack
@@ -290,6 +519,11 @@ class ReminderService:
                 reminder.repeat_interval_seconds = interval
                 reminder.max_reminders = maximum
                 reminder.stop_at = stop_at
+                reminder.escalation_stop_after_seconds = (
+                    int((stop_at - (reminder.next_run_at or instant)).total_seconds())
+                    if stop_at
+                    else None
+                )
             if command.ack_policy is not None:
                 reminder.ack_policy = command.ack_policy.value
             if command.recipient_ids is not None:
@@ -318,6 +552,8 @@ class ReminderService:
                     )
                     for person_id in recipients
                 )
+            if reminder.content_type == "image" and not reminder.media_asset_id:
+                raise ReminderError("image reminders require a media asset")
             reminder.updated_at = instant
         return reminder
 
@@ -362,13 +598,47 @@ class ReminderService:
 
     async def cancel(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
         reminder = await self._transition(reminder_id, "cancel", now=now)
+        await self._cancel_active_occurrences(reminder_id, now=now)
         await self._cancel_pending_deliveries(reminder_id)
         return reminder
 
     async def complete(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
         reminder = await self._transition(reminder_id, "complete", now=now)
+        await self._cancel_active_occurrences(reminder_id, now=now)
         await self._cancel_pending_deliveries(reminder_id)
         return reminder
+
+    async def _cancel_active_occurrences(
+        self, reminder_id: str, *, now: datetime | None = None
+    ) -> None:
+        instant = _utc(now or self._clock.now())
+        async with self._sessions() as session, session.begin():
+            occurrence_ids = select(ReminderOccurrence.id).where(
+                ReminderOccurrence.reminder_id == reminder_id,
+                ReminderOccurrence.status.in_(("scheduled", "active")),
+            )
+            await session.execute(
+                update(ReminderOccurrenceRecipient)
+                .where(
+                    ReminderOccurrenceRecipient.occurrence_id.in_(occurrence_ids),
+                    ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                )
+                .values(
+                    status=RecipientStatus.CANCELLED.value,
+                    next_notify_at=None,
+                    claimed_by=None,
+                    claim_expires_at=None,
+                    updated_at=instant,
+                )
+            )
+            await session.execute(
+                update(ReminderOccurrence)
+                .where(
+                    ReminderOccurrence.reminder_id == reminder_id,
+                    ReminderOccurrence.status.in_(("scheduled", "active")),
+                )
+                .values(status="cancelled", updated_at=instant)
+            )
 
     async def snooze(
         self, reminder_id: str, *, until: datetime, actor_person_id: str | None = None
@@ -390,7 +660,7 @@ class ReminderService:
             if reminder.status != ReminderStatus.ACTIVE.value:
                 raise InvalidReminderTransition(f"cannot snooze {reminder.status}")
             reminder.next_run_at = target
-            reminder.updated_at = datetime.now(UTC)
+            reminder.updated_at = self._clock.now()
             return reminder
 
     async def claim_due(
@@ -439,8 +709,8 @@ class ReminderService:
     async def trigger_claimed(
         self, reminder_id: str, *, worker_id: str, now: datetime | None = None
     ) -> EventAcceptance | None:
-        instant = _utc(now or datetime.now(UTC))
-        async with self._sessions() as session:
+        instant = _utc(now or self._clock.now())
+        async with self._sessions() as session, session.begin():
             reminder = await session.get(Reminder, reminder_id)
             if reminder is None:
                 return None
@@ -451,69 +721,800 @@ class ReminderService:
                 or _utc(reminder.next_run_at) > instant
             ):
                 return None
-            if reminder.stop_at and _utc(reminder.stop_at) <= instant:
-                await self._expire_claim(reminder_id, worker_id, instant)
-                return None
-            recipients = builtins.list(
+            recipients = list(
                 await session.scalars(
                     select(ReminderRecipient).where(
                         ReminderRecipient.reminder_id == reminder_id,
-                        ReminderRecipient.status == RecipientStatus.PENDING.value,
                     )
                 )
             )
             if not recipients:
-                await self.complete(reminder_id, now=instant)
+                reminder.status = ReminderStatus.COMPLETED.value
+                reminder.next_run_at = None
+                reminder.claimed_by = None
+                reminder.claim_expires_at = None
+                reminder.updated_at = instant
                 return None
-            occurrence = reminder.reminder_count + 1
-            action_ids: dict[str, str] = {}
+
+            scheduled_time = _utc(reminder.next_run_at)
+            structured_schedule = _schedule_from_reminder(reminder)
+            structured_next_run: datetime | None = None
+            if structured_schedule is not None:
+                try:
+                    resolution = resolve_due(
+                        structured_schedule,
+                        scheduled_for=scheduled_time,
+                        now=instant,
+                        policy=MisfirePolicy(reminder.misfire_policy),
+                        start_at=_utc(reminder.start_at) if reminder.start_at else None,
+                        end_at=_utc(reminder.end_at) if reminder.end_at else None,
+                    )
+                except ScheduleValidationError as exc:
+                    raise ReminderError(str(exc)) from exc
+                structured_next_run = resolution.next_trigger_at
+                if resolution.occurrence_at is None:
+                    reminder.next_run_at = structured_next_run
+                    if structured_next_run is None:
+                        reminder.status = ReminderStatus.EXPIRED.value
+                    reminder.claimed_by = None
+                    reminder.claim_expires_at = None
+                    reminder.updated_at = instant
+                    return None
+                scheduled_time = resolution.occurrence_at
+            occurrence_key = f"reminder:{reminder.id}:{scheduled_time.isoformat()}"
+
+            existing_occurrence = await session.scalar(
+                select(ReminderOccurrence).where(
+                    ReminderOccurrence.reminder_id == reminder.id,
+                    ReminderOccurrence.occurrence_key == occurrence_key,
+                )
+            )
+            if existing_occurrence is not None:
+                reminder.claimed_by = None
+                reminder.claim_expires_at = None
+                return None
+
+            escalation_deadline: datetime | None = None
             if reminder.require_ack:
-                action_records: list[NotificationAction] = []
-                for recipient in recipients:
-                    action_id = new_id("act")
-                    token = self.action_token(action_id)
-                    action_ids[recipient.person_id] = action_id
-                    action_records.append(
-                        NotificationAction(
-                            id=action_id,
-                            reminder_id=reminder.id,
-                            recipient_id=recipient.id,
-                            notification_id=None,
-                            action="complete",
-                            token_hash=hash_action_token(token),
-                            expires_at=_utc(reminder.stop_at)
-                            if reminder.stop_at
-                            else instant + timedelta(hours=24),
-                            consumed_at=None,
-                            created_at=instant,
+                duration = timedelta(seconds=reminder.escalation_stop_after_seconds or 86_400)
+                escalation_deadline = scheduled_time + duration
+
+            occurrence = ReminderOccurrence(
+                id=new_id("roc"),
+                reminder_id=reminder.id,
+                occurrence_key=occurrence_key,
+                scheduled_for=scheduled_time,
+                triggered_at=instant,
+                status="active",
+                broadcast_snapshot=reminder.broadcast,
+                notify_on_all_completed_snapshot=reminder.notify_on_all_completed,
+                broadcast_sent_at=None,
+                broadcast_completion_announced_at=None,
+                broadcast_claimed_by=None,
+                broadcast_claim_expires_at=None,
+                title_snapshot=reminder.title,
+                content_snapshot=reminder.content,
+                content_type_snapshot=reminder.content_type,
+                media_asset_id_snapshot=reminder.media_asset_id,
+                url=reminder.url,
+                ack_policy_snapshot=reminder.ack_policy,
+                repeat_interval_seconds_snapshot=reminder.repeat_interval_seconds,
+                max_reminders_snapshot=reminder.max_reminders,
+                stop_at_snapshot=escalation_deadline,
+                expires_at=escalation_deadline,
+                created_at=instant,
+                updated_at=instant,
+            )
+            session.add(occurrence)
+
+            occurrence_recipients = [
+                ReminderOccurrenceRecipient(
+                    id=new_id("ror"),
+                    occurrence_id=occurrence.id,
+                    person_id=recipient.person_id,
+                    status="pending",
+                    notify_count=0,
+                    next_notify_at=instant,
+                    last_notified_at=None,
+                    acknowledged_at=None,
+                    acknowledged_by=None,
+                    claimed_by=None,
+                    claim_expires_at=None,
+                    created_at=instant,
+                    updated_at=instant,
+                )
+                for recipient in recipients
+            ]
+            session.add_all(occurrence_recipients)
+            await self._advance_reminder_schedule(
+                reminder,
+                instant,
+                session,
+                structured_next_run=structured_next_run,
+            )
+        return None
+
+    async def _advance_reminder_schedule(
+        self,
+        reminder: Reminder,
+        now: datetime,
+        session: AsyncSession,
+        *,
+        structured_next_run: datetime | None = None,
+    ) -> None:
+        reminder.reminder_count += 1
+        reminder.updated_at = now
+        if reminder.schedule_type == ScheduleType.ONCE.value:
+            if not reminder.require_ack:
+                reminder.status = ReminderStatus.COMPLETED.value
+            reminder.next_run_at = None
+        elif reminder.schedule_type == ScheduleType.RECURRING.value:
+            assert reminder.recurrence_rule is not None
+            recurring_next_run = next_rrule_occurrence(
+                reminder.recurrence_rule,
+                timezone=reminder.timezone,
+                after=_utc(reminder.next_run_at or now),
+                dtstart=_utc(reminder.scheduled_at or reminder.created_at),
+            )
+            reminder.next_run_at = recurring_next_run
+            if recurring_next_run is None and not reminder.require_ack:
+                reminder.status = ReminderStatus.COMPLETED.value
+        else:
+            reminder.next_run_at = structured_next_run
+            if structured_next_run is None:
+                reminder.status = ReminderStatus.COMPLETED.value
+        reminder.claimed_by = None
+        reminder.claim_expires_at = None
+
+    async def claim_due_broadcasts(
+        self,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int = 60,
+        limit: int = 20,
+    ) -> builtins.list[str]:
+        """Claim initial @all sends and all-complete announcements."""
+        instant = _utc(now)
+        lease_until = instant + timedelta(seconds=lease_seconds)
+        async with self._sessions() as session, session.begin():
+            candidates = list(
+                await session.scalars(
+                    select(ReminderOccurrence.id)
+                    .where(
+                        ReminderOccurrence.broadcast_snapshot.is_(True),
+                        or_(
+                            (
+                                (ReminderOccurrence.status == "active")
+                                & ReminderOccurrence.broadcast_sent_at.is_(None)
+                            ),
+                            (
+                                (ReminderOccurrence.status == "acknowledged")
+                                & ReminderOccurrence.broadcast_sent_at.is_not(None)
+                                & ReminderOccurrence.repeat_interval_seconds_snapshot.is_not(None)
+                                & ReminderOccurrence.notify_on_all_completed_snapshot.is_(True)
+                                & ReminderOccurrence.broadcast_completion_announced_at.is_(None)
+                                & ~exists(
+                                    select(ReminderOccurrenceRecipient.id).where(
+                                        ReminderOccurrenceRecipient.occurrence_id
+                                        == ReminderOccurrence.id,
+                                        ReminderOccurrenceRecipient.status
+                                        != RecipientStatus.ACKNOWLEDGED.value,
+                                    )
+                                )
+                            ),
+                        ),
+                        or_(
+                            ReminderOccurrence.broadcast_claim_expires_at.is_(None),
+                            ReminderOccurrence.broadcast_claim_expires_at < instant,
+                        ),
+                    )
+                    .order_by(ReminderOccurrence.created_at)
+                    .limit(limit)
+                )
+            )
+            claimed: builtins.list[str] = []
+            for occurrence_id in candidates:
+                result = cast(
+                    CursorResult[Any],
+                    await session.execute(
+                        update(ReminderOccurrence)
+                        .where(
+                            ReminderOccurrence.id == occurrence_id,
+                            or_(
+                                ReminderOccurrence.broadcast_claim_expires_at.is_(None),
+                                ReminderOccurrence.broadcast_claim_expires_at < instant,
+                            ),
+                        )
+                        .values(
+                            broadcast_claimed_by=worker_id,
+                            broadcast_claim_expires_at=lease_until,
+                        )
+                    ),
+                )
+                if result.rowcount == 1:
+                    claimed.append(occurrence_id)
+            return claimed
+
+    async def notify_broadcast(
+        self, occurrence_id: str, *, worker_id: str, now: datetime
+    ) -> EventAcceptance | None:
+        instant = _utc(now)
+        async with self._sessions() as session:
+            occurrence = await session.get(ReminderOccurrence, occurrence_id)
+            if occurrence is None or occurrence.broadcast_claimed_by != worker_id:
+                return None
+            reminder = await session.get(Reminder, occurrence.reminder_id)
+            if reminder is None:
+                return None
+            completion = (
+                occurrence.status == "acknowledged"
+                and occurrence.broadcast_sent_at is not None
+                and occurrence.notify_on_all_completed_snapshot
+                and occurrence.broadcast_completion_announced_at is None
+            )
+            if completion:
+                draft = ReminderEventDraft(
+                    source_type="reminder",
+                    source_id=reminder.id,
+                    event_type="reminder.broadcast_all_completed",
+                    event_key=f"reminder:{occurrence.id}:broadcast-all-completed",
+                    title=f"✅ 所有人都已完成｜{occurrence.title_snapshot}",
+                    content=(
+                        f"✅ 所有人都已完成：{occurrence.title_snapshot}\n\n"
+                        "本次广播持续提醒已结束，感谢大家及时确认。"
+                    ),
+                    recipients=("@all",),
+                    message_type="text",
+                    require_ack=False,
+                    ack_policy=occurrence.ack_policy_snapshot,
+                    broadcast=True,
+                    reminder_occurrence_id=occurrence.id,
+                    payload={
+                        "reminder_id": reminder.id,
+                        "occurrence_id": occurrence.id,
+                        "broadcast_completion": True,
+                    },
+                )
+            elif occurrence.status == "active" and occurrence.broadcast_sent_at is None:
+                interactive = occurrence.repeat_interval_seconds_snapshot is not None
+                content = occurrence.content_snapshot
+                message_type = occurrence.content_type_snapshot
+                if message_type == "article" and not occurrence.url:
+                    message_type = "text"
+                if interactive:
+                    hint = _broadcast_interactive_hint(occurrence.notify_on_all_completed_snapshot)
+                    content = f"{content}\n\n{hint}" if content else hint
+                draft = ReminderEventDraft(
+                    source_type="reminder",
+                    source_id=reminder.id,
+                    event_type="reminder.broadcast_triggered",
+                    event_key=f"reminder:{occurrence.id}:broadcast-initial",
+                    title=(
+                        f"📣 全员持续提醒｜{occurrence.title_snapshot}"
+                        if interactive
+                        else occurrence.title_snapshot
+                    ),
+                    content=content,
+                    recipients=("@all",),
+                    message_type=message_type,
+                    require_ack=interactive,
+                    ack_policy=occurrence.ack_policy_snapshot,
+                    broadcast=True,
+                    reminder_occurrence_id=occurrence.id,
+                    url=occurrence.url,
+                    media_asset_id=occurrence.media_asset_id_snapshot,
+                    payload={
+                        "reminder_id": reminder.id,
+                        "occurrence_id": occurrence.id,
+                        "interactive_reminder": interactive,
+                        "broadcast_reminder": True,
+                    },
+                )
+            else:
+                return None
+
+        try:
+            acceptance = await self._emit_event(draft)
+        except Exception:
+            await self._release_broadcast_claim(occurrence_id, worker_id)
+            raise
+        if not (acceptance.accepted or acceptance.duplicate):
+            await self._release_broadcast_claim(occurrence_id, worker_id)
+            return acceptance
+
+        async with self._sessions() as session, session.begin():
+            occurrence = await session.get(ReminderOccurrence, occurrence_id)
+            if occurrence is None or occurrence.broadcast_claimed_by != worker_id:
+                return acceptance
+            if completion:
+                occurrence.broadcast_completion_announced_at = instant
+            else:
+                occurrence.broadcast_sent_at = instant
+                interactive = occurrence.repeat_interval_seconds_snapshot is not None
+                recipients = list(
+                    await session.scalars(
+                        select(ReminderOccurrenceRecipient).where(
+                            ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                            ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
                         )
                     )
-                async with self._sessions() as write_session, write_session.begin():
-                    write_session.add_all(action_records)
+                )
+                for recipient in recipients:
+                    recipient.notify_count += 1
+                    recipient.last_notified_at = instant
+                    recipient.claimed_by = None
+                    recipient.claim_expires_at = None
+                    recipient.updated_at = instant
+                    if interactive:
+                        recipient.next_notify_at = instant + timedelta(
+                            seconds=occurrence.repeat_interval_seconds_snapshot or 300
+                        )
+                    else:
+                        recipient.status = RecipientStatus.ACKNOWLEDGED.value
+                        recipient.acknowledged_at = instant
+                        recipient.next_notify_at = None
+                if not interactive:
+                    occurrence.status = "acknowledged"
+                    occurrence.completed_at = instant
+            occurrence.broadcast_claimed_by = None
+            occurrence.broadcast_claim_expires_at = None
+            occurrence.updated_at = instant
+        return acceptance
+
+    async def _release_broadcast_claim(self, occurrence_id: str, worker_id: str) -> None:
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                update(ReminderOccurrence)
+                .where(
+                    ReminderOccurrence.id == occurrence_id,
+                    ReminderOccurrence.broadcast_claimed_by == worker_id,
+                )
+                .values(broadcast_claimed_by=None, broadcast_claim_expires_at=None)
+            )
+
+    async def claim_due_recipients(
+        self,
+        *,
+        worker_id: str,
+        now: datetime,
+        lease_seconds: int = 60,
+        limit: int = 20,
+    ) -> builtins.list[str]:
+        instant = _utc(now)
+        lease_until = instant + timedelta(seconds=lease_seconds)
+        claimed: builtins.list[str] = []
+        async with self._sessions() as session, session.begin():
+            candidates = await session.scalars(
+                select(ReminderOccurrenceRecipient.id)
+                .join(
+                    ReminderOccurrence,
+                    ReminderOccurrence.id == ReminderOccurrenceRecipient.occurrence_id,
+                )
+                .join(Reminder, Reminder.id == ReminderOccurrence.reminder_id)
+                .where(
+                    ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                    ReminderOccurrenceRecipient.next_notify_at <= instant,
+                    (
+                        ReminderOccurrenceRecipient.claim_expires_at.is_(None)
+                        | (ReminderOccurrenceRecipient.claim_expires_at < instant)
+                    ),
+                    ReminderOccurrence.status == "active",
+                    or_(
+                        ReminderOccurrence.broadcast_snapshot.is_(False),
+                        ReminderOccurrence.broadcast_sent_at.is_not(None),
+                    ),
+                    (
+                        (Reminder.status == ReminderStatus.ACTIVE.value)
+                        | (
+                            (Reminder.status == ReminderStatus.COMPLETED.value)
+                            & ReminderOccurrence.repeat_interval_seconds_snapshot.is_(None)
+                            & (ReminderOccurrenceRecipient.notify_count == 0)
+                        )
+                    ),
+                )
+                .order_by(ReminderOccurrenceRecipient.next_notify_at)
+                .limit(limit)
+            )
+            for recipient_id in candidates:
+                result = cast(
+                    CursorResult[Any],
+                    await session.execute(
+                        update(ReminderOccurrenceRecipient)
+                        .where(
+                            ReminderOccurrenceRecipient.id == recipient_id,
+                            ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                            ReminderOccurrenceRecipient.next_notify_at <= instant,
+                            (
+                                ReminderOccurrenceRecipient.claim_expires_at.is_(None)
+                                | (ReminderOccurrenceRecipient.claim_expires_at < instant)
+                            ),
+                        )
+                        .values(claimed_by=worker_id, claim_expires_at=lease_until)
+                    ),
+                )
+                if result.rowcount == 1:
+                    claimed.append(recipient_id)
+        return claimed
+
+    async def notify_recipient(
+        self, recipient_id: str, *, worker_id: str, now: datetime
+    ) -> EventAcceptance | None:
+        instant = _utc(now)
+        async with self._sessions() as session, session.begin():
+            recipient = await session.get(ReminderOccurrenceRecipient, recipient_id)
+            if (
+                recipient is None
+                or recipient.status != RecipientStatus.PENDING.value
+                or recipient.claimed_by != worker_id
+            ):
+                return None
+            occurrence = await session.get(ReminderOccurrence, recipient.occurrence_id)
+            if occurrence is None or occurrence.status != "active":
+                if occurrence:
+                    recipient.status = occurrence.status
+                    recipient.next_notify_at = None
+                recipient.claimed_by = None
+                recipient.claim_expires_at = None
+                return None
+
+            max_notifications = occurrence.max_reminders_snapshot or 12
+            repeat_interval = occurrence.repeat_interval_seconds_snapshot or 300
+            stop_at = occurrence.stop_at_snapshot
+
+            exhausted = recipient.notify_count >= max_notifications
+            timed_out = stop_at and instant >= _utc(stop_at)
+
+            if exhausted or timed_out:
+                recipient.status = RecipientStatus.EXPIRED.value
+                recipient.next_notify_at = None
+                recipient.claimed_by = None
+                recipient.claim_expires_at = None
+                await self._recheck_occurrence_status(occurrence, session, instant)
+                return None
+
+            interactive = occurrence.repeat_interval_seconds_snapshot is not None
+            message_type = occurrence.content_type_snapshot
+            if message_type == "article" and not occurrence.url:
+                message_type = "text"
+            content = occurrence.content_snapshot
+            if interactive:
+                hint = (
+                    _broadcast_interactive_hint(occurrence.notify_on_all_completed_snapshot)
+                    if occurrence.broadcast_snapshot
+                    else INTERACTIVE_REMINDER_HINT
+                )
+                content = f"{content}\n\n{hint}" if content else hint
 
             draft = ReminderEventDraft(
                 source_type="reminder",
-                source_id=reminder.id,
+                source_id=occurrence.reminder_id,
                 event_type="reminder.triggered",
-                event_key=f"reminder-{reminder.id}-{occurrence}",
-                title=reminder.title,
-                content=reminder.content,
-                recipients=tuple(item.person_id for item in recipients),
-                message_type="template_card" if reminder.require_ack else "text",
-                require_ack=reminder.require_ack,
-                ack_policy=reminder.ack_policy,
+                event_key=(
+                    f"reminder:{occurrence.id}:{recipient.person_id}:{recipient.notify_count + 1}"
+                ),
+                title=(
+                    f"📣 全员持续提醒｜{occurrence.title_snapshot}"
+                    if interactive and occurrence.broadcast_snapshot
+                    else f"🔁 持续提醒｜{occurrence.title_snapshot}"
+                    if interactive
+                    else occurrence.title_snapshot
+                ),
+                content=content,
+                recipients=(recipient.person_id,),
+                message_type=message_type,
+                require_ack=interactive,
+                ack_policy=occurrence.ack_policy_snapshot,
+                reminder_occurrence_id=occurrence.id,
+                url=occurrence.url,
+                media_asset_id=occurrence.media_asset_id_snapshot,
                 payload={
-                    "reminder_id": reminder.id,
-                    "occurrence": occurrence,
-                    "action_ids": action_ids,
-                    "actions": ["complete"] if reminder.require_ack else [],
+                    "reminder_id": occurrence.reminder_id,
+                    "occurrence_id": occurrence.id,
+                    "occurrence_recipient_id": recipient.id,
+                    "occurrence": recipient.notify_count + 1,
+                    "interactive_reminder": interactive,
                 },
             )
-        acceptance = await self._emit_event(draft)
-        if acceptance.accepted or acceptance.duplicate:
-            await self._advance_after_accept(reminder_id, worker_id, instant, recipients)
-            await self._cancel_deliveries_if_inactive(reminder_id)
+
+        try:
+            acceptance = await self._emit_event(draft)
+        except Exception:
+            await self._release_recipient_claim(recipient_id, worker_id)
+            raise
+        if not (acceptance.accepted or acceptance.duplicate):
+            await self._release_recipient_claim(recipient_id, worker_id)
+            return acceptance
+
+        cancel_after_accept = False
+        async with self._sessions() as write_session, write_session.begin():
+            current = await write_session.get(ReminderOccurrenceRecipient, recipient_id)
+            current_occurrence = await write_session.get(ReminderOccurrence, occurrence.id)
+            notification = await write_session.scalar(
+                select(Notification).where(Notification.event_id == acceptance.event_id)
+            )
+            if notification is not None:
+                notification.reminder_occurrence_id = occurrence.id
+            if (
+                current is not None
+                and current_occurrence is not None
+                and current.status == RecipientStatus.PENDING.value
+                and current.claimed_by == worker_id
+            ):
+                current.notify_count += 1
+                current.last_notified_at = instant
+                current.claimed_by = None
+                current.claim_expires_at = None
+                if current_occurrence.repeat_interval_seconds_snapshot is None:
+                    current.status = RecipientStatus.ACKNOWLEDGED.value
+                    current.next_notify_at = None
+                    current_occurrence.status = "acknowledged"
+                    current_occurrence.completed_at = instant
+                    current_occurrence.updated_at = instant
+                else:
+                    current.next_notify_at = instant + timedelta(seconds=repeat_interval)
+            elif current_occurrence is None or current_occurrence.status != "active":
+                cancel_after_accept = True
+        if cancel_after_accept:
+            await self._cancel_pending_deliveries(
+                occurrence.reminder_id, occurrence_id=occurrence.id
+            )
         return acceptance
+
+    async def _release_recipient_claim(self, recipient_id: str, worker_id: str) -> None:
+        async with self._sessions() as session, session.begin():
+            await session.execute(
+                update(ReminderOccurrenceRecipient)
+                .where(
+                    ReminderOccurrenceRecipient.id == recipient_id,
+                    ReminderOccurrenceRecipient.claimed_by == worker_id,
+                )
+                .values(claimed_by=None, claim_expires_at=None)
+            )
+
+    async def _recheck_occurrence_status(
+        self, occurrence: ReminderOccurrence, session: AsyncSession, now: datetime
+    ) -> None:
+        pending_count = await session.scalar(
+            select(func.count(ReminderOccurrenceRecipient.id)).where(
+                ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+            )
+        )
+        if pending_count == 0:
+            ack_count = await session.scalar(
+                select(func.count(ReminderOccurrenceRecipient.id)).where(
+                    ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                    ReminderOccurrenceRecipient.status == RecipientStatus.ACKNOWLEDGED.value,
+                )
+            )
+            if (ack_count or 0) > 0:
+                occurrence.status = "acknowledged"
+                occurrence.completed_at = now
+            else:
+                occurrence.status = "expired"
+            occurrence.updated_at = now
+
+            reminder = await session.get(Reminder, occurrence.reminder_id)
+            if reminder is not None and (
+                reminder.schedule_type == ScheduleType.ONCE.value or reminder.next_run_at is None
+            ):
+                reminder.status = ReminderStatus.COMPLETED.value
+                reminder.updated_at = now
+
+    async def operate_latest_interactive(
+        self,
+        *,
+        sender_wecom_userid: str,
+        operation: str,
+        incoming_message_id: str | None = None,
+        now: datetime | None = None,
+    ) -> InteractiveOccurrenceResult:
+        """Operate exactly the occurrence last delivered successfully to this WeCom user."""
+        allowed = {"complete", "snooze_10", "snooze_30", "ignore_today", "stop"}
+        if operation not in allowed:
+            raise ReminderError("unsupported interactive reminder operation")
+
+        instant = _utc(now or self._clock.now())
+        async with self._sessions() as session, session.begin():
+            identity = await session.scalar(
+                select(WeComIdentity)
+                .join(Person, Person.id == WeComIdentity.person_id)
+                .where(
+                    WeComIdentity.user_id == sender_wecom_userid,
+                    WeComIdentity.active.is_(True),
+                    Person.active.is_(True),
+                )
+            )
+            if identity is None:
+                raise ReminderPermissionDenied("sender is not recognized")
+
+            incoming: IncomingMessage | None = None
+            if incoming_message_id is not None:
+                incoming = await session.get(IncomingMessage, incoming_message_id)
+                if incoming is None or incoming.sender_external_id != sender_wecom_userid:
+                    raise ReminderPermissionDenied("incoming menu event does not belong to sender")
+                prior_code = incoming.event_payload.get("menu_result")
+                prior_occurrence_id = incoming.event_payload.get("menu_occurrence_id")
+                if isinstance(prior_code, str) and isinstance(prior_occurrence_id, str):
+                    prior_occurrence = await session.get(ReminderOccurrence, prior_occurrence_id)
+                    if prior_occurrence is None:
+                        raise ReminderNotFound("previously operated occurrence no longer exists")
+                    return InteractiveOccurrenceResult(
+                        prior_code,
+                        prior_occurrence.title_snapshot,
+                        prior_occurrence.reminder_id,
+                        prior_occurrence.id,
+                    )
+            if identity.latest_interactive_occurrence_id is None:
+                raise ReminderNotFound("no interactive reminder has been delivered")
+
+            occurrence = await session.get(
+                ReminderOccurrence, identity.latest_interactive_occurrence_id
+            )
+            if occurrence is None:
+                raise ReminderNotFound("latest interactive occurrence no longer exists")
+            reminder = await session.get(Reminder, occurrence.reminder_id)
+            recipient = await session.scalar(
+                select(ReminderOccurrenceRecipient).where(
+                    ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                    ReminderOccurrenceRecipient.person_id == identity.person_id,
+                )
+            )
+            if reminder is None or recipient is None:
+                raise ReminderPermissionDenied("sender is not an occurrence recipient")
+
+            result = InteractiveOccurrenceResult(
+                "not_active", occurrence.title_snapshot, reminder.id, occurrence.id
+            )
+            if occurrence.status != "active" or recipient.status != RecipientStatus.PENDING.value:
+                if incoming is not None:
+                    incoming.event_payload = {
+                        **incoming.event_payload,
+                        "menu_result": result.code,
+                        "menu_occurrence_id": result.occurrence_id,
+                    }
+                return result
+
+            if operation == "complete":
+                recipient_values: dict[str, Any] = {
+                    "status": RecipientStatus.ACKNOWLEDGED.value,
+                    "acknowledged_at": instant,
+                    "acknowledged_by": identity.person_id,
+                    "next_notify_at": None,
+                }
+                result_code = "completed"
+            elif operation in {"snooze_10", "snooze_30"}:
+                minutes = 10 if operation == "snooze_10" else 30
+                recipient_values = {"next_notify_at": instant + timedelta(minutes=minutes)}
+                result_code = operation
+            elif operation == "ignore_today":
+                zone = ZoneInfo(reminder.timezone)
+                tomorrow = instant.astimezone(zone).date() + timedelta(days=1)
+                recipient_values = {
+                    "next_notify_at": datetime.combine(tomorrow, time.min, zone).astimezone(UTC)
+                }
+                result_code = "ignored_today"
+            else:
+                recipient_values = {
+                    "status": RecipientStatus.CANCELLED.value,
+                    "next_notify_at": None,
+                }
+                result_code = "stopped"
+
+            claimed_version = recipient.version
+            claimed = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(ReminderOccurrenceRecipient)
+                    .where(
+                        ReminderOccurrenceRecipient.id == recipient.id,
+                        ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                        ReminderOccurrenceRecipient.version == claimed_version,
+                    )
+                    .values(
+                        **recipient_values,
+                        claimed_by=None,
+                        claim_expires_at=None,
+                        updated_at=instant,
+                        version=claimed_version + 1,
+                    )
+                ),
+            )
+            if claimed.rowcount != 1:
+                result = InteractiveOccurrenceResult(
+                    "not_active", occurrence.title_snapshot, reminder.id, occurrence.id
+                )
+                if incoming is not None:
+                    incoming.event_payload = {
+                        **incoming.event_payload,
+                        "menu_result": result.code,
+                        "menu_occurrence_id": result.occurrence_id,
+                    }
+                return result
+
+            result = InteractiveOccurrenceResult(
+                result_code, occurrence.title_snapshot, reminder.id, occurrence.id
+            )
+            cancel_recipient_id: str | None = identity.person_id
+            if operation == "complete":
+                if occurrence.ack_policy_snapshot == AckPolicy.ANY.value:
+                    await session.execute(
+                        update(ReminderOccurrenceRecipient)
+                        .where(
+                            ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                            ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                        )
+                        .values(
+                            status="cancelled",
+                            next_notify_at=None,
+                            claimed_by=None,
+                            claim_expires_at=None,
+                            updated_at=instant,
+                            version=ReminderOccurrenceRecipient.version + 1,
+                        )
+                    )
+                    cancel_recipient_id = None
+                await self._recheck_occurrence_status(occurrence, session, instant)
+                if occurrence.status == "acknowledged":
+                    occurrence.completed_by = identity.person_id
+            elif operation == "stop":
+                pending_count = await session.scalar(
+                    select(func.count(ReminderOccurrenceRecipient.id)).where(
+                        ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                        ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                    )
+                )
+                if (pending_count or 0) == 0:
+                    occurrence.status = "cancelled"
+                    occurrence.completed_at = instant
+                    occurrence.completed_by = identity.person_id
+                    occurrence.updated_at = instant
+                    if (
+                        reminder.schedule_type == ScheduleType.ONCE.value
+                        or reminder.next_run_at is None
+                    ):
+                        reminder.status = ReminderStatus.COMPLETED.value
+                        reminder.updated_at = instant
+
+            notification_ids = select(Notification.id).where(
+                Notification.reminder_occurrence_id == occurrence.id
+            )
+            delivery_filters: builtins.list[Any] = [
+                Delivery.notification_id.in_(notification_ids),
+                Delivery.status.in_(("pending", "retry_wait")),
+            ]
+            if cancel_recipient_id is not None:
+                delivery_filters.append(Delivery.recipient_id == cancel_recipient_id)
+            await session.execute(
+                update(Delivery)
+                .where(*delivery_filters)
+                .values(
+                    status="cancelled",
+                    last_error_code="reminder_interactive_operation",
+                    last_error_message="reminder changed before delivery",
+                    updated_at=instant,
+                )
+            )
+
+            add_audit(
+                session,
+                self._clock,
+                actor_type="wecom_member",
+                actor_id=identity.person_id,
+                action=f"reminder.interactive.{operation}",
+                resource_type="reminder_occurrence",
+                resource_id=occurrence.id,
+                details={"result": result.code},
+            )
+            if incoming is not None:
+                incoming.event_payload = {
+                    **incoming.event_payload,
+                    "menu_result": result.code,
+                    "menu_occurrence_id": result.occurrence_id,
+                }
+
+        return result
 
     async def acknowledge(
         self,
@@ -522,7 +1523,6 @@ class ReminderService:
         sender_wecom_userid: str,
         now: datetime | None = None,
     ) -> AcknowledgementResult:
-        # The hash lookup avoids storing or scanning plaintext tokens.
         from app.domain.reminders import hash_action_token
 
         token_hash = hash_action_token(action_token)
@@ -547,7 +1547,9 @@ class ReminderService:
         now: datetime | None = None,
         expected_token: str | None = None,
     ) -> AcknowledgementResult:
-        instant = _utc(now or datetime.now(UTC))
+        instant = _utc(now or self._clock.now())
+        occurrence_id: str | None = None
+        cancel_recipient_id: str | None = None
         async with self._sessions() as session, session.begin():
             action = await session.get(NotificationAction, action_id)
             if action is None or (
@@ -561,45 +1563,128 @@ class ReminderService:
                     WeComIdentity.active.is_(True),
                 )
             )
-            recipient = await session.get(ReminderRecipient, action.recipient_id)
-            reminder = await session.get(Reminder, action.reminder_id)
-            if identity is None or recipient is None or reminder is None:
-                raise ReminderPermissionDenied("sender is not a reminder recipient")
-            if recipient.person_id != identity.person_id:
-                raise ReminderPermissionDenied("sender is not authorized for this action")
-            if reminder.status == ReminderStatus.COMPLETED.value:
-                return AcknowledgementResult("already_completed", reminder.id, True, 0)
-            if reminder.status != ReminderStatus.ACTIVE.value:
-                return AcknowledgementResult("not_active", reminder.id, False, 0)
-            if _utc(action.expires_at) < instant:
-                raise ReminderPermissionDenied("action token has expired")
-            if recipient.status == RecipientStatus.ACKNOWLEDGED.value:
-                return AcknowledgementResult("already_acknowledged", reminder.id, False, 0)
-            recipient.status = RecipientStatus.ACKNOWLEDGED.value
-            recipient.acknowledged_at = instant
-            action.consumed_at = instant
-            pending = await session.scalar(
-                select(ReminderRecipient.id).where(
-                    ReminderRecipient.reminder_id == reminder.id,
-                    ReminderRecipient.status == RecipientStatus.PENDING.value,
+            if identity is None:
+                raise ReminderPermissionDenied("sender is not recognized")
+
+            if action.occurrence_recipient_id:
+                occ_recipient = await session.get(
+                    ReminderOccurrenceRecipient, action.occurrence_recipient_id
                 )
+                occurrence = await session.get(ReminderOccurrence, action.occurrence_id)
+                if occ_recipient is None or occurrence is None:
+                    raise ReminderPermissionDenied("occurrence not found")
+                if occ_recipient.person_id != identity.person_id:
+                    raise ReminderPermissionDenied("sender is not authorized for this action")
+                if occurrence.status == "acknowledged":
+                    return AcknowledgementResult(
+                        "already_completed", occurrence.reminder_id, True, 0
+                    )
+                if occurrence.status != "active":
+                    return AcknowledgementResult("not_active", occurrence.reminder_id, False, 0)
+                if _utc(action.expires_at) < instant:
+                    raise ReminderPermissionDenied("action token has expired")
+                if occ_recipient.status == RecipientStatus.ACKNOWLEDGED.value:
+                    return AcknowledgementResult(
+                        "already_acknowledged", occurrence.reminder_id, False, 0
+                    )
+
+                occ_recipient.status = RecipientStatus.ACKNOWLEDGED.value
+                occ_recipient.acknowledged_at = instant
+                occ_recipient.acknowledged_by = identity.person_id
+                occ_recipient.next_notify_at = None
+                occ_recipient.claimed_by = None
+                occ_recipient.claim_expires_at = None
+                action.consumed_at = instant
+                occurrence_id = occurrence.id
+                cancel_recipient_id = identity.person_id
+
+                if occurrence.ack_policy_snapshot == AckPolicy.ANY.value:
+                    await session.execute(
+                        update(ReminderOccurrenceRecipient)
+                        .where(
+                            ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                            ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                        )
+                        .values(status="cancelled", next_notify_at=None)
+                    )
+                    occurrence.status = "acknowledged"
+                    occurrence.completed_at = instant
+                    occurrence.completed_by = identity.person_id
+                    occurrence.updated_at = instant
+                    completed = True
+                else:
+                    pending_count = await session.scalar(
+                        select(func.count(ReminderOccurrenceRecipient.id)).where(
+                            ReminderOccurrenceRecipient.occurrence_id == occurrence.id,
+                            ReminderOccurrenceRecipient.status == RecipientStatus.PENDING.value,
+                        )
+                    )
+                    if pending_count == 0:
+                        occurrence.status = "acknowledged"
+                        occurrence.completed_at = instant
+                        occurrence.completed_by = identity.person_id
+                        occurrence.updated_at = instant
+                        completed = True
+                    else:
+                        completed = False
+                reminder_id = occurrence.reminder_id
+                if completed:
+                    reminder = await session.get(Reminder, occurrence.reminder_id)
+                    if reminder is not None and (
+                        reminder.schedule_type == ScheduleType.ONCE.value
+                        or reminder.next_run_at is None
+                    ):
+                        reminder.status = ReminderStatus.COMPLETED.value
+                        reminder.updated_at = instant
+            else:
+                recipient = await session.get(ReminderRecipient, action.recipient_id)
+                reminder = await session.get(Reminder, action.reminder_id)
+                if recipient is None or reminder is None:
+                    raise ReminderPermissionDenied("sender is not a reminder recipient")
+                if recipient.person_id != identity.person_id:
+                    raise ReminderPermissionDenied("sender is not authorized for this action")
+                if reminder.status == ReminderStatus.COMPLETED.value:
+                    return AcknowledgementResult("already_completed", reminder.id, True, 0)
+                if reminder.status != ReminderStatus.ACTIVE.value:
+                    return AcknowledgementResult("not_active", reminder.id, False, 0)
+                if _utc(action.expires_at) < instant:
+                    raise ReminderPermissionDenied("action token has expired")
+                if recipient.status == RecipientStatus.ACKNOWLEDGED.value:
+                    return AcknowledgementResult("already_acknowledged", reminder.id, False, 0)
+                recipient.status = RecipientStatus.ACKNOWLEDGED.value
+                recipient.acknowledged_at = instant
+                action.consumed_at = instant
+                pending = await session.scalar(
+                    select(ReminderRecipient.id).where(
+                        ReminderRecipient.reminder_id == reminder.id,
+                        ReminderRecipient.status == RecipientStatus.PENDING.value,
+                    )
+                )
+                completed = reminder.ack_policy == AckPolicy.ANY.value or pending is None
+                if completed:
+                    reminder.status = ReminderStatus.COMPLETED.value
+                    reminder.next_run_at = None
+                    reminder.claimed_by = None
+                    reminder.claim_expires_at = None
+                    reminder.updated_at = instant
+                reminder_id = reminder.id
+
+        if occurrence_id is not None:
+            cancelled = await self._cancel_pending_deliveries(
+                reminder_id,
+                occurrence_id=occurrence_id,
+                recipient_id=None if completed else cancel_recipient_id,
             )
-            completed = reminder.ack_policy == AckPolicy.ANY.value or pending is None
-            if completed:
-                reminder.status = ReminderStatus.COMPLETED.value
-                reminder.next_run_at = None
-                reminder.claimed_by = None
-                reminder.claim_expires_at = None
-                reminder.updated_at = instant
-        cancelled = await self._cancel_pending_deliveries(action.reminder_id) if completed else 0
+        else:
+            cancelled = await self._cancel_pending_deliveries(reminder_id) if completed else 0
         return AcknowledgementResult(
-            "completed" if completed else "acknowledged", action.reminder_id, completed, cancelled
+            "completed" if completed else "acknowledged", reminder_id, completed, cancelled
         )
 
     async def _transition(
         self, reminder_id: str, operation: str, *, now: datetime | None
     ) -> Reminder:
-        instant = _utc(now or datetime.now(UTC))
+        instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
             reminder = await session.get(Reminder, reminder_id)
             if reminder is None:
@@ -620,103 +1705,41 @@ class ReminderService:
             reminder.claim_expires_at = None
             return reminder
 
-    async def _advance_after_accept(
+    async def _cancel_pending_deliveries(
         self,
         reminder_id: str,
-        worker_id: str,
-        now: datetime,
-        recipients: Sequence[ReminderRecipient],
-    ) -> None:
+        *,
+        occurrence_id: str | None = None,
+        recipient_id: str | None = None,
+    ) -> int:
         async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
-            if reminder is None or reminder.claimed_by != worker_id:
-                return
-            # Recheck after event acceptance: a concurrent acknowledgement may have completed it.
-            if reminder.status != ReminderStatus.ACTIVE.value:
-                reminder.claimed_by = None
-                reminder.claim_expires_at = None
-                return
-            reminder.reminder_count += 1
-            reminder.updated_at = now
-            for prior in recipients:
-                current = await session.get(ReminderRecipient, prior.id)
-                if current and current.status == RecipientStatus.PENDING.value:
-                    current.last_notified_at = now
-                    current.notify_count += 1
-            if reminder.require_ack:
-                exhausted = bool(
-                    reminder.max_reminders and reminder.reminder_count >= reminder.max_reminders
+            if occurrence_id is not None:
+                notification_ids = select(Notification.id).where(
+                    Notification.reminder_occurrence_id == occurrence_id
                 )
-                next_run = now + timedelta(seconds=reminder.repeat_interval_seconds or 300)
-                if exhausted or (reminder.stop_at and next_run >= _utc(reminder.stop_at)):
-                    reminder.status = ReminderStatus.EXPIRED.value
-                    reminder.next_run_at = None
-                    await session.execute(
-                        update(ReminderRecipient)
-                        .where(
-                            ReminderRecipient.reminder_id == reminder.id,
-                            ReminderRecipient.status == RecipientStatus.PENDING.value,
-                        )
-                        .values(status=RecipientStatus.EXPIRED.value)
-                    )
-                else:
-                    reminder.next_run_at = next_run
-            elif reminder.schedule_type == ScheduleType.ONCE.value:
-                reminder.status = ReminderStatus.COMPLETED.value
-                reminder.next_run_at = None
             else:
-                assert reminder.recurrence_rule is not None
-                recurring_next_run = next_rrule_occurrence(
-                    reminder.recurrence_rule,
-                    timezone=reminder.timezone,
-                    after=now,
-                    dtstart=reminder.scheduled_at or reminder.created_at,
+                reminder_events: Select[tuple[str]] = select(Event.id).where(
+                    Event.source_type == "reminder", Event.source_id == reminder_id
                 )
-                reminder.next_run_at = recurring_next_run
-                if recurring_next_run is None:
-                    reminder.status = ReminderStatus.COMPLETED.value
-            reminder.claimed_by = None
-            reminder.claim_expires_at = None
-
-    async def _expire_claim(self, reminder_id: str, worker_id: str, now: datetime) -> None:
-        async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
-            if reminder and reminder.claimed_by == worker_id:
-                reminder.status = ReminderStatus.EXPIRED.value
-                reminder.next_run_at = None
-                reminder.claimed_by = None
-                reminder.claim_expires_at = None
-                reminder.updated_at = now
-                await session.execute(
-                    update(ReminderRecipient)
-                    .where(
-                        ReminderRecipient.reminder_id == reminder.id,
-                        ReminderRecipient.status == RecipientStatus.PENDING.value,
-                    )
-                    .values(status=RecipientStatus.EXPIRED.value)
+                notification_ids = select(Notification.id).where(
+                    Notification.event_id.in_(reminder_events)
                 )
-
-    async def _cancel_pending_deliveries(self, reminder_id: str) -> int:
-        async with self._sessions() as session, session.begin():
-            reminder_events: Select[tuple[str]] = select(Event.id).where(
-                Event.source_type == "reminder", Event.source_id == reminder_id
-            )
-            notification_ids = select(Notification.id).where(
-                Notification.event_id.in_(reminder_events)
-            )
+            delivery_filter: builtins.list[Any] = [
+                Delivery.notification_id.in_(notification_ids),
+                Delivery.status.in_(("pending", "retry_wait")),
+            ]
+            if recipient_id is not None:
+                delivery_filter.append(Delivery.recipient_id == recipient_id)
             result = cast(
                 CursorResult[Any],
                 await session.execute(
                     update(Delivery)
-                    .where(
-                        Delivery.notification_id.in_(notification_ids),
-                        Delivery.status.in_(("pending", "retry_wait")),
-                    )
+                    .where(*delivery_filter)
                     .values(
                         status="cancelled",
                         last_error_code="reminder_acknowledged",
                         last_error_message="reminder stopped before delivery",
-                        updated_at=datetime.now(UTC),
+                        updated_at=self._clock.now(),
                     )
                 ),
             )

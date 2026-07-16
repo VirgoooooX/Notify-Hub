@@ -9,11 +9,13 @@ from app.api.dependencies import get_session, require_admin
 from app.api.errors import AppError
 from app.application.media_service import MediaService
 from app.infrastructure.database.models import Admin
+from app.infrastructure.database.reminder_models import Reminder, ReminderOccurrence
 from app.infrastructure.security.tokens import verify_media_signature
 from app.media.errors import MediaError
 from app.media.validation import MediaKind
 from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/v1/admin/media", tags=["admin-media"])
@@ -142,6 +144,20 @@ async def delete_media(
     service = _service(request)
     try:
         asset = await service.get(session, asset_id)
+        reminder_reference = await session.scalar(
+            select(Reminder.id).where(Reminder.media_asset_id == asset_id).limit(1)
+        )
+        occurrence_reference = await session.scalar(
+            select(ReminderOccurrence.id)
+            .where(ReminderOccurrence.media_asset_id_snapshot == asset_id)
+            .limit(1)
+        )
+        if reminder_reference is not None or occurrence_reference is not None:
+            raise AppError(
+                "media_in_use",
+                "Media asset is referenced by a reminder and cannot be deleted",
+                409,
+            )
         await service.delete(session, asset)
     except MediaError as exc:
         raise _map_error(exc) from exc

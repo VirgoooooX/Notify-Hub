@@ -6,7 +6,15 @@ from typing import Any
 
 from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
+from app.application.reminder_access import (
+    ReminderAccessService,
+    ReminderActor,
+    ReminderPermissions,
+)
+from app.application.reminder_service import ReminderCreate
 from app.config import Settings
+from app.domain.reminder_schedules import MisfirePolicy
+from app.domain.reminders import AckPolicy, ScheduleType
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.plugin_models import (
@@ -21,6 +29,9 @@ from app.plugin_runtime.context import (
     EventEmitter,
     PluginAIClient,
     PluginContext,
+    PluginReminderClient,
+    PluginReminderDraft,
+    PluginReminderReceipt,
     SecretResolver,
     StateStore,
     StateValue,
@@ -146,6 +157,58 @@ class _AuthorizedSecretResolver(SecretResolver):
         return await self._delegate.resolve(plugin_id, name)
 
 
+class _PluginReminderCreator:
+    def __init__(
+        self,
+        *,
+        access: ReminderAccessService,
+        plugin_id: str,
+        run_id: str,
+        permissions: ReminderPermissions,
+    ) -> None:
+        self._access = access
+        self._plugin_id = plugin_id
+        self._run_id = run_id
+        self._permissions = permissions
+
+    async def create(self, draft: PluginReminderDraft) -> PluginReminderReceipt:
+        result = await self._access.create(
+            ReminderCreate(
+                creator_person_id=draft.creator_person_id,
+                title=draft.title,
+                content=draft.content,
+                schedule_type=ScheduleType(draft.schedule_type),
+                timezone=draft.timezone,
+                recipient_ids=draft.recipient_ids,
+                scheduled_at=draft.scheduled_at,
+                recurrence_rule=draft.recurrence_rule,
+                interval_seconds=draft.interval_seconds,
+                cron_expression=draft.cron_expression,
+                start_at=draft.start_at,
+                end_at=draft.end_at,
+                misfire_policy=MisfirePolicy(draft.misfire_policy),
+                require_ack=draft.require_ack,
+                ack_policy=AckPolicy(draft.ack_policy),
+                repeat_interval_seconds=draft.repeat_interval_seconds,
+                max_reminders=draft.max_reminders,
+                stop_at=draft.stop_at,
+                content_type=draft.content_type,
+                media_asset_id=draft.media_asset_id,
+                url=draft.url,
+            ),
+            actor=ReminderActor("plugin", self._plugin_id),
+            permissions=self._permissions,
+            schedule_mode=draft.schedule_mode,
+            idempotency_key=draft.idempotency_key,
+            request_id=f"plugin-run:{self._run_id}",
+        )
+        return PluginReminderReceipt(
+            reminder_id=result.reminder.id,
+            status=result.reminder.status,
+            duplicate=result.duplicate,
+        )
+
+
 class PluginService:
     DEGRADED_AFTER = 5
     CIRCUIT_OPEN_AFTER = 10
@@ -162,6 +225,7 @@ class PluginService:
         media_service: MediaService | None = None,
         settings: Settings | None = None,
         ai_service: Any = None,
+        reminder_access: ReminderAccessService | None = None,
     ) -> None:
         self._factory = session_factory
         self.registry = registry
@@ -174,6 +238,7 @@ class PluginService:
         self._media_service = media_service
         self._settings = settings
         self._ai_service = ai_service
+        self._reminder_access = reminder_access
 
     async def initialize(self) -> None:
         self.registry.discover()
@@ -597,6 +662,27 @@ class PluginService:
                 run_id=run_id,
                 allowed_profiles=runtime_profiles,
                 service=self._ai_service,
+            ),
+            reminders=PluginReminderClient(
+                _PluginReminderCreator(
+                    access=self._reminder_access,
+                    plugin_id=plugin_id,
+                    run_id=run_id,
+                    permissions=ReminderPermissions(
+                        allow_create=manifest.permissions.reminders.create,
+                        allow_recurring=manifest.permissions.reminders.allow_recurring,
+                        allow_cron=manifest.permissions.reminders.allow_cron,
+                        allow_interactive=manifest.permissions.reminders.allow_interactive,
+                        allow_media=manifest.permissions.reminders.allow_media,
+                        allowed_recipients=tuple(manifest.permissions.reminders.allowed_recipients),
+                        max_active=manifest.permissions.reminders.max_active,
+                        min_interval_seconds=(manifest.permissions.reminders.min_interval_seconds),
+                        max_duration_seconds=(manifest.permissions.reminders.max_duration_seconds),
+                        max_notifications=manifest.permissions.reminders.max_notifications,
+                    ),
+                )
+                if self._reminder_access is not None and manifest.permissions.reminders.create
+                else None
             ),
         )
         try:

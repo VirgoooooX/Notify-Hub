@@ -87,6 +87,9 @@ class WeComIdentity(StringIdMixin, TimestampMixin, Base):
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id", ondelete="CASCADE"))
     user_id: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    latest_interactive_occurrence_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reminder_occurrences.id", ondelete="SET NULL")
+    )
     person: Mapped[Person] = relationship(back_populates="identities")
 
 
@@ -119,6 +122,11 @@ class ApiClient(StringIdMixin, TimestampMixin, Base):
     allow_critical: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allow_media: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allow_voice: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_reminders: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_recurring: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_cron: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    allow_interactive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    max_active_reminders: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -151,6 +159,9 @@ class Notification(StringIdMixin, Base):
     __tablename__ = "notifications"
     event_id: Mapped[str | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
     reminder_id: Mapped[str | None] = mapped_column(String(64))
+    reminder_occurrence_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reminder_occurrences.id", ondelete="SET NULL")
+    )
     message_type: Mapped[str] = mapped_column(String(20), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)

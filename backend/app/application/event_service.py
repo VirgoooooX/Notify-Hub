@@ -163,6 +163,7 @@ class EventService:
         title: str,
         content: str,
         recipients: list[str],
+        broadcast: bool = False,
         message_type: str = "text",
         level: str = "info",
         occurred_at: datetime | None = None,
@@ -171,10 +172,13 @@ class EventService:
         require_ack: bool = False,
         ack_policy: str | None = None,
         reminder_id: str | None = None,
+        reminder_occurrence_id: str | None = None,
         media_asset_id: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> AcceptResult:
         """Accept a trusted platform event through the same durable queue boundary."""
+        if broadcast and recipients != ["@all"]:
+            raise AppError("invalid_broadcast", "Broadcast must use the sole recipient @all", 422)
         if not recipients:
             raise AppError("recipient_required", "At least one explicit recipient is required", 422)
         key = (source_type, source_id, event_key)
@@ -210,6 +214,7 @@ class EventService:
                 id=new_id("ntf"),
                 event=event,
                 reminder_id=reminder_id,
+                reminder_occurrence_id=reminder_occurrence_id,
                 message_type=message_type,
                 title=title,
                 content=content,
@@ -224,13 +229,20 @@ class EventService:
                 expires_at=None,
             )
             session.add_all([event, notification])
-            for recipient_id in dict.fromkeys(recipients):
+            delivery_recipients: list[str | None] = (
+                [None] if broadcast else list(dict.fromkeys(recipients))
+            )
+            for recipient_id in delivery_recipients:
                 session.add(
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
                         channel="wecom",
-                        recipient_type=RecipientType.PERSON.value,
+                        recipient_type=(
+                            RecipientType.BROADCAST.value
+                            if broadcast
+                            else RecipientType.PERSON.value
+                        ),
                         recipient_id=recipient_id,
                         status=DeliveryStatus.PENDING.value,
                         attempt_count=0,
