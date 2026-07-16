@@ -1,276 +1,358 @@
-# Notify Hub
+<p align="center">
+  <img src="assets/brand/png/logo-horizontal-positive.png" alt="Notify Hub logo" width="420">
+</p>
 
-> **面向个人与家庭场景的自托管企业微信通知、提醒与 AI 监控插件平台**
+<h1 align="center">Notify Hub 企业微信通知与提醒中心</h1>
 
-<div align="center">
+<p align="center">
+  <a href="https://github.com/VirgoooooX/Notify-Hub">
+    <img src="https://img.shields.io/badge/Version-0.7.2-0873F9?style=for-the-badge" alt="Version 0.7.2" />
+  </a>
+  <a href="https://www.python.org/">
+    <img src="https://img.shields.io/badge/Python-3.12-07153F?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.12" />
+  </a>
+  <a href="https://fastapi.tiangolo.com/">
+    <img src="https://img.shields.io/badge/FastAPI-Async-009688?style=for-the-badge&logo=fastapi&logoColor=white" alt="FastAPI" />
+  </a>
+  <a href="https://vuejs.org/">
+    <img src="https://img.shields.io/badge/Vue-3-42B883?style=for-the-badge&logo=vuedotjs&logoColor=white" alt="Vue 3" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-AGPL--3.0-orange?style=for-the-badge" alt="AGPL-3.0" />
+  </a>
+</p>
 
-[![Version](https://img.shields.io/badge/Version-v0.6.0-emerald?style=flat-square)](https://github.com/VirgoooooX/Notify-Hub)
-[![Python](https://img.shields.io/badge/Python-3.12-blue?style=flat-square)](https://www.python.org/)
-[![Frontend](https://img.shields.io/badge/Frontend-Vue%203%20%7C%20TS%20%7C%20Vite-blueviolet?style=flat-square)](https://vuejs.org/)
-[![Deployment](https://img.shields.io/badge/Deployment-Docker%20%7C%20SQLite-darkgreen?style=flat-square)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-AGPL--3.0-orange?style=flat-square)](./LICENSE)
-
-</div>
-
-Notify Hub 是一个采用**模块化单体**（Modular Monolith）架构的轻量化自托管通知中心。它旨在将散落的监控源、提醒事项、AI 语义判定及企业微信投递，聚合在同一个安全自治的部署单元中。
-
----
-
-## 目录
-
-- [一、项目定位](#一项目定位)
-- [二、核心特性](#二核心特性)
-- [三、架构与流转逻辑](#三架构与流转逻辑)
-- [四、目录结构索引](#四目录结构索引)
-- [五、本地开发与测试](#五本地开发与测试)
-- [六、Docker 生产部署](#六docker-生产部署)
-- [七、数据安全与网络边界](#七数据安全与网络边界)
-- [八、开发路线图与非目标](#八开发路线图与非目标)
-- [九、开源许可](#九开源许可)
+> **Notify Hub** 是一个面向个人、家庭和小型自托管环境的企业微信通知与提醒平台。
+>
+> 它将外部事件、监控插件、AI 内容判定、单次与周期提醒、持续催办和企业微信投递收敛到一个可审计、可恢复的可靠消息链路中，并保持单容器、单数据库的轻量部署体验。
 
 ---
 
-## 一、项目定位
+## 🌟 核心能力
 
-* **核心平台**：负责敏感凭据隔离、外部事件接收、消息去重、任务调度、优先级投递及失败重试。
-* **监控插件**：作为相对隔离的子模块，连接推特、RSS 等特定数据源，判定增量变化并向核心提交标准化事件。
-* **AI 决策网关**：统一维护 LLM API 凭据、运行 Profile、Token 预算及持久化缓存。插件仅通过 Manifest 授权的 Profile 接口进行低成本判定。
+- 📬 **可靠事件与投递队列**
+  Event、Notification、Delivery 三层模型先持久化、后发送。API 返回 `202 Accepted` 时平台已经接管事件，服务重启后仍可继续投递。
 
-> [!IMPORTANT]
-> **代码隔离原则**：
-> 监控插件无权读取企业微信 Token 或 API 密钥，亦不能直接绕过平台执行出站网络请求或数据库写入。
+- ♻️ **端到端幂等与故障恢复**
+  来源提供稳定 `event_key`，数据库唯一约束负责最终兜底；Delivery 使用租约、心跳、失败退避与过期 claim 回收，降低重复发送和消息丢失风险。
+
+- 💬 **企业微信双向集成**
+  支持指定 UserID 的文字、图文、图片和语音投递，回调验签解密、Token 缓存、临时媒体上传，以及应用底部菜单中的提醒快捷操作。
+
+- ⏰ **完整提醒与持续催办**
+  支持 Once、Interval、Cron 调度，提醒定义与执行实例分离；可按接收人记录确认状态、重复催办、推迟、今日忽略、停止本次和完成结果。
+
+- 📣 **受控广播提醒**
+  仅 Web 管理员可以创建 `@all` 广播。交互式广播冻结成员快照，首次使用企业微信原生广播，后续只催办仍未完成的成员。
+
+- 🧩 **受控插件运行时**
+  插件通过 Manifest 声明网络、Secret、媒体、AI 和广播权限，只能使用 `PluginContext` 发出标准事件，不能直接访问企业微信渠道或业务数据库。
+
+- 🧠 **AI Gateway**
+  平台统一管理 Provider、模型允许列表、Profile、API Key、预算、缓存和调用审计。插件只能调用已授权且能力匹配的 Profile，无法读取明文密钥或自行指定远端模型。
+
+- 🖼️ **安全媒体处理**
+  图片与语音具有类型、尺寸、时长、下载跳转和 SSRF 边界；媒体资产统一入库、签名访问、引用保护并由后台任务进行有界清理。
+
+- 🖥️ **一体化管理后台**
+  提供运行概览、通知与投递、接收人、API Client、插件、AI Provider/Profile、提醒中心和系统设置等管理页面，并包含面向企业微信成员的移动提醒页面。
 
 ---
 
-## 二、核心特性
+## 🏗️ 系统架构
 
-1. **可靠投递**：采用“先落库再投递”的队列机制，确保消息即使网络波动也绝不丢失。
-2. **端到端幂等**：基于 `event_key` 和全局唯一约束，从源头过滤重复事件。
-3. **AI 辅助网关**：利用 LLM 语义模式（AI Profiles）进行推文/消息分类、预筛选和摘要，防止频繁触发无效通知。
-4. **轻量自研 UI**：拒绝臃肿的第三方 UI 框架，基于原生 CSS Design Tokens 构建极致响应、防泄露的现代化后台。
-5. **部署极其简单**：单镜像、单容器、内置 SQLite 与 Alembic，没有 Redis 或 RabbitMQ 等复杂基础设施负担。
-
----
-
-## 三、架构与流转逻辑
-
-### 3.1 消息流转链路
-
-以下是事件从外部监控源到投递至企业微信成员的完整生命周期：
+Notify Hub 采用**模块化单体**。API、Worker、插件运行时、企业微信适配器和前端静态资源共同打包进一个镜像，SQLite 是所有可恢复任务的事实来源。
 
 ```mermaid
-graph TD
-    A[监控源 X/RSS] -->|检测到增量| B(监控插件)
-    B -->|规则/AI Classifier| C{值得发送?}
-    C -->|是| D[标准化 Event]
-    D -->|校验 event_key 唯一性| E[核心数据库 SQLite]
-    E -->|202 Accepted| F[投递队列 Task Queue]
-    F -->|Delivery Worker| G[企业微信 Adapter]
-    G -->|出站 HTTPS| H[企业微信 App]
-    H -->|推送消息| I[接收人 UserID]
+flowchart LR
+    Client[外部系统 / API Client] --> EventAPI[Event API]
+    Scheduler[Plugin Scheduler] --> Runtime[Plugin Runtime]
+    Runtime --> Context[PluginContext]
+    Context --> EventService[EventService]
+    EventAPI --> EventService
+
+    Admin[Web 管理后台] --> AdminAPI[Admin API]
+    Member[企业微信成员] --> Callback[企业微信回调]
+    Callback --> Interaction[Interaction Worker]
+    Interaction --> ReminderService[Reminder / Conversation Service]
+    AdminAPI --> ReminderService
+    ReminderWorker[Reminder Worker] --> ReminderService
+    ReminderService --> EventService
+
+    EventService --> DB[(SQLite / WAL)]
+    DB --> DeliveryWorker[Delivery Worker]
+    DeliveryWorker --> WeCom[企业微信 Adapter]
+    WeCom --> Member
+
+    Runtime --> AIGateway[AI Gateway]
+    AIGateway --> AIProvider[OpenAI-compatible Provider]
 ```
 
-### 3.2 AI 网关调用契约
+核心边界：
 
-插件必须通过安全的 `context.ai` 代理，无权获取明文 API 密钥与远端模型直连地址：
-
-```mermaid
-sequenceDiagram
-    participant P as Plugin Runtime
-    participant C as AI Gateway (Core)
-    participant E as Database (Cache)
-    participant A as LLM Provider (Remote)
-    
-    P->>C: context.ai.classify(profile_id, content)
-    C->>C: 验证 Profile 授权状态与每日预算
-    alt 缓存命中 (Cache Hit)
-        C->>E: 查询最近缓存 (TTL)
-        E-->>C: 返回历史判定结果
-        C-->>P: 返回结果
-    else 缓存未命中 (Cache Miss)
-        C->>A: 携带 API Key 调用 (带 Timeout)
-        A-->>C: 返回结构化 JSON
-        C->>E: 写入持久化缓存
-        C-->>P: 返回结果
-    </div>
-```
+- API 路由只处理认证、校验、服务调用和 HTTP 响应映射；
+- 插件只发现事件，不直接发送企业微信消息；
+- 外部网络请求不放在数据库事务中；
+- Reminder、Plugin、Delivery 和 Interaction 状态均可从数据库恢复；
+- SQLite 部署只允许一个应用实例写入同一数据库。
 
 ---
 
-## 四、目录结构索引
+## 🔌 内置监控插件
+
+| 插件 | 用途 | 默认调度 | 能力 |
+| --- | --- | --- | --- |
+| `codex_x_monitor` | 监控指定 X 账号中的 Codex 用量重置消息 | 工作时段每 10 分钟 | X 数据源、AI 分类、可靠游标 |
+| `fabrizio_hwg_monitor` | 识别 Fabrizio Romano 的 “HERE WE GO” 转会消息 | 每 3 分钟 | X 数据源、媒体写入、规则匹配 |
+
+插件均包含 Manifest、配置模型、固定测试数据和单元测试。管理员可以在后台配置普通字段、独立 Secret、接收人、AI Profile 与调度规则。
+
+---
+
+## ⏰ 提醒中心
+
+提醒中心将“长期定义”和“某一次实际执行”分开建模：
+
+- `Reminder` 保存标题、内容、调度、接收人和长期状态；
+- `ReminderOccurrence` 表示某个计划时间产生的一次执行实例；
+- `ReminderOccurrenceRecipient` 保存每位接收人的确认、催办次数和下次通知时间；
+- Planner 只创建持久化实例，Escalation 流程通过数据库 claim 产生 Event；
+- 只有 Event 被接受或判定为重复后，系统才推进通知次数；
+- 企业微信菜单操作始终按 UserID 作用于最近一次成功投递的交互式提醒。
+
+管理员后台支持查看提醒详情、执行时间线、接收人状态和投递结果；企业微信成员可通过签名移动页面查看和管理自己的提醒。
+
+---
+
+## 📂 项目结构
 
 ```text
-.
-├── backend/                 # 后端 Python 应用 (FastAPI)
+notify-hub/
+├── assets/                         # 品牌资产与正式 Logo
+│   └── brand/
+│       ├── png/                    # README、文档和常规界面使用
+│       ├── svg/                    # 正式矢量源文件
+│       └── source/                 # 选稿过程文件
+├── backend/
 │   ├── app/
-│   │   ├── api/             # 路由与控制器 (管理接口与 Client 接口分离)
-│   │   ├── core/            # 核心机制 (加密、调度、任务队列、AI 网关)
-│   │   ├── db/              # SQLAlchemy 数据库模型与 Alembic 配置
-│   │   ├── domain/          # 领域边界 (通知、提醒、接收人实体逻辑)
-│   │   └── services/        # 业务逻辑服务 (微信投递、AI 请求、安全机制)
-│   └── alembic/             # 数据库结构演进迁移脚本
-├── frontend/                # 前端 Vue 3 单页应用
+│   │   ├── ai/                     # AI Provider 协议、Schema 与 Gateway
+│   │   ├── api/                    # Admin、Client、回调、媒体与移动端 API
+│   │   ├── application/            # Event、Reminder、Plugin 等应用服务
+│   │   ├── channels/wecom/         # 企业微信客户端、加解密与渠道适配器
+│   │   ├── domain/                 # 时钟、提醒草稿、调度与领域状态
+│   │   ├── infrastructure/         # 数据库、日志、安全与 SecretStore
+│   │   ├── media/                  # 下载、校验、处理、存储与语音适配
+│   │   ├── plugin_runtime/         # Manifest、Context、Registry 与 Runner
+│   │   ├── workers/                # Delivery、Reminder、Plugin 等 Worker
+│   │   └── main.py                 # FastAPI 应用工厂与生命周期装配
+│   ├── migrations/                 # Alembic 数据库迁移
+│   └── tests/                      # 后端契约、领域、安全与可靠性测试
+├── frontend/
+│   ├── public/brand/               # 前端使用的品牌矢量资源
 │   ├── src/
-│   │   ├── components/      # 重用展示及控制层包装组件
-│   │   ├── features/        # 功能切片组件 (插件、AI 管理面板)
-│   │   ├── styles/          # 模块化 CSS 设计系统 (Tokens, Reset, Semantic)
-│   │   └── views/           # 后台主页面 (工作台、提醒、消息、设置)
-│   └── tests/               # 前端 Vitest 单元测试
-├── plugins/                 # 核心内置插件模块 (如 Codex X Monitor)
-├── deploy/                  # Docker 容器化构建与部署脚本
-├── data/                    # 本地持久化挂载数据存储 (SQLite/Media/Logs)
-├── scripts/                 # 本地多平台一键开发运行脚本
-├── README.md                # 本文档
-└── pyproject.toml           # 依赖定义与打包配置文件
+│   │   ├── components/             # 数据展示、反馈、布局与 UI 原子组件
+│   │   ├── features/plugins/       # 插件配置功能切片
+│   │   ├── views/                  # 管理后台和移动提醒页面
+│   │   ├── stores/                 # Pinia 状态
+│   │   └── styles/                 # Design Tokens 与语义样式系统
+│   └── tests/                      # Vitest 前端测试
+├── plugins/
+│   ├── builtin/                    # 仓库内置可信插件
+│   ├── private/                    # 管理员手工部署的私有插件
+│   └── shared/                     # 插件共享的数据源与媒体能力
+├── deploy/                         # Dockerfile、Compose 与容器入口
+├── docs/                           # 架构、领域、API、安全、运维与 ADR
+├── scripts/                        # 开发启动、发布及维护脚本
+├── pyproject.toml                  # Python 依赖与质量工具配置
+└── README.md
 ```
 
 ---
 
-## 五、本地开发与测试
+## 🚀 Docker 部署
 
-### 5.1 环境要求
-* 后端：Python 3.12+ (不推荐 3.13+)
-* 前端：Node.js 22+ & npm 10+
+### 1. 准备配置
 
-### 5.2 极速一键启动 (推荐)
+```bash
+git clone https://github.com/VirgoooooX/Notify-Hub.git
+cd Notify-Hub
+cp .env.example .env
+```
 
-在 Windows 系统的 PowerShell 中，可以直接运行：
+编辑 `.env`，至少配置：
+
+```ini
+NOTIFY_HUB_PUBLIC_BASE_URL=https://notify.example.com
+NOTIFY_HUB_SECRET_ENCRYPTION_KEY=replace-with-a-strong-random-key
+NOTIFY_HUB_JWT_SECRET=replace-with-another-strong-random-key
+NOTIFY_HUB_PUBLIC_MEDIA_SIGNING_KEY=replace-with-a-public-media-signing-key
+
+NOTIFY_HUB_WECOM_CORP_ID=wwxxxxxxxxxxxxxxxx
+NOTIFY_HUB_WECOM_AGENT_ID=1000002
+NOTIFY_HUB_WECOM_SECRET=replace-with-wecom-app-secret
+```
+
+生产环境中的主加密密钥、JWT Secret 和公开媒体签名密钥必须至少 32 个字符。真实 `.env` 不得提交到版本库。
+
+> [!NOTE]
+> 应用生产模式要求 `NOTIFY_HUB_PUBLIC_MEDIA_SIGNING_KEY`。部署前请确认 Compose 的 `environment` 已透传该变量；当前配置模型不会接受内置开发值用于生产环境。
+
+### 2. 启动服务
+
+```bash
+docker compose -f deploy/docker-compose.yml config --quiet
+docker compose -f deploy/docker-compose.yml pull
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Compose 默认将服务绑定到 `127.0.0.1:8788`，建议通过 HTTPS 反向代理对外提供服务。容器启动前会自动执行 `alembic upgrade head`。
+
+### 3. 初始化管理员
+
+```bash
+docker compose -f deploy/docker-compose.yml exec notify-hub \
+  python -m app.cli.reset_admin_password --username admin
+```
+
+### 4. 检查状态
+
+```bash
+curl --fail http://127.0.0.1:8788/health/live
+curl --fail http://127.0.0.1:8788/health/ready
+docker compose -f deploy/docker-compose.yml logs -f --tail 200
+```
+
+> [!IMPORTANT]
+> Notify Hub 当前使用 SQLite。不要同时运行两个连接同一数据库的容器副本，也不要在应用运行时直接覆盖数据库文件。
+
+---
+
+## 🛠️ Windows 本地开发
+
+### 环境要求
+
+- Python `>= 3.12, < 3.13`
+- Node.js 22
+- npm 10+
+- PowerShell 7 或 Windows PowerShell 5.1
+
+### 一键启动
+
 ```powershell
 .\scripts\start-dev.ps1
 ```
-该脚本会自动创建 Python 虚拟环境 `.venv`、安装前后端依赖、执行 SQLite 迁移、监听本地端口并打开浏览器 `http://127.0.0.1:5173`。
 
-* **只运行服务，不自动打开浏览器**：
-  ```powershell
-  .\scripts\start-dev.ps1 -NoBrowser
-  ```
-* **允许同局域网内其他设备访问 (监听 0.0.0.0)**：
-  ```powershell
-  .\scripts\start-dev.ps1 -Lan
-  ```
-* **绑定反向代理自定义测试域名**：
-  ```powershell
-  .\scripts\start-dev.ps1 -Lan -AllowedHosts notify.example.com
-  ```
+脚本会同步后端与前端依赖、执行 Alembic 迁移，并分别启动：
 
-### 5.3 管理员账号初始化
+- 管理后台：`http://127.0.0.1:5173`
+- 后端 API：`http://127.0.0.1:8000`
+- OpenAPI：`http://127.0.0.1:8000/docs`
 
-首次运行服务，需在本地命令行重置或创建你的管理员密码（至少 12 位）：
+常用参数：
+
+```powershell
+# 不自动打开浏览器
+.\scripts\start-dev.ps1 -NoBrowser
+
+# 允许局域网访问
+.\scripts\start-dev.ps1 -Lan
+
+# 仅启动单个服务
+.\scripts\start-dev.ps1 -Service backend
+.\scripts\start-dev.ps1 -Service frontend
+```
+
+首次创建或重置管理员密码：
+
 ```powershell
 .\.venv\Scripts\python.exe -m app.cli.reset_admin_password --username admin
 ```
 
-### 5.4 手动按步骤开发
+---
 
-如果希望手动控制，请在不同终端窗口依次执行：
-
-**后端服务：**
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m alembic -c backend\alembic.ini upgrade head
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
-```
-
-**前端服务：**
-```powershell
-cd frontend
-npm ci
-npm run dev
-```
-
-### 5.5 本地质量门禁与测试
-
-在提交代码前，请确保以下自动化校验全部通过：
+## 🧪 质量门禁
 
 ```powershell
-# 1. 后端 Ruff 格式化与静态检查
+# Python 格式、静态检查与测试
 .\.venv\Scripts\ruff.exe format --check backend plugins
 .\.venv\Scripts\ruff.exe check backend plugins
 .\.venv\Scripts\mypy.exe backend/app plugins
-
-# 2. 后端 Pytest 测试
 .\.venv\Scripts\pytest.exe
 
-# 3. 前端测试与打包
-cd frontend
+# Vue / TypeScript
+Set-Location frontend
 npm run lint
 npm run typecheck
 npm run test
 npm run build
 ```
 
----
-
-## 六、Docker 生产部署
-
-Notify Hub 采用单镜像部署。在生产环境中，**请确保只运行一个容器副本**以防止 SQLite 并发写入冲突。
-
-### 6.1 配置环境变量
-
-复制并修改本地配置，在仓库根目录新建 `.env` 文件（已默认加入 `.gitignore`）：
-
-```ini
-# 基础配置
-NOTIFY_HUB_PUBLIC_BASE_URL=https://notify.yourdomain.com
-NOTIFY_HUB_SECRET_ENCRYPTION_KEY=your-32-byte-hex-encryption-key
-NOTIFY_HUB_JWT_SECRET=your-secure-jwt-secret-string
-
-# 企业微信出站配置
-NOTIFY_HUB_WECOM_CORP_ID=ww123456789abc
-NOTIFY_HUB_WECOM_AGENT_ID=1000002
-NOTIFY_HUB_WECOM_SECRET=wecom-application-secret
-NOTIFY_HUB_WECOM_CALLBACK_TOKEN=callback-token-defined-in-wecom
-NOTIFY_HUB_WECOM_CALLBACK_AES_KEY=callback-aes-key-defined-in-wecom
-```
-
-### 6.2 容器一键启动
-
-从仓库根目录构建镜像并后台启动：
-
-```bash
-# 校验 Compose 配置
-docker compose -f deploy/docker-compose.yml config --quiet
-
-# 构建与运行
-docker compose -f deploy/docker-compose.yml build
-docker compose -f deploy/docker-compose.yml up -d
-```
-
-### 6.3 运维常用命令
-
-* **查看日志**：
-  ```bash
-  docker compose -f deploy/docker-compose.yml logs -f --tail 200
-  ```
-* **手动触发迁移**：
-  ```bash
-  docker compose -f deploy/docker-compose.yml run --rm notify-hub migrate
-  ```
+测试覆盖事件幂等、数据库约束、Delivery 重试与租约、提醒状态转换、插件隔离、AI Gateway、企业微信加解密、媒体安全、回调重放和服务重启恢复等关键边界。
 
 ---
 
-## 七、数据安全与网络边界
+## 🛡️ 安全与可靠性
 
-* **凭据机密防护**：敏感设置（如 API Key）在 SQLite 数据库中经过 `AES-256-GCM` 进行字段级加密存储，密钥派生于宿主机环境变量 `NOTIFY_HUB_SECRET_ENCRYPTION_KEY`。
-* **安全网络约束**：除非显式启用“允许私网端点”，否则 AI Provider 出站网络请求只允许连通公网，防止服务端请求伪造（SSRF）对局域网其他服务发起攻击。
-* **自建 HTTPS 代理**：若企业微信 API 或 OpenAI 请求需要通过中转，可在 `Settings` 中独立指定出站 proxy 地址，保障核心通道机密安全性。
+> [!IMPORTANT]
+> **Secret 不回显**
+>
+> 企业微信 Secret、插件 Cookie、AI API Key 等敏感配置由环境变量或加密 SecretStore 管理。管理 API 只返回“是否已配置”和来源，不返回明文。
+
+> [!TIP]
+> **最小权限插件**
+>
+> 插件必须在 Manifest 中声明网络域名、Secret 名称、AI 能力、媒体写入和广播权限。插件无法获得企业微信 Token，也不能访问 ORM Session 或业务表。
+
+> [!WARNING]
+> **单实例 SQLite**
+>
+> WAL、busy timeout 和短事务提高了单实例可靠性，但不构成多实例协调机制。需要高可用或高并发写入时，应先迁移 PostgreSQL，再拆分 API、Worker 和 Scheduler。
+
+其他保护包括：
+
+- 管理员身份与 API Client 身份完全分离；
+- 管理员密码使用 Argon2 哈希；
+- Access Token、Refresh Token、移动端签名和公开媒体 URL 分用途签名；
+- 企业微信回调先验签解密，再持久化并异步处理；
+- 外部 HTTP 请求具有连接/总超时、地址校验和稳定错误归一化；
+- 日志不记录 Secret、Access Token、完整回调 XML 或敏感正文；
+- 广播、手工重试、配置更新和维护操作进入审计记录。
 
 ---
 
-## 八、开发路线图与非目标
+## 📚 文档索引
 
-### 8.1 规划中特性 (Roadmap)
-* **v0.7.x**：接入企业微信交互卡片回调，点击按钮可直接延后、取消或完成特定提醒。
-* **v0.8.x**：支持语音投递与回调接收，提供本地 ASR/TTS 插件适配。
-
-### 8.2 非目标 (Non-Goals)
-* 不提供无界多租户 SaaS 托管服务。
-* 不允许在后台上传、在线修改或任意执行不可信的 Python 脚本。
-* 核心平台不依赖 Redis、RabbitMQ 等多节点服务，始终保持简单的单机部署能力。
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/00-product-scope.md`](docs/00-product-scope.md) | 产品边界、角色与核心用例 |
+| [`docs/01-architecture.md`](docs/01-architecture.md) | 模块化单体架构和依赖方向 |
+| [`docs/02-domain-model.md`](docs/02-domain-model.md) | Event、Delivery、Reminder 等领域模型 |
+| [`docs/03-plugin-development.md`](docs/03-plugin-development.md) | 插件 Manifest、Context 与开发契约 |
+| [`docs/04-api-contracts.md`](docs/04-api-contracts.md) | Admin、Client 与回调 API 契约 |
+| [`docs/07-security-and-reliability.md`](docs/07-security-and-reliability.md) | 安全边界与恢复要求 |
+| [`docs/08-deployment-and-operations.md`](docs/08-deployment-and-operations.md) | 部署、备份、升级和故障排查 |
+| [`docs/13-ai-gateway.md`](docs/13-ai-gateway.md) | AI Gateway 控制面与调用约束 |
+| [`docs/14-reminder-center-development-plan.md`](docs/14-reminder-center-development-plan.md) | 提醒中心设计与开发计划 |
+| [`docs/15-reminder-operations.md`](docs/15-reminder-operations.md) | 提醒运维、恢复和发布验收 |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | 已接受的架构决策记录 |
 
 ---
 
-## 九、开源许可
+## 🚧 产品边界
 
-本项目基于 **[GNU Affero General Public License v3.0 (AGPL-3.0)](./LICENSE)** 协议开源。凡是通过网络与该服务交互的修改版，均必须向社区公开其修改版的完整源代码。
+Notify Hub 专注于“发现事件并可靠通知”，当前明确不做：
+
+- 多租户商业 SaaS、计费和组织隔离；
+- Home Assistant、n8n 或通用可视化工作流的替代品；
+- 在线上传并立即执行任意 Python 包或脚本；
+- 允许 LLM 直接修改数据库、执行系统命令或决定幂等语义；
+- 为尚未出现的扩展需求提前引入 Redis、RabbitMQ 或微服务；
+- 在 SQLite 模式下运行共享同一数据库的多个应用副本。
+
+---
+
+## 📄 开源许可
+
+Notify Hub 基于 [GNU Affero General Public License v3.0](LICENSE) 开源。
+
+如果你修改本项目并通过网络向用户提供服务，需要按照 AGPL-3.0 的要求向这些用户提供对应修改版本的完整源代码。
