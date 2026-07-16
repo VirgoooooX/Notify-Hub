@@ -1,9 +1,24 @@
+# ruff: noqa: S603, S607
+
 import argparse
 import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+VERSION_FILES = (
+    "pyproject.toml",
+    "uv.lock",
+    "backend/app/main.py",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "frontend/src/views/LoginView.vue",
+    "frontend/src/views/SettingsView.vue",
+    "frontend/src/layouts/AppLayout.vue",
+    "README.md",
+)
+VERSION_PATTERN = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?"
 
 
 def get_current_version(project_root: Path) -> str:
@@ -26,7 +41,7 @@ def bump_version_string(current_version: str, bump_type: str) -> str:
         print(f"Error: Version string {current_version!r} is not semver compliant.")
         sys.exit(1)
 
-    major, minor, patch, extra = match.groups()
+    major, minor, patch, _extra = match.groups()
     major, minor, patch = int(major), int(minor), int(patch)
 
     if bump_type == "major":
@@ -50,18 +65,36 @@ def update_pyproject(project_root: Path, new_version: str) -> None:
     print(f"Updated: {pyproject_path.name}")
 
 
+def update_uv_lock(project_root: Path, new_version: str) -> None:
+    lock_path = project_root / "uv.lock"
+    if not lock_path.is_file():
+        print(f"Warning: {lock_path} not found. Skipping uv lock version bump.")
+        return
+    content = lock_path.read_text(encoding="utf-8")
+    new_content, replacements = re.subn(
+        r'(\[\[package\]\]\r?\nname = "notify-hub"\r?\nversion = ")[^"]+(")',
+        f"\\g<1>{new_version}\\g<2>",
+        content,
+        count=1,
+    )
+    if replacements != 1:
+        raise RuntimeError("Could not find the notify-hub package version in uv.lock")
+    lock_path.write_text(new_content, encoding="utf-8")
+    print("Updated: uv.lock")
+
+
 def update_backend_main(project_root: Path, new_version: str) -> None:
     main_path = project_root / "backend" / "app" / "main.py"
     if not main_path.is_file():
         print(f"Warning: {main_path} not found. Skipping backend version bump.")
         return
     content = main_path.read_text(encoding="utf-8")
-    # Replace version="0.3.0" inside FastAPI initialization
+    # Replace the version inside FastAPI initialization.
     new_content = re.sub(
         r'(version\s*=\s*")([^"]+)(")', f"\\g<1>{new_version}\\g<3>", content, count=1
     )
     main_path.write_text(new_content, encoding="utf-8")
-    print(f"Updated: backend/app/main.py")
+    print("Updated: backend/app/main.py")
 
 
 def update_frontend_package(project_root: Path, new_version: str) -> None:
@@ -73,13 +106,11 @@ def update_frontend_package(project_root: Path, new_version: str) -> None:
     data = json.loads(pkg_path.read_text(encoding="utf-8"))
     data["version"] = new_version
     pkg_path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"Updated: frontend/package.json")
+    print("Updated: frontend/package.json")
 
-    # Try sync package-lock.json using npm if available
     lock_path = project_root / "frontend" / "package-lock.json"
     if lock_path.is_file():
         try:
-            # First try modifying via json directly to make it fallback-safe
             lock_data = json.loads(lock_path.read_text(encoding="utf-8"))
             if "version" in lock_data:
                 lock_data["version"] = new_version
@@ -88,19 +119,9 @@ def update_frontend_package(project_root: Path, new_version: str) -> None:
             lock_path.write_text(
                 json.dumps(lock_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
             )
-            print(f"Updated: frontend/package-lock.json (JSON fallback)")
-
-            # Call npm install to ensure clean formatting
-            subprocess.run(
-                ["npm", "install", "--package-lock-only"],
-                cwd=str(project_root / "frontend"),
-                shell=True,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            print("Updated: frontend/package-lock.json")
         except Exception as exc:
-            print(f"Warning: Failed to format package-lock.json with npm: {exc}")
+            raise RuntimeError(f"Failed to update frontend/package-lock.json: {exc}") from exc
 
 
 def update_frontend_files_version(project_root: Path, new_version: str) -> None:
@@ -109,36 +130,72 @@ def update_frontend_files_version(project_root: Path, new_version: str) -> None:
     if login_path.is_file():
         content = login_path.read_text(encoding="utf-8")
         new_content = re.sub(
-            r'(NOTIFY HUB / RELEASE\s+)([0-9.]+)',
+            rf"(NOTIFY HUB / RELEASE\s+){VERSION_PATTERN}",
             f"\\g<1>{new_version}",
-            content
+            content,
         )
         login_path.write_text(new_content, encoding="utf-8")
-        print(f"Updated: frontend/src/views/LoginView.vue")
+        print("Updated: frontend/src/views/LoginView.vue")
 
     # 2. Update SettingsView.vue
     settings_path = project_root / "frontend" / "src" / "views" / "SettingsView.vue"
     if settings_path.is_file():
         content = settings_path.read_text(encoding="utf-8")
         new_content = re.sub(
-            r"(version:\s*')([0-9.]+)(')",
-            f"\\g<1>{new_version}\\g<3>",
-            content
+            rf"(version:\s*'){VERSION_PATTERN}(')",
+            f"\\g<1>{new_version}\\g<2>",
+            content,
         )
         settings_path.write_text(new_content, encoding="utf-8")
-        print(f"Updated: frontend/src/views/SettingsView.vue")
+        print("Updated: frontend/src/views/SettingsView.vue")
 
     # 3. Update AppLayout.vue
     layout_path = project_root / "frontend" / "src" / "layouts" / "AppLayout.vue"
     if layout_path.is_file():
         content = layout_path.read_text(encoding="utf-8")
         new_content = re.sub(
-            r'(OPERATIONS\s+/\s+)([0-9.]+)',
+            rf"(OPERATIONS\s+/\s+){VERSION_PATTERN}",
             f"\\g<1>{new_version}",
-            content
+            content,
         )
         layout_path.write_text(new_content, encoding="utf-8")
-        print(f"Updated: frontend/src/layouts/AppLayout.vue")
+        print("Updated: frontend/src/layouts/AppLayout.vue")
+
+
+def update_readme_version(project_root: Path, new_version: str) -> None:
+    readme_path = project_root / "README.md"
+    if not readme_path.is_file():
+        print(f"Warning: {readme_path} not found. Skipping README version bump.")
+        return
+    content = readme_path.read_text(encoding="utf-8")
+    badge_version = new_version.replace("-", "--")
+    new_content, badge_replacements = re.subn(
+        r"(img\.shields\.io/badge/Version-)\d+\.\d+\.\d+(?:--[A-Za-z0-9.]+)?"
+        r"(-0873F9\?style=for-the-badge)",
+        f"\\g<1>{badge_version}\\g<2>",
+        content,
+        count=1,
+    )
+    new_content, alt_replacements = re.subn(
+        r'(alt="Version )[^"]+("\s*/>)',
+        f"\\g<1>{new_version}\\g<2>",
+        new_content,
+        count=1,
+    )
+    if badge_replacements != 1 or alt_replacements != 1:
+        raise RuntimeError("Could not find the version badge and alt text in README.md")
+    readme_path.write_text(new_content, encoding="utf-8")
+    print("Updated: README.md")
+
+
+def update_version_files(project_root: Path, new_version: str) -> None:
+    update_pyproject(project_root, new_version)
+    update_uv_lock(project_root, new_version)
+    update_backend_main(project_root, new_version)
+    update_frontend_package(project_root, new_version)
+    update_frontend_files_version(project_root, new_version)
+    update_readme_version(project_root, new_version)
+
 
 def git_operations(project_root: Path, new_version: str, auto_push: bool) -> None:
     tag_name = f"v{new_version}"
@@ -161,16 +218,7 @@ def git_operations(project_root: Path, new_version: str, auto_push: bool) -> Non
     )
 
     # 2. Stage all version-modified files together
-    files_to_stage = [
-        "pyproject.toml",
-        "backend/app/main.py",
-        "frontend/package.json",
-        "frontend/package-lock.json",
-        "frontend/src/views/LoginView.vue",
-        "frontend/src/views/SettingsView.vue",
-        "frontend/src/layouts/AppLayout.vue",
-    ]
-    for rel_path in files_to_stage:
+    for rel_path in VERSION_FILES:
         file_path = project_root / rel_path
         if file_path.is_file():
             subprocess.run(["git", "add", rel_path], cwd=str(project_root), check=True)
@@ -218,12 +266,12 @@ def git_operations(project_root: Path, new_version: str, auto_push: bool) -> Non
         print(f"Created Git Tag:    {tag_name}")
 
     if auto_push:
-        print(f"\nPushing branches and tags to origin...")
+        print("\nPushing branches and tags to origin...")
         subprocess.run(["git", "push", "origin", "main"], cwd=str(project_root), check=True)
         subprocess.run(["git", "push", "origin", tag_name], cwd=str(project_root), check=True)
         print("Successfully pushed to GitHub. Release workflow triggered!")
     else:
-        print(f"\nTo trigger the automatic release pipeline, run:")
+        print("\nTo trigger the automatic release pipeline, run:")
         print(f"  git push origin main && git push origin {tag_name}")
 
 
@@ -242,7 +290,7 @@ def main() -> None:
     project_root = Path(__file__).parent.parent
     current_version = get_current_version(project_root)
 
-    print(f"--- Notify Hub Version Bump Tool ---")
+    print("--- Notify Hub Version Bump Tool ---")
     print(f"Current version: {current_version}")
 
     new_version = None
@@ -260,7 +308,7 @@ def main() -> None:
         print(f"  1) patch: {current_version} -> {v_patch} (Bug fixes)")
         print(f"  2) minor: {current_version} -> {v_minor} (Features, updates)")
         print(f"  3) major: {current_version} -> {v_major} (Breaking changes)")
-        print(f"  4) custom: Enter version manually")
+        print("  4) custom: Enter version manually")
 
         choice = input("\nEnter choice (1-4): ").strip()
         if choice == "1":
@@ -280,17 +328,14 @@ def main() -> None:
         sys.exit(1)
 
     # Validate version format
-    if not re.match(r"^\d+\.\d+\.\d+(?:-.*)?$", new_version):
+    if not re.fullmatch(VERSION_PATTERN, new_version):
         print(f"Error: Target version {new_version!r} is invalid.")
         sys.exit(1)
 
     print(f"\nBumping version: {current_version} -> {new_version}...")
 
     # Update files
-    update_pyproject(project_root, new_version)
-    update_backend_main(project_root, new_version)
-    update_frontend_package(project_root, new_version)
-    update_frontend_files_version(project_root, new_version)
+    update_version_files(project_root, new_version)
 
     # Commit and tag
     auto_push = args.push
