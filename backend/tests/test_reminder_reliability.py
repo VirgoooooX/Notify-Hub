@@ -305,6 +305,149 @@ async def test_escalation_emit_failure_preserves_attempt_and_is_retryable(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_daily_continuous_reminder_stops_after_completion(
+    api: tuple[Any, Any],
+) -> None:
+    _client, app = api
+    now = datetime.now(UTC).replace(microsecond=0)
+    person_id = "person_daily_complete"
+    await _add_person(app, person_id, wecom_user_id="daily-complete-user")
+    service = app.state.reminder_service
+    reminder = await service.create(
+        ReminderCreate(
+            creator_person_id=person_id,
+            title="Daily parking fee reminder",
+            content="Pay the parking fee",
+            schedule_type=ScheduleType.ONCE,
+            timezone="UTC",
+            recipient_ids=(person_id,),
+            scheduled_at=now,
+            require_ack=True,
+            ack_policy=AckPolicy.ANY,
+            repeat_interval_seconds=86_400,
+            max_reminders=3,
+        ),
+        now=now,
+    )
+    assert _stored_utc(reminder.stop_at) == now + timedelta(days=3)
+    assert reminder.escalation_stop_after_seconds == 3 * 86_400
+
+    assert await service.claim_due(worker_id="daily-planner", now=now) == [reminder.id]
+    await service.trigger_claimed(reminder.id, worker_id="daily-planner", now=now)
+    async with app.state.session_factory() as session:
+        occurrence = await session.scalar(
+            select(ReminderOccurrence).where(ReminderOccurrence.reminder_id == reminder.id)
+        )
+    assert occurrence is not None
+    delivery_worker = DeliveryWorker(
+        app.state.session_factory,
+        FakeChannel(),
+        app.state.clock,
+        "daily-delivery-worker",
+    )
+
+    first_due = await service.claim_due_recipients(worker_id="daily-first", now=now)
+    assert len(first_due) == 1
+    assert await service.notify_recipient(first_due[0], worker_id="daily-first", now=now)
+    assert await delivery_worker.process_one()
+
+    second_at = now + timedelta(days=1)
+    second_due = await service.claim_due_recipients(worker_id="daily-second", now=second_at)
+    assert second_due == first_due
+    assert await service.notify_recipient(second_due[0], worker_id="daily-second", now=second_at)
+    assert await delivery_worker.process_one()
+
+    result = await service.operate_latest_interactive(
+        sender_wecom_userid="daily-complete-user",
+        operation="complete",
+        now=second_at + timedelta(minutes=1),
+    )
+    assert result.code == "completed"
+    assert (
+        await service.claim_due_recipients(worker_id="daily-third", now=now + timedelta(days=2))
+        == []
+    )
+
+    async with app.state.session_factory() as session:
+        recipient = await session.get(ReminderOccurrenceRecipient, first_due[0])
+        stored_occurrence = await session.get(ReminderOccurrence, occurrence.id)
+        event_count = await session.scalar(
+            select(func.count(Event.id)).where(Event.source_id == reminder.id)
+        )
+    assert recipient is not None
+    assert recipient.status == "acknowledged"
+    assert recipient.notify_count == 2
+    assert recipient.next_notify_at is None
+    assert stored_occurrence is not None and stored_occurrence.status == "acknowledged"
+    assert event_count == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_daily_continuous_reminder_sends_three_times_without_completion(
+    api: tuple[Any, Any],
+) -> None:
+    _client, app = api
+    now = datetime.now(UTC).replace(microsecond=0)
+    person_id = "person_daily_exhausted"
+    await _add_person(app, person_id)
+    service = app.state.reminder_service
+    reminder = await service.create(
+        ReminderCreate(
+            creator_person_id=person_id,
+            title="Daily parking fee reminder",
+            content="Pay the parking fee",
+            schedule_type=ScheduleType.ONCE,
+            timezone="UTC",
+            recipient_ids=(person_id,),
+            scheduled_at=now,
+            require_ack=True,
+            ack_policy=AckPolicy.ANY,
+            repeat_interval_seconds=86_400,
+            max_reminders=3,
+        ),
+        now=now,
+    )
+    assert await service.claim_due(worker_id="daily-planner", now=now) == [reminder.id]
+    await service.trigger_claimed(reminder.id, worker_id="daily-planner", now=now)
+
+    recipient_id: str | None = None
+    for index in range(3):
+        instant = now + timedelta(days=index)
+        claimed = await service.claim_due_recipients(worker_id=f"daily-send-{index}", now=instant)
+        assert len(claimed) == 1
+        recipient_id = claimed[0]
+        acceptance = await service.notify_recipient(
+            recipient_id, worker_id=f"daily-send-{index}", now=instant
+        )
+        assert acceptance is not None and acceptance.accepted
+
+    assert recipient_id is not None
+    final_claim = await service.claim_due_recipients(
+        worker_id="daily-fourth", now=now + timedelta(days=3)
+    )
+    assert final_claim == [recipient_id]
+    assert (
+        await service.notify_recipient(
+            recipient_id, worker_id="daily-fourth", now=now + timedelta(days=3)
+        )
+        is None
+    )
+
+    async with app.state.session_factory() as session:
+        recipient = await session.get(ReminderOccurrenceRecipient, recipient_id)
+        event_count = await session.scalar(
+            select(func.count(Event.id)).where(Event.source_id == reminder.id)
+        )
+    assert recipient is not None
+    assert recipient.status == "expired"
+    assert recipient.notify_count == 3
+    assert recipient.next_notify_at is None
+    assert event_count == 3
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_recipient_claim_is_recovered_only_after_lease_expires(
     api: tuple[Any, Any],
 ) -> None:

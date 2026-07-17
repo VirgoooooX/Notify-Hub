@@ -23,7 +23,7 @@ frontend/.vite/
 # Local package-manager state
 .npm/
 .python-version
-
+docs/project-log.md
 # Runtime data and secrets
 .env
 .env.*
@@ -46,3 +46,6 @@ frontend/.vite/
 .DS_Store
 Thumbs.db
 .codegraph
+.codex/generated
+.playwright-cli
+.tmp

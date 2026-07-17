@@ -157,13 +157,19 @@ def validate_continuous_limits(
         return None, None, None
     interval = repeat_interval_seconds or 300
     maximum = max_reminders or 12
-    stop = normalize_utc(stop_at) if stop_at else normalize_utc(start_at) + timedelta(hours=24)
     if interval < 300:
         raise ReminderError("continuous reminder interval must be at least 300 seconds")
     if maximum < 1 or maximum > 12:
         raise ReminderError("continuous reminder max_reminders must be between 1 and 12")
-    if stop > normalize_utc(start_at) + timedelta(hours=24):
-        raise ReminderError("continuous reminder duration cannot exceed 24 hours")
+    maximum_duration = timedelta(days=30)
+    default_duration_seconds = max(86_400, interval * maximum)
+    if default_duration_seconds > int(maximum_duration.total_seconds()):
+        raise ReminderError("continuous reminder duration cannot exceed 30 days")
+    default_duration = timedelta(seconds=default_duration_seconds)
+    normalized_start = normalize_utc(start_at)
+    stop = normalize_utc(stop_at) if stop_at else normalized_start + default_duration
+    if stop > normalized_start + maximum_duration:
+        raise ReminderError("continuous reminder duration cannot exceed 30 days")
     return interval, maximum, stop
 
 

@@ -36,12 +36,27 @@ def test_continuous_defaults_and_limits() -> None:
         stop_at=None,
         start_at=start,
     ) == (300, 12, start + timedelta(hours=24))
+    assert validate_continuous_limits(
+        require_ack=True,
+        repeat_interval_seconds=86_400,
+        max_reminders=3,
+        stop_at=None,
+        start_at=start,
+    ) == (86_400, 3, start + timedelta(days=3))
     with pytest.raises(ReminderError, match="at least 300"):
         validate_continuous_limits(
             require_ack=True,
             repeat_interval_seconds=299,
             max_reminders=12,
             stop_at=start + timedelta(hours=1),
+            start_at=start,
+        )
+    with pytest.raises(ReminderError, match="cannot exceed 30 days"):
+        validate_continuous_limits(
+            require_ack=True,
+            repeat_interval_seconds=86_400,
+            max_reminders=3,
+            stop_at=start + timedelta(days=31),
             start_at=start,
         )
 
