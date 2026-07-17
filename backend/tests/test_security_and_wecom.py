@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
@@ -7,7 +8,12 @@ from app.channels.base import ChannelMessage, ChannelResult
 from app.channels.wecom.adapter import WeComAdapter, split_utf8
 from app.channels.wecom.client import WeComClient
 from app.config import Settings
-from app.infrastructure.logging.setup import redact
+from app.infrastructure.logging.setup import (
+    SENSITIVE_DEPENDENCY_LOGGERS,
+    SensitiveLogFilter,
+    _suppress_sensitive_dependency_logs,
+    redact,
+)
 from app.infrastructure.security.tokens import verify_media_signature
 from pydantic import ValidationError
 
@@ -208,9 +214,58 @@ def test_log_redaction_and_utf8_chunking() -> None:
         "phone": "[REDACTED]",
         "corp_id": "[REDACTED]",
     }
+    request_log = (
+        "HTTP Request: GET https://proxy.example/cgi-bin/gettoken?"
+        "corpid=corp-value&corpsecret=secret-value&plain=visible"
+    )
+    redacted_request = redact(request_log)
+    assert "corp-value" not in redacted_request
+    assert "secret-value" not in redacted_request
+    assert "corpid=[REDACTED]" in redacted_request
+    assert "corpsecret=[REDACTED]" in redacted_request
+    assert "plain=visible" in redacted_request
+    callback_log = (
+        "POST /api/v1/channels/wecom/callback?msg_signature=signature-value&timestamp=123&nonce=456"
+    )
+    assert "signature-value" not in redact(callback_log)
     chunks = split_utf8("你" * 1000, 100)
     assert "".join(chunks) == "你" * 1000
     assert all(len(chunk.encode()) <= 100 for chunk in chunks)
+
+
+def test_standard_logging_filter_redacts_sensitive_url_arguments() -> None:
+    record = logging.LogRecord(
+        "test",
+        logging.INFO,
+        __file__,
+        1,
+        "request=%s",
+        ("https://proxy.example/send?access_token=token-value&safe=yes",),
+        None,
+    )
+    assert SensitiveLogFilter().filter(record)
+    rendered = record.getMessage()
+    assert "token-value" not in rendered
+    assert "access_token=[REDACTED]" in rendered
+    assert "safe=yes" in rendered
+
+
+def test_sensitive_dependency_request_loggers_are_suppressed() -> None:
+    previous_levels = {
+        logger_name: logging.getLogger(logger_name).level
+        for logger_name in SENSITIVE_DEPENDENCY_LOGGERS
+    }
+    try:
+        for logger_name in SENSITIVE_DEPENDENCY_LOGGERS:
+            logging.getLogger(logger_name).setLevel(logging.NOTSET)
+        _suppress_sensitive_dependency_logs()
+        assert all(
+            logging.getLogger(logger_name).level == logging.WARNING
+            for logger_name in SENSITIVE_DEPENDENCY_LOGGERS
+        )
+    finally:
+        for logger_name, previous_level in previous_levels.items():
+            logging.getLogger(logger_name).setLevel(previous_level)
 
 
 @pytest.mark.asyncio
