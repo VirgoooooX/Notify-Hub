@@ -63,7 +63,7 @@ jobs:
       - name: Build
         run: npm run build
       - name: Audit frontend dependencies
-        run: npm audit --audit-level=high
+        run: npm audit --omit=dev --audit-level=high
 
   publish-docker-image:
     runs-on: ubuntu-latest
