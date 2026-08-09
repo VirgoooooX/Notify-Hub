@@ -16,7 +16,12 @@ RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 COPY pyproject.toml README.md LICENSE ./
 COPY backend/app/ backend/app/
-RUN pip install --upgrade pip && pip install .
+# Keep build tooling out of the runtime image. Modern pip pulls CacheControl/msgpack
+# for its own use, while setuptools/wheel are only needed to build the application.
+RUN pip install --upgrade pip \
+    && pip install . \
+    && pip uninstall --yes cachecontrol msgpack setuptools wheel \
+    && pip uninstall --yes pip
 
 FROM python:3.12-slim AS runtime
 ARG APP_UID=10001
