@@ -76,7 +76,7 @@ const defaultSummary = computed(() => {
         </div>
         <div class="field timezone-field">
           <label>时区</label>
-          <AppInput v-model="formState.schedule_timezone" placeholder="Asia/Shanghai" required />
+          <AppInput v-model="formState.schedule_timezone" placeholder="IANA timezone (e.g. Europe/Berlin)" required />
           <small>使用 IANA 时区名称。</small>
         </div>
       </template>

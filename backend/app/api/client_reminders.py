@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from app.api.dependencies import require_api_client
 from app.api.errors import AppError
+from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_access import (
     ReminderAccessDenied,
     ReminderActor,
@@ -13,6 +15,7 @@ from app.application.reminder_access import (
     ReminderQuotaExceeded,
 )
 from app.application.reminder_service import ReminderCreate
+from app.application.time_utils import resolve_datetime
 from app.domain.reminder_schedules import MisfirePolicy
 from app.domain.reminders import AckPolicy, ReminderError, ScheduleType
 from app.infrastructure.database.models import ApiClient
@@ -29,7 +32,7 @@ class ClientReminderSchedule(BaseModel):
     rrule: str | None = Field(default=None, max_length=500)
     interval_seconds: int | None = Field(default=None, ge=300)
     cron_expression: str | None = Field(default=None, max_length=200)
-    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    timezone: str | None = Field(default=None, max_length=100)
     start_at: datetime | None = None
     end_at: datetime | None = None
     misfire_policy: Literal["fire_once", "skip"] = "fire_once"
@@ -49,6 +52,23 @@ class ClientReminderSchedule(BaseModel):
             raise ValueError("once schedule mode must be once")
         if self.type == "recurring" and self.mode == "once":
             raise ValueError("recurring schedule cannot use once mode")
+        if self.timezone is None:
+            return self
+        try:
+            self.normalize_timezone(self.timezone)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def normalize_timezone(self, timezone: str) -> ClientReminderSchedule:
+        ZoneInfo(timezone)
+        self.timezone = timezone
+        if self.at is not None:
+            self.at = resolve_datetime(self.at, timezone, field="schedule.at")
+        if self.start_at is not None:
+            self.start_at = resolve_datetime(self.start_at, timezone, field="schedule.start_at")
+        if self.end_at is not None:
+            self.end_at = resolve_datetime(self.end_at, timezone, field="schedule.end_at")
         return self
 
 
@@ -91,8 +111,20 @@ async def create_client_reminder(
     client: ApiClient = Depends(require_api_client),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, object]:
+    try:
+        timezone = payload.schedule.timezone or await read_platform_timezone(
+            request.app.state.session_factory, request.app.state.settings.app_timezone
+        )
+        payload.schedule.normalize_timezone(timezone)
+        if payload.repeat is not None and payload.repeat.stop_at is not None:
+            payload.repeat.stop_at = resolve_datetime(
+                payload.repeat.stop_at, timezone, field="repeat.stop_at"
+            )
+    except ValueError as exc:
+        raise AppError("invalid_reminder", str(exc), 422) from exc
     repeat = payload.repeat
     creator_person_id = payload.creator_person_id or payload.recipients[0]
+    assert isinstance(timezone, str)
     try:
         result = await request.app.state.reminder_access_service.create(
             ReminderCreate(
@@ -103,7 +135,7 @@ async def create_client_reminder(
                 media_asset_id=payload.media_asset_id,
                 url=payload.url,
                 schedule_type=ScheduleType(payload.schedule.type),
-                timezone=payload.schedule.timezone,
+                timezone=timezone,
                 recipient_ids=tuple(payload.recipients),
                 scheduled_at=payload.schedule.at,
                 recurrence_rule=payload.schedule.rrule,

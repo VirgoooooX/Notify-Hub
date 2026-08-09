@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
 from app.application.audit import add_audit
+from app.application.platform_settings import read_platform_timezone
 from app.config import DEFAULT_WECOM_API_BASE_URL
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.models import (
@@ -31,11 +32,12 @@ class SettingsUpdate(BaseModel):
     @field_validator("timezone")
     @classmethod
     def valid_timezone(cls, value: str | None) -> str | None:
-        if value is not None:
-            try:
-                ZoneInfo(value)
-            except ZoneInfoNotFoundError as exc:
-                raise ValueError("unknown IANA timezone") from exc
+        if value is None:
+            raise ValueError("timezone must not be null")
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("unknown IANA timezone") from exc
         return value
 
 
@@ -59,7 +61,9 @@ async def _write_setting(request: Request, key: str, value: object) -> None:
 @router.get("/dashboard")
 async def dashboard(request: Request, _admin: Admin = Depends(require_admin)) -> dict[str, object]:
     timezone = ZoneInfo(
-        str(await _setting(request, "timezone", request.app.state.settings.app_timezone))
+        await read_platform_timezone(
+            request.app.state.session_factory, request.app.state.settings.app_timezone
+        )
     )
     now = request.app.state.clock.now().astimezone(timezone)
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone).astimezone(UTC)
@@ -129,7 +133,9 @@ async def get_settings(
     )
     return {
         "data": {
-            "timezone": await _setting(request, "timezone", settings.app_timezone),
+            "timezone": await read_platform_timezone(
+                request.app.state.session_factory, settings.app_timezone
+            ),
             "retention_days": await _setting(
                 request, "retention_days", settings.media_retention_seconds // 86400
             ),

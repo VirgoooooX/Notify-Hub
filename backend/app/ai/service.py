@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.policy import (
     apply_reason_policy,
+    apply_reason_schema_policy,
     batch_hash,
     classification_item_hash,
     estimate_classification_tokens,
@@ -589,6 +590,15 @@ class AIService:
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )
                     data = parse_structured_content(content)
+                    if not profile.include_reason:
+                        raw_results = data.get("results")
+                        if isinstance(raw_results, list):
+                            data["results"] = [
+                                {key: value for key, value in item.items() if key != "reason"}
+                                if isinstance(item, dict)
+                                else item
+                                for item in raw_results
+                            ]
                     batch = AIClassificationBatch.model_validate(data)
                     return batch.results, input_tokens, output_tokens
                 except json.JSONDecodeError:
@@ -648,10 +658,12 @@ class AIService:
     ) -> tuple[StructuredResult, int | None, int | None]:
         modes = structured_modes(provider.structured_output_mode, profile.response_format)
         last_error: AIProviderError | None = None
+        effective_schema = apply_reason_schema_policy(schema, profile)
         for mode in modes:
             format_hint = (
-                "Return one JSON object matching the requested shape."
-                if mode == "prompt_json"
+                "Return one JSON object matching this JSON Schema: "
+                + json.dumps(effective_schema, ensure_ascii=False, separators=(",", ":"))
+                if mode in {"json_object", "prompt_json"}
                 else "Return the requested structured result."
             )
             messages = [
@@ -674,7 +686,7 @@ class AIService:
                     ),
                 },
             ]
-            response_format_value = schema_response_format(mode, schema_name, schema)
+            response_format_value = schema_response_format(mode, schema_name, effective_schema)
             for attempt in range(provider.max_retries + 2):
                 try:
                     generated, input_tokens, output_tokens = await self._provider_client.complete(
@@ -687,11 +699,10 @@ class AIService:
                         response_format=response_format_value,
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )
-                    return (
-                        result_type.model_validate(parse_structured_content(generated)),
-                        input_tokens,
-                        output_tokens,
-                    )
+                    data = parse_structured_content(generated)
+                    if not profile.include_reason:
+                        data.pop("reason", None)
+                    return result_type.model_validate(data), input_tokens, output_tokens
                 except (ValidationError, ValueError):
                     last_error = AIProviderError(
                         "ai_invalid_structured_output", "AI structured output is invalid"
@@ -727,9 +738,11 @@ class AIService:
         mode: str,
         profile: AIProfile,
     ) -> list[dict[str, str]]:
+        fields = '"id":string,"label":string,"confidence":number'
+        if profile.include_reason:
+            fields += ',"reason":string'
         format_hint = (
-            'Return JSON only with shape {"results":[{"id":string,"label":string,'
-            '"confidence":number,"reason":string}]}'
+            f'Return JSON only with shape {{"results":[{{{fields}}}]}}'
             if mode in {"json_object", "prompt_json"}
             else "Return the requested structured result."
         )

@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin
-from sqlalchemy import JSON, DateTime, Index, String, Text
+from app.infrastructure.database.utc_datetime import UTCDateTime
+from sqlalchemy import JSON, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -23,6 +24,6 @@ class ReminderDraft(StringIdMixin, Base):
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
     confirmed_reminder_id: Mapped[str | None] = mapped_column(String(64))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)

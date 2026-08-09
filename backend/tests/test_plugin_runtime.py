@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -23,7 +23,7 @@ from app.plugin_runtime.context import PluginAIClient
 from app.plugin_runtime.http import RestrictedHttpClient, RestrictedHttpError
 from app.plugin_runtime.manifest import PluginManifest
 from app.plugin_runtime.registry import PluginRegistry
-from app.plugin_runtime.schedule import next_run_at
+from app.plugin_runtime.schedule import ScheduleError, next_run_at
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
@@ -35,6 +35,24 @@ class FakeEmitter:
         assert plugin_id == "fake_monitor"
         self.events.append(EventDraft.model_validate(event, from_attributes=True))
         return EventReceipt(event_id="evt_1", status="accepted")
+
+
+def test_plugin_event_requires_an_aware_instant() -> None:
+    with pytest.raises(ValueError, match="timezone offset"):
+        EventDraft(
+            event_type="test.event",
+            event_key="naive",
+            title="Naive event",
+            occurred_at=datetime(2026, 1, 1),
+        )
+
+    draft = EventDraft(
+        event_type="test.event",
+        event_key="offset",
+        title="Offset event",
+        occurred_at=datetime(2026, 1, 1, 8, tzinfo=timezone(timedelta(hours=8))),
+    )
+    assert draft.occurred_at == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 class FakeSecrets:
@@ -138,10 +156,69 @@ def test_manifest_and_interval_schedule() -> None:
             "default_schedule": {"type": "interval", "seconds": 60},
         }
     )
-    after = datetime(2026, 1, 1)
-    assert (
-        next_run_at(manifest.default_schedule, after) - after.replace(tzinfo=UTC)
-    ).total_seconds() == 60
+    after = datetime(2026, 1, 1, tzinfo=UTC)
+    assert (next_run_at(manifest.default_schedule, after) - after).total_seconds() == 60
+
+
+def test_plugin_schedule_rejects_naive_after() -> None:
+    manifest = PluginManifest.model_validate(
+        {
+            "id": "safe_plugin",
+            "name": "Safe",
+            "version": "1.2.3",
+            "entrypoint": "plugin:SafePlugin",
+            "api_version": "1",
+            "trusted": True,
+            "default_schedule": {"type": "interval", "seconds": 60},
+        }
+    )
+
+    with pytest.raises(ScheduleError, match="must include timezone"):
+        next_run_at(manifest.default_schedule, datetime(2026, 1, 1))
+
+
+@pytest.mark.parametrize(
+    ("expression", "timezone", "after", "expected"),
+    [
+        (
+            "30 2 * * *",
+            "America/New_York",
+            datetime(2026, 3, 7, 8, tzinfo=UTC),
+            datetime(2026, 3, 9, 6, 30, tzinfo=UTC),
+        ),
+        (
+            "30 1 * * *",
+            "America/New_York",
+            datetime(2026, 10, 31, 6, tzinfo=UTC),
+            datetime(2026, 11, 1, 5, 30, tzinfo=UTC),
+        ),
+        (
+            "30 2 * * *",
+            "Asia/Shanghai",
+            datetime(2026, 3, 7, 8, tzinfo=UTC),
+            datetime(2026, 3, 7, 18, 30, tzinfo=UTC),
+        ),
+    ],
+)
+def test_plugin_cron_uses_wall_clock_dst_policy(
+    expression: str, timezone: str, after: datetime, expected: datetime
+) -> None:
+    schedule = PluginManifest.model_validate(
+        {
+            "id": "safe_plugin",
+            "name": "Safe",
+            "version": "1.2.3",
+            "entrypoint": "plugin:SafePlugin",
+            "api_version": "1",
+            "trusted": True,
+            "default_schedule": {
+                "type": "cron",
+                "expression": expression,
+                "timezone": timezone,
+            },
+        }
+    ).default_schedule
+    assert next_run_at(schedule, after) == expected
 
 
 def test_cron_uses_standard_day_or_weekday_semantics() -> None:

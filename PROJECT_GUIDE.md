@@ -69,7 +69,10 @@ pending -> processing -> succeeded
 
 - 使用 SQLAlchemy、Alembic 和异步 Session；模型变化必须附带可从空库执行的迁移。
 - SQLite 开启外键、WAL 和 busy timeout；事务保持短小，不执行网络调用。
-- 时间按 UTC 入库，通过可注入 `Clock` 获取；展示和调度使用配置时区。
+- 持久化时间点必须是带时区的 UTC `datetime`，通过可注入 `Clock` 获取；ORM 边界负责归一化，并仅在读取 SQLite 历史值时把无时区值解释为 UTC。
+- API 中的绝对时间使用带 offset 的 RFC 3339；用户选择的计划墙钟时间必须与 IANA 时区一起提交，不能依赖浏览器或服务器本地时区推断。为兼容旧客户端，计划字段中已带 offset 的值按绝对时间处理。
+- 平台时区来自持久化设置并在修改后立即成为运行时默认值；已经创建的 Reminder 或 Plugin Schedule 保留自身冻结的 IANA 时区。
+- Interval 使用经过时长语义；Cron 和 RRULE 使用墙钟语义。DST 不存在的本地时刻跳过，重复时刻固定选择第一次出现（`fold=0`）。
 - 唯一约束、状态枚举和索引承担最终一致性，不用 JSON 替代所有结构化字段。
 - 清理任务分批执行，禁止无界全表操作。
 - 迁移 PostgreSQL 的触发条件是多实例、高写竞争、高可用或复杂报表，而不是预先设计。

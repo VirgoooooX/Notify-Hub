@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import datetime
 
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
@@ -13,6 +13,7 @@ from app.api.schemas import (
 )
 from app.application.audit import add_audit
 from app.application.notification_service import NotificationDraft
+from app.application.time_utils import ensure_utc
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import (
     Admin,
@@ -32,7 +33,7 @@ from sqlalchemy.orm import selectinload
 
 
 def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    return ensure_utc(value)
 
 
 def _duration_ms(finished: datetime, started: datetime) -> int:

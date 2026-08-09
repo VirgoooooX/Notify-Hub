@@ -1,4 +1,4 @@
-from datetime import UTC, timedelta
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -43,8 +43,6 @@ async def ready(request: Request) -> dict[str, object]:
             heartbeat = await session.get(WorkerHeartbeat, "delivery-main")
         checks["migration"] = "ok" if revision in _migration_heads() else "outdated"
         heartbeat_at = heartbeat.heartbeat_at if heartbeat is not None else None
-        if heartbeat_at is not None and heartbeat_at.tzinfo is None:
-            heartbeat_at = heartbeat_at.replace(tzinfo=UTC)
         cutoff = request.app.state.clock.now() - timedelta(
             seconds=request.app.state.settings.worker_heartbeat_ttl_seconds
         )

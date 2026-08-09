@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from app.infrastructure.database.base import Base, StringIdMixin
-from sqlalchemy import DateTime, Float, Index, Integer, String
+from app.infrastructure.database.utc_datetime import UTCDateTime
+from sqlalchemy import Float, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -24,7 +25,7 @@ class MediaAsset(StringIdMixin, Base):
     duration_seconds: Mapped[float | None] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     created_by: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     provider_media_id: Mapped[str | None] = mapped_column(String(256))
-    provider_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

@@ -92,6 +92,7 @@ describe('AIProfilesView', () => {
     expect(wrapper.text()).toContain('输出策略')
     expect(wrapper.text()).toContain('成本可靠性')
     expect(wrapper.text()).toContain('只会追加，不会替换')
+    expect(wrapper.text()).toContain('关闭后模型输出不再包含 reason 字段')
     const modelOptions = wrapper.find('#ai-profile-model').findAll('option').map((item) => item.text())
     expect(modelOptions).toContain('model-allowed')
     expect(modelOptions).not.toContain('model-blocked')

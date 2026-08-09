@@ -6,9 +6,9 @@ import hmac
 import secrets
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.domain.reminder_schedules import local_wall_time_to_utc
 from dateutil.rrule import rrulestr
 
 
@@ -57,6 +57,9 @@ class ConversationState(str, enum.Enum):
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+
+
+_RRULE_MAX_CANDIDATES = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,9 +121,49 @@ def validate_timezone(name: str) -> ZoneInfo:
 
 
 def normalize_utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
+    if value.tzinfo is None or value.utcoffset() is None:
         raise ReminderError("datetime must include timezone")
     return value.astimezone(UTC)
+
+
+def _prepare_rrule_text(recurrence_rule: str) -> tuple[str, int | None]:
+    """Validate the rule-body contract and remove COUNT for valid counting.
+
+    dateutil counts every generated wall-clock candidate, including a local
+    time in a DST gap.  We therefore remove COUNT and count only candidates
+    that pass the IANA round-trip in ``next_rrule_occurrence``.  Embedded
+    DTSTART or multi-line recurrence sets are rejected so the explicit
+    ``timezone`` and ``dtstart`` arguments remain authoritative.
+    """
+
+    if not isinstance(recurrence_rule, str):
+        raise ReminderError("recurrence rule must contain only an RRULE body")
+    if "\n" in recurrence_rule or "\r" in recurrence_rule:
+        raise ReminderError("recurrence rule must contain only an RRULE body")
+    text = recurrence_rule.strip()
+    upper_text = text.upper()
+    if not text or "DTSTART" in upper_text:
+        raise ReminderError("recurrence rule must contain only an RRULE body")
+    if upper_text.startswith("RRULE:"):
+        text = text[6:].strip()
+    if not text.upper().startswith("FREQ="):
+        raise ReminderError("recurrence rule must contain an RRULE body")
+
+    raw_count: str | None = None
+    retained_parts: list[str] = []
+    for part in text.split(";"):
+        key, separator, raw_value = part.partition("=")
+        if separator and key.strip().upper() == "COUNT":
+            raw_count = raw_value.strip()
+            continue
+        retained_parts.append(part)
+    count: int | None = None
+    if raw_count is not None:
+        try:
+            count = int(raw_count)
+        except ValueError as exc:
+            raise ReminderError("invalid recurrence rule") from exc
+    return ";".join(retained_parts), count
 
 
 def next_rrule_occurrence(
@@ -131,18 +174,86 @@ def next_rrule_occurrence(
     dtstart: datetime,
 ) -> datetime | None:
     zone = validate_timezone(timezone)
+    rule_text, count = _prepare_rrule_text(recurrence_rule)
+    normalized_after = normalize_utc(after)
     local_start = normalize_utc(dtstart).astimezone(zone)
-    local_after = normalize_utc(after).astimezone(zone)
+    if count is not None and count <= 0:
+        return None
+    local_after = normalized_after.astimezone(zone)
     try:
-        rule = rrulestr(recurrence_rule, dtstart=local_start)
-        candidate = rule.after(local_after, inc=False)
+        rule = rrulestr(rule_text, dtstart=local_start)
     except (TypeError, ValueError) as exc:
         raise ReminderError("invalid recurrence rule") from exc
-    if candidate is None:
+
+    if count is None:
+        candidate = rule.after(local_after, inc=False)
+        scanned = 0
+        while candidate is not None:
+            scanned += 1
+            if scanned > _RRULE_MAX_CANDIDATES:
+                raise ReminderError("recurrence rule exceeded bounded DST scan")
+            # dateutil returns a timezone-aware value for an RRULE with an
+            # aware DTSTART, but preserve support for a rule that yields naive
+            # values.
+            candidate_local = (
+                candidate.replace(tzinfo=zone)
+                if candidate.tzinfo is None
+                else candidate.astimezone(zone)
+            )
+            # Validate the local wall-clock fields rather than trusting the
+            # offset dateutil attached. This skips spring-forward gaps and
+            # chooses fold=0.
+            candidate_utc = local_wall_time_to_utc(candidate_local, zone)
+            if candidate_utc is not None and candidate_utc > normalized_after:
+                return candidate_utc
+            try:
+                candidate = rule.after(candidate, inc=False)
+            except (TypeError, ValueError) as exc:
+                raise ReminderError("invalid recurrence rule") from exc
         return None
-    if candidate.tzinfo is None:
-        candidate = candidate.replace(tzinfo=zone)
-    return cast(datetime, candidate.astimezone(UTC))
+
+    # COUNT is defined over the recurrence set. Iterate from DTSTART so an
+    # invalid wall time does not consume the count before the requested `after`
+    # boundary. The bound prevents a pathological all-gap rule from looping
+    # forever when no UNTIL terminates its recurrence set.
+    # Probe just before the DTSTART second so a rule whose DTSTART has
+    # sub-second precision still includes its first wall-clock candidate.
+    try:
+        scan_cursor = local_start.replace(microsecond=0) - timedelta(microseconds=1)
+        candidate = rule.after(scan_cursor, inc=False)
+    except OverflowError:
+        candidate = rule.after(local_start, inc=True)
+    valid_count = 0
+    scanned = 0
+    seen_wall_times: set[datetime] = set()
+    while candidate is not None:
+        scanned += 1
+        if scanned > _RRULE_MAX_CANDIDATES:
+            raise ReminderError("recurrence rule exceeded bounded DST scan")
+        candidate_local = (
+            candidate.replace(tzinfo=zone)
+            if candidate.tzinfo is None
+            else candidate.astimezone(zone)
+        )
+        wall_time = candidate_local.replace(tzinfo=None)
+        if wall_time in seen_wall_times:
+            candidate_utc = None
+        else:
+            seen_wall_times.add(wall_time)
+            candidate_utc = local_wall_time_to_utc(candidate_local, zone)
+        if candidate_utc is not None:
+            valid_count += 1
+            if valid_count > count:
+                return None
+            if candidate_utc > normalized_after:
+                return candidate_utc
+            if valid_count == count:
+                return None
+        try:
+            candidate = rule.after(candidate, inc=False)
+        except (TypeError, ValueError) as exc:
+            raise ReminderError("invalid recurrence rule") from exc
+    return None
 
 
 def validate_continuous_limits(

@@ -1,7 +1,8 @@
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, MetaData, String
+from app.infrastructure.database.utc_datetime import UTCDateTime
+from sqlalchemy import MetaData, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 NAMING_CONVENTION = {
@@ -22,8 +23,8 @@ def new_id(prefix: str) -> str:
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class StringIdMixin:

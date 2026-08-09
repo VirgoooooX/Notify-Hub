@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from app.domain import reminders as reminders_domain
 from app.domain.reminders import (
     InvalidReminderTransition,
     ReminderError,
@@ -70,6 +71,151 @@ def test_rrule_uses_configured_timezone() -> None:
         dtstart=start,
     )
     assert occurrence == datetime(2026, 7, 20, 1, 0, tzinfo=UTC)
+
+
+def test_rrule_skips_nonexistent_dst_wall_time() -> None:
+    occurrence = next_rrule_occurrence(
+        "FREQ=DAILY;BYHOUR=2;BYMINUTE=30",
+        timezone="America/New_York",
+        after=datetime(2026, 3, 7, 8, tzinfo=UTC),
+        dtstart=datetime(2026, 3, 6, 7, 30, tzinfo=UTC),
+    )
+    assert occurrence == datetime(2026, 3, 9, 6, 30, tzinfo=UTC)
+
+
+def test_rrule_fold_uses_first_repeated_wall_time() -> None:
+    occurrence = next_rrule_occurrence(
+        "FREQ=DAILY;BYHOUR=1;BYMINUTE=30",
+        timezone="America/New_York",
+        after=datetime(2026, 10, 31, 6, tzinfo=UTC),
+        dtstart=datetime(2026, 10, 30, 5, 30, tzinfo=UTC),
+    )
+    assert occurrence == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+
+
+def test_rrule_rejects_naive_inputs() -> None:
+    with pytest.raises(ReminderError, match="must include timezone"):
+        next_rrule_occurrence(
+            "FREQ=DAILY",
+            timezone="UTC",
+            after=datetime(2026, 1, 1),
+            dtstart=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
+def test_rrule_count_counts_valid_wall_times_across_dst_gap() -> None:
+    start = datetime(2026, 3, 6, 7, 30, tzinfo=UTC)
+    rule = "FREQ=DAILY;COUNT=3;BYHOUR=2;BYMINUTE=30"
+    cursor = datetime(2026, 3, 5, tzinfo=UTC)
+
+    occurrences: list[datetime] = []
+    for _ in range(3):
+        occurrence = next_rrule_occurrence(
+            rule,
+            timezone="America/New_York",
+            after=cursor,
+            dtstart=start,
+        )
+        assert occurrence is not None
+        occurrences.append(occurrence)
+        cursor = occurrence
+
+    assert occurrences == [
+        datetime(2026, 3, 6, 7, 30, tzinfo=UTC),
+        datetime(2026, 3, 7, 7, 30, tzinfo=UTC),
+        datetime(2026, 3, 9, 6, 30, tzinfo=UTC),
+    ]
+    assert (
+        next_rrule_occurrence(
+            rule,
+            timezone="America/New_York",
+            after=cursor,
+            dtstart=start,
+        )
+        is None
+    )
+
+
+def test_rrule_count_fold_uses_one_wall_time() -> None:
+    start = datetime(2026, 10, 30, 5, 30, tzinfo=UTC)
+    rule = "FREQ=DAILY;COUNT=3;BYHOUR=1;BYMINUTE=30"
+    cursor = datetime(2026, 10, 29, tzinfo=UTC)
+
+    occurrences: list[datetime] = []
+    for _ in range(3):
+        occurrence = next_rrule_occurrence(
+            rule,
+            timezone="America/New_York",
+            after=cursor,
+            dtstart=start,
+        )
+        assert occurrence is not None
+        occurrences.append(occurrence)
+        cursor = occurrence
+
+    assert occurrences == [
+        datetime(2026, 10, 30, 5, 30, tzinfo=UTC),
+        datetime(2026, 10, 31, 5, 30, tzinfo=UTC),
+        datetime(2026, 11, 1, 5, 30, tzinfo=UTC),
+    ]
+    assert (
+        next_rrule_occurrence(
+            rule,
+            timezone="America/New_York",
+            after=cursor,
+            dtstart=start,
+        )
+        is None
+    )
+
+
+def test_rrule_count_preserves_until_boundary() -> None:
+    occurrence = next_rrule_occurrence(
+        "FREQ=DAILY;COUNT=3;UNTIL=20260312T050000Z;BYHOUR=2;BYMINUTE=30",
+        timezone="America/New_York",
+        after=datetime(2026, 3, 7, 8, tzinfo=UTC),
+        dtstart=datetime(2026, 3, 6, 7, 30, tzinfo=UTC),
+    )
+    assert occurrence == datetime(2026, 3, 9, 6, 30, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "recurrence_rule",
+    [
+        "DTSTART:20260306T023000\nRRULE:FREQ=DAILY",
+        "FREQ=DAILY;DTSTART=20260306T023000",
+    ],
+)
+def test_rrule_rejects_embedded_dtstart(recurrence_rule: str) -> None:
+    with pytest.raises(ReminderError, match="only an RRULE body"):
+        next_rrule_occurrence(
+            recurrence_rule,
+            timezone="America/New_York",
+            after=datetime(2026, 3, 5, tzinfo=UTC),
+            dtstart=datetime(2026, 3, 6, 7, 30, tzinfo=UTC),
+        )
+
+
+@pytest.mark.parametrize(
+    "recurrence_rule",
+    [
+        "FREQ=DAILY;COUNT=10;BYHOUR=2;BYMINUTE=30",
+        "FREQ=DAILY;BYHOUR=2;BYMINUTE=30",
+    ],
+)
+def test_rrule_all_invalid_scan_is_bounded(
+    recurrence_rule: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(reminders_domain, "_RRULE_MAX_CANDIDATES", 3)
+    monkeypatch.setattr(reminders_domain, "local_wall_time_to_utc", lambda *_args: None)
+
+    with pytest.raises(ReminderError, match="bounded DST scan"):
+        next_rrule_occurrence(
+            recurrence_rule,
+            timezone="UTC",
+            after=datetime(2026, 1, 1, tzinfo=UTC),
+            dtstart=datetime(2026, 1, 1, tzinfo=UTC),
+        )
 
 
 def test_action_tokens_are_hashed_and_comparable() -> None:

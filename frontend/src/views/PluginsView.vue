@@ -8,8 +8,11 @@ import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import PluginCard from '@/features/plugins/PluginCard.vue'
 import PluginConfigDrawer from '@/features/plugins/PluginConfigDrawer.vue'
 import { useUiStore } from '@/stores/ui'
+import { useSettingsStore } from '@/stores/settings'
+import { DEFAULT_TIMEZONE } from '@/lib/time'
 
 const ui = useUiStore()
+const settings = useSettingsStore()
 const items = ref<Plugin[]>([])
 const people = ref<Person[]>([])
 const aiProfiles = ref<AIProfile[]>([])
@@ -27,7 +30,7 @@ const editForm = reactive({
   schedule_mode: 'default' as PluginScheduleMode,
   schedule_interval_minutes: 3,
   schedule_cron_expression: '*/10 * * * *',
-  schedule_timezone: 'Asia/Shanghai',
+  schedule_timezone: DEFAULT_TIMEZONE,
   include_replies: false,
   include_reposts: false,
   decision_mode: 'rules',
@@ -88,7 +91,7 @@ function loadScheduleForm(details: PluginDetailsResponse) {
       ? defaultSchedule
       : undefined
   editForm.schedule_cron_expression = cron?.expression ?? '*/10 * * * *'
-  editForm.schedule_timezone = cron?.timezone ?? 'Asia/Shanghai'
+  editForm.schedule_timezone = cron?.timezone ?? settings.timezone
   initialScheduleSignature.value = scheduleSignature()
 }
 
@@ -263,6 +266,7 @@ async function saveConfig() {
 }
 
 onMounted(() => {
+  void settings.load()
   load()
   loadPeople()
   loadAiProfiles()

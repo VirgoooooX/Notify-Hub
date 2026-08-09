@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import structlog
 from app.channels.base import ChannelMessage, ChannelResult, NotificationChannel
@@ -250,8 +250,6 @@ class DeliveryWorker:
                     await session.commit()
                     return None
             expires_at = notification.expires_at
-            if expires_at is not None and expires_at.tzinfo is None:
-                expires_at = expires_at.replace(tzinfo=UTC)
             if expires_at and expires_at <= self._clock.now():
                 delivery.status = DeliveryStatus.CANCELLED.value
                 delivery.claimed_by = None

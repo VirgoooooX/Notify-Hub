@@ -21,8 +21,11 @@ import { useUiStore } from '@/stores/ui'
 import InteractiveReminderPreview from '@/components/reminders/InteractiveReminderPreview.vue'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import { defaultReminderForm, reminderCreatePayload } from '@/features/reminders/reminderForm'
+import { formatInstant, DEFAULT_TIMEZONE } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
+const settings = useSettingsStore()
 const items = ref<Page<Reminder>>({
   items: [],
   page: 1,
@@ -35,7 +38,8 @@ const show = ref(false)
 const { pending: busy, run: runCreate } = useAsyncAction()
 const broadcastAudienceCount = ref(0)
 
-const form = reactive(defaultReminderForm())
+const form = reactive(defaultReminderForm(settings.timezone))
+let timezoneEdited = false
 const editing = ref<Reminder | null>(null)
 const editForm = reactive({ title: '', content: '' })
 const editBusy = ref(false)
@@ -62,6 +66,20 @@ watch(
   (enabled) => {
     if (enabled) form.ack_policy = 'all'
   }
+)
+
+watch(
+  () => form.timezone,
+  () => {
+    timezoneEdited = true
+  },
+)
+watch(
+  () => settings.timezone,
+  (timezone) => {
+    if (!timezoneEdited && form.timezone === DEFAULT_TIMEZONE) form.timezone = timezone
+  },
+  { immediate: true },
 )
 
 interface SchedulePreview {
@@ -108,8 +126,8 @@ watch(
         interval_seconds: form.schedule_type === 'interval' ? form.interval_minutes * 60 : undefined,
         cron_expression: form.schedule_type === 'cron' ? form.cron_expression : undefined,
         timezone: form.timezone,
-        start_at: form.start_at ? new Date(form.start_at).toISOString() : undefined,
-        end_at: form.end_at ? new Date(form.end_at).toISOString() : undefined,
+        start_at: form.start_at || undefined,
+        end_at: form.end_at || undefined,
         count: 5
       })
       previewTriggers.value = res.triggers || []
@@ -151,7 +169,8 @@ async function create() {
     ui.toast('提醒已创建', 'success')
     if (mediaPreviewUrl.value) globalThis.URL.revokeObjectURL(mediaPreviewUrl.value)
     mediaPreviewUrl.value = ''
-    Object.assign(form, defaultReminderForm())
+    timezoneEdited = false
+    Object.assign(form, defaultReminderForm(settings.timezone))
     await load()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '创建失败', 'danger')
@@ -214,17 +233,11 @@ const canEdit = (item: Reminder) => ['active', 'awaiting_ack', 'paused'].include
 const canPause = (item: Reminder) => ['active', 'awaiting_ack'].includes(item.status)
 
 onMounted(() => {
+  void settings.load()
   void Promise.all([load(), loadBroadcastAudience()])
 })
 
-const time = (v?: string, timezone?: string) =>
-  v
-    ? new Intl.DateTimeFormat('zh-CN', {
-        dateStyle: 'short',
-        timeStyle: 'short',
-        timeZone: timezone || 'Asia/Shanghai'
-      }).format(new Date(v))
-    : '—'
+const time = (v?: string, timezone?: string) => formatInstant(v, timezone || settings.timezone)
 
 const scheduleLabel = (item: Reminder) => {
   if (item.schedule_type === 'once') return '单次'
@@ -335,6 +348,10 @@ const contentLabel = (type?: string) => {
         <label>触发时间</label>
         <AppInput v-model="form.at" type="datetime-local" required />
       </div>
+      <div v-if="form.schedule_type === 'once'" class="field">
+        <label>时区（IANA）</label>
+        <AppInput v-model="form.timezone" placeholder="例如 Europe/Berlin" required />
+      </div>
       <template v-else>
         <div v-if="form.schedule_type === 'interval'" class="field">
           <label>执行间隔（分钟，至少 5）</label>
@@ -373,7 +390,7 @@ const contentLabel = (type?: string) => {
         <label>预计前5次触发时间</label>
         <div class="triggers-list">
           <span v-for="t in previewTriggers" :key="t" class="mono text-xs trigger-badge">
-            {{ time(t) }}
+            {{ time(t, form.timezone) }}
           </span>
         </div>
       </div>

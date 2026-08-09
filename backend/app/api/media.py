@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Annotated
 
 from app.api.dependencies import get_session, require_admin
@@ -198,13 +198,8 @@ async def get_public_media(
 
     now = request.app.state.clock.now()
     expires_at = asset.expires_at
-    if expires_at is not None:
-        if expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
-        if now.tzinfo is None:
-            now = now.replace(tzinfo=UTC)
-        if expires_at < now:
-            raise AppError("media_expired", "Media asset has expired", 403)
+    if expires_at is not None and expires_at < now:
+        raise AppError("media_expired", "Media asset has expired", 403)
 
     try:
         content = await service.read(asset)

@@ -1,4 +1,4 @@
-from datetime import UTC, timedelta
+from datetime import timedelta
 
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
@@ -144,8 +144,6 @@ async def refresh(payload: RefreshRequest, request: Request) -> dict[str, object
             )
         )
         expires_at = old.expires_at if old is not None else None
-        if expires_at is not None and expires_at.tzinfo is None:
-            expires_at = expires_at.replace(tzinfo=UTC)
         if old is None or old.revoked_at is not None or expires_at is None or expires_at <= now:
             raise AppError("invalid_refresh_token", "Refresh token is invalid or expired", 401)
         claimed = await session.execute(

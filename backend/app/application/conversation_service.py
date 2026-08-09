@@ -9,8 +9,10 @@ from typing import Any, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.ai.service import AIService
+from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_draft_service import ReminderDraftCreate, ReminderDraftService
 from app.application.reminder_service import ReminderCreate, ReminderService
+from app.application.time_utils import ensure_utc, resolve_datetime
 from app.domain.clock import Clock, SystemClock
 from app.domain.reminder_drafts import (
     ReminderDraftError,
@@ -34,10 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def _as_utc(value: datetime) -> datetime:
-    """Normalize SQLite's timezone-naive datetime values to UTC."""
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return ensure_utc(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,7 +132,9 @@ def parse_reminder_text(
             elif period is None and hour <= 7:
                 ambiguous = True
             try:
-                scheduled = datetime.combine(day, time(hour, minute), zone)
+                scheduled = resolve_datetime(
+                    datetime.combine(day, time(hour, minute)), timezone, field="scheduled_at"
+                )
             except ValueError as exc:
                 raise ReminderError("时间格式无效") from exc
         elif cn_match:
@@ -143,7 +144,11 @@ def parse_reminder_text(
                 hour += 12
             elif period is None and hour <= 7:
                 ambiguous = True
-            scheduled = datetime.combine(day, time(hour, 30 if half else 0), zone)
+            scheduled = resolve_datetime(
+                datetime.combine(day, time(hour, 30 if half else 0)),
+                timezone,
+                field="scheduled_at",
+            )
         else:
             ambiguous = True
 
@@ -158,7 +163,7 @@ def parse_reminder_text(
     return ParsedReminderDraft(
         title=title,
         content=content,
-        scheduled_at=scheduled.astimezone(UTC) if scheduled else None,
+        scheduled_at=scheduled,
         timezone=timezone,
         ambiguous=ambiguous,
     )
@@ -200,6 +205,10 @@ class ConversationService:
         text: str,
         now: datetime | None = None,
     ) -> ConversationReply:
+        # Platform settings are persisted state, not a startup snapshot.  Read
+        # the timezone for each conversation request so a settings update takes
+        # effect immediately for /今天 and natural-language reminder parsing.
+        self._timezone = await read_platform_timezone(self._sessions, self._timezone)
         instant = now or self._clock.now()
         identity = await self._identity(sender_wecom_userid)
         if identity is None:
@@ -364,9 +373,9 @@ class ConversationService:
             if isinstance(title, str) and isinstance(scheduled_at_value, str):
                 try:
                     scheduled_dt = datetime.fromisoformat(scheduled_at_value)
-                    if scheduled_dt.tzinfo is None:
-                        scheduled_dt = scheduled_dt.replace(tzinfo=ZoneInfo(self._timezone))
-                    scheduled_utc = scheduled_dt.astimezone(UTC)
+                    scheduled_utc = resolve_datetime(
+                        scheduled_dt, self._timezone, field="scheduled_at"
+                    )
                     return ParsedReminderDraft(
                         title=title.strip(),
                         content=str(content).strip(),

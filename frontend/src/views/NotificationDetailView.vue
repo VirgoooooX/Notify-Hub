@@ -13,9 +13,12 @@ import DescriptionList from '@/components/data/DescriptionList.vue'
 import TimelineList from '@/components/data/TimelineList.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
 import { useUiStore } from '@/stores/ui'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
 const ui = useUiStore()
+const settings = useSettingsStore()
 const item = ref<Notification>()
 const target = ref<Delivery>()
 const busy = ref(false)
@@ -46,15 +49,15 @@ async function retry() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void settings.load()
+  void load()
+})
 
-const time = (v?: string) =>
-  v
-    ? new Intl.DateTimeFormat('zh-CN', {
-        dateStyle: 'short',
-        timeStyle: 'medium'
-      }).format(new Date(v))
-    : '—'
+const time = (v?: string) => formatInstant(v, settings.timezone, {
+  dateStyle: 'short',
+  timeStyle: 'medium',
+})
 
 const duration = (milliseconds?: number) => {
   if (milliseconds === undefined || milliseconds === null) return '—'

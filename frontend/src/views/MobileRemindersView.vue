@@ -3,6 +3,18 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, BellRing, CalendarClock, CheckCircle2, ImagePlus, Plus } from 'lucide-vue-next'
 import { captureMobileEntry, hasMobileEntry, mobileRequest } from '@/lib/mobileApi'
+import {
+  DEFAULT_TIMEZONE,
+  formatInstant,
+  nowLocalDateTime,
+  resolveTimezone,
+} from '@/lib/time'
+
+interface MobileSession {
+  person_id: string
+  display_name: string
+  timezone?: string
+}
 
 interface MobileReminder {
   id: string
@@ -40,8 +52,6 @@ const mode = computed(() => {
   return 'active'
 })
 
-const initialDate = new Date(Date.now() + 60 * 60 * 1000)
-initialDate.setSeconds(0, 0)
 const form = reactive({
   title: '',
   content: '',
@@ -49,25 +59,21 @@ const form = reactive({
     | 'text'
     | 'image'
     | 'article',
-  runAt: toLocalInput(initialDate),
+  timezone: DEFAULT_TIMEZONE,
+  runAt: nowLocalDateTime(DEFAULT_TIMEZONE, 60),
   requireAck: false,
   repeatMinutes: 5,
   maxAttempts: 6,
 })
 
-function toLocalInput(value: Date) {
-  const offset = value.getTimezoneOffset() * 60_000
-  return new Date(value.getTime() - offset).toISOString().slice(0, 16)
-}
-
-function displayTime(value?: string) {
+function displayTime(value?: string, timezone?: string) {
   if (!value) return '尚未排期'
-  return new Intl.DateTimeFormat('zh-CN', {
+  return formatInstant(value, timezone || DEFAULT_TIMEZONE, {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(value))
+  })
 }
 
 function statusText(value: string) {
@@ -99,6 +105,14 @@ async function load() {
   busy.value = true
   try {
     await initializeEntry()
+    const session = await mobileRequest<MobileSession>('/session')
+    // A missing/invalid timezone must not reintroduce browser-local parsing;
+    // authentication and transport failures still propagate to the page error.
+    const platformTimezone = resolveTimezone(session.timezone, DEFAULT_TIMEZONE)
+    if (mode.value === 'new') {
+      form.timezone = platformTimezone
+      form.runAt = nowLocalDateTime(platformTimezone, 60)
+    }
     if (mode.value === 'active') {
       const response = await mobileRequest<{ items: MobileReminder[] }>(
         `/reminders?scope=${encodeURIComponent(scope.value)}`,
@@ -141,6 +155,7 @@ async function createReminder() {
     if ((form.contentType === 'image' || form.contentType === 'article') && !mediaId.value) {
       throw new Error('请先上传一张图片。')
     }
+    if (!form.runAt) throw new Error('请输入有效的提醒时间。')
     const item = await mobileRequest<MobileReminder>('/reminders', {
       method: 'POST',
       body: JSON.stringify({
@@ -150,8 +165,10 @@ async function createReminder() {
         media_asset_id: mediaId.value,
         schedule: {
           type: 'once',
-          at: new Date(form.runAt).toISOString(),
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai',
+          // Keep the wall-clock value intact; the API resolves it with the
+          // selected IANA timezone and owns DST gap/fold validation.
+          at: form.runAt,
+          timezone: form.timezone,
         },
         require_ack: form.requireAck,
         repeat: form.requireAck
@@ -231,7 +248,7 @@ onBeforeUnmount(() => {
         <span class="status-dot" :class="`status-${item.status}`" />
         <div class="card-copy">
           <strong>{{ item.title }}</strong>
-          <span>{{ displayTime(item.next_run_at || item.scheduled_at) }}</span>
+          <span>{{ displayTime(item.next_run_at || item.scheduled_at, item.timezone) }}</span>
         </div>
         <span class="status-label">{{ statusText(item.status) }}</span>
       </RouterLink>
@@ -269,6 +286,10 @@ onBeforeUnmount(() => {
         <span>提醒时间</span>
         <input v-model="form.runAt" type="datetime-local" required>
       </label>
+      <label>
+        <span>时区（IANA）</span>
+        <input v-model="form.timezone" required placeholder="例如 Europe/Berlin">
+      </label>
       <label class="check-row">
         <input v-model="form.requireAck" type="checkbox">
         <span><strong>需要我确认完成</strong><small>未完成时可以继续催办</small></span>
@@ -293,7 +314,7 @@ onBeforeUnmount(() => {
           <p>{{ detail.content || '没有补充说明' }}</p>
         </div>
         <dl>
-          <div><dt>下次提醒</dt><dd>{{ displayTime(detail.next_run_at || detail.scheduled_at) }}</dd></div>
+          <div><dt>下次提醒</dt><dd>{{ displayTime(detail.next_run_at || detail.scheduled_at, detail.timezone) }}</dd></div>
           <div><dt>需要完成</dt><dd>{{ detail.require_ack ? '是' : '否' }}</dd></div>
           <div v-if="detail.repeat_interval_seconds">
             <dt>催办间隔</dt><dd>{{ detail.repeat_interval_seconds / 60 }} 分钟</dd>
@@ -305,7 +326,7 @@ onBeforeUnmount(() => {
         </div>
         <div v-for="occurrence in detail.occurrences" :key="occurrence.id" class="occurrence-row">
           <CheckCircle2 :size="18" />
-          <span>{{ displayTime(occurrence.scheduled_for) }}</span>
+          <span>{{ displayTime(occurrence.scheduled_for, detail.timezone) }}</span>
           <strong>{{ statusText(occurrence.recipient?.status || occurrence.status) }}</strong>
         </div>
       </template>

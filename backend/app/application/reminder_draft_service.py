@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol, cast
 
 from app.application.reminder_service import ReminderCreate
+from app.application.time_utils import ensure_utc
 from app.domain.clock import Clock, SystemClock
 from app.domain.reminder_drafts import (
     InvalidReminderDraftTransition,
@@ -50,9 +51,7 @@ class ReminderDraftUpdate:
 
 
 def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return ensure_utc(value)
 
 
 class ReminderDraftService:

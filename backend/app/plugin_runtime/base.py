@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import AnyHttpUrl, BaseModel, Field, field_validator, model_validator
 
+from app.application.time_utils import ensure_utc
 from app.plugin_runtime.schema import validate_json_schema
 
 
@@ -43,6 +44,11 @@ class EventDraft(BaseModel):
     recipients: list[str] | None = None
     require_ack: bool = False
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def occurred_at_must_be_an_instant(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else ensure_utc(value, field="occurred_at")
 
     @field_validator("recipients")
     @classmethod

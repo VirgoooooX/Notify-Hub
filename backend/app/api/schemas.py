@@ -1,7 +1,16 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from app.application.time_utils import ensure_utc
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_validator,
+    model_validator,
+)
 
 
 class DataResponse(BaseModel):
@@ -98,6 +107,11 @@ class EventCreate(BaseModel):
     media_asset_id: str | None = Field(default=None, max_length=64)
     require_ack: bool = False
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("occurred_at")
+    @classmethod
+    def occurred_at_must_be_an_instant(cls, value: datetime | None) -> datetime | None:
+        return None if value is None else ensure_utc(value, field="occurred_at")
 
     @model_validator(mode="after")
     def meaningful_content(self) -> "EventCreate":

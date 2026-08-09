@@ -9,7 +9,9 @@ from app.api.errors import AppError
 from app.application.audit import add_audit
 from app.application.mobile_identity_service import MobileIdentityError, MobileMember
 from app.application.mobile_reminder_query_service import MobileReminderNotFound
+from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_service import ReminderCreate
+from app.application.time_utils import ensure_utc, resolve_datetime
 from app.application.wecom_menu_service import build_wecom_menu_payload
 from app.domain.reminders import AckPolicy, ReminderError, ScheduleType
 from app.infrastructure.database.models import Admin
@@ -30,7 +32,7 @@ class MobileScheduleInput(BaseModel):
     type: Literal["once", "recurring"] = "once"
     at: datetime
     rrule: str | None = Field(default=None, max_length=500)
-    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    timezone: str | None = Field(default=None, max_length=100)
 
     @model_validator(mode="after")
     def validate_shape(self) -> MobileScheduleInput:
@@ -38,10 +40,17 @@ class MobileScheduleInput(BaseModel):
             raise ValueError("once schedule does not accept rrule")
         if self.type == "recurring" and not self.rrule:
             raise ValueError("recurring schedule requires rrule")
-        try:
-            ZoneInfo(self.timezone)
-        except ZoneInfoNotFoundError as exc:
-            raise ValueError("invalid timezone") from exc
+        if self.timezone is not None:
+            try:
+                self.normalize_timezone(self.timezone)
+            except (ValueError, ZoneInfoNotFoundError) as exc:
+                raise ValueError(str(exc)) from exc
+        return self
+
+    def normalize_timezone(self, timezone: str) -> MobileScheduleInput:
+        ZoneInfo(timezone)
+        self.timezone = timezone
+        self.at = resolve_datetime(self.at, timezone, field="schedule.at")
         return self
 
 
@@ -72,8 +81,12 @@ def _summary(reminder: Reminder) -> dict[str, object]:
         "url": reminder.url,
         "status": reminder.status,
         "schedule_type": reminder.schedule_type,
-        "scheduled_at": reminder.scheduled_at,
-        "next_run_at": reminder.next_run_at,
+        "scheduled_at": None
+        if reminder.scheduled_at is None
+        else ensure_utc(reminder.scheduled_at, field="scheduled_at"),
+        "next_run_at": None
+        if reminder.next_run_at is None
+        else ensure_utc(reminder.next_run_at, field="next_run_at"),
         "timezone": reminder.timezone,
         "require_ack": reminder.require_ack,
         "ack_policy": reminder.ack_policy,
@@ -159,8 +172,15 @@ async def publish_wecom_menu(
 async def mobile_session(
     request: Request, member: MobileMember = Depends(require_mobile_member)
 ) -> dict[str, object]:
+    timezone = await read_platform_timezone(
+        request.app.state.session_factory, request.app.state.settings.app_timezone
+    )
     return {
-        "data": {"person_id": member.person_id, "display_name": member.display_name},
+        "data": {
+            "person_id": member.person_id,
+            "display_name": member.display_name,
+            "timezone": timezone,
+        },
         "request_id": request.state.request_id,
     }
 
@@ -175,7 +195,9 @@ async def mobile_reminders(
         member.person_id,
         scope=scope,
         now=request.app.state.clock.now(),
-        timezone=request.app.state.settings.app_timezone,
+        timezone=await read_platform_timezone(
+            request.app.state.session_factory, request.app.state.settings.app_timezone
+        ),
     )
     return {
         "data": {"items": [_summary(item) for item in items], "scope": scope},
@@ -208,6 +230,16 @@ async def create_mobile_reminder(
 ) -> dict[str, object]:
     repeat = payload.repeat
     try:
+        timezone = payload.schedule.timezone or await read_platform_timezone(
+            request.app.state.session_factory, request.app.state.settings.app_timezone
+        )
+        payload.schedule.normalize_timezone(timezone)
+        if repeat is not None and repeat.stop_at is not None:
+            repeat.stop_at = resolve_datetime(repeat.stop_at, timezone, field="repeat.stop_at")
+    except ValueError as exc:
+        raise AppError("invalid_reminder", str(exc), 422) from exc
+    assert isinstance(timezone, str)
+    try:
         reminder = await request.app.state.reminder_service.create(
             ReminderCreate(
                 creator_person_id=member.person_id,
@@ -217,7 +249,7 @@ async def create_mobile_reminder(
                 media_asset_id=payload.media_asset_id,
                 url=payload.url,
                 schedule_type=ScheduleType(payload.schedule.type),
-                timezone=payload.schedule.timezone,
+                timezone=timezone,
                 recipient_ids=(member.person_id,),
                 scheduled_at=payload.schedule.at,
                 recurrence_rule=payload.schedule.rrule,

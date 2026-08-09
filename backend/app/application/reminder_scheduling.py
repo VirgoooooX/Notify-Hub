@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
+from app.application.time_utils import ensure_utc
 from app.domain.reminder_schedules import (
     CronSchedule,
     IntervalSchedule,
@@ -15,9 +16,7 @@ from app.infrastructure.database.reminder_models import Reminder
 
 
 def utc_datetime(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return ensure_utc(value)
 
 
 def structured_schedule(

@@ -10,8 +10,11 @@ import AppCard from '@/components/ui/AppCard.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import TimelineList from '@/components/data/TimelineList.vue'
 import { useUiStore } from '@/stores/ui'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
+const settings = useSettingsStore()
 const loading = ref(true)
 const data = ref<Dashboard>({
   today_events: 0,
@@ -23,6 +26,7 @@ const data = ref<Dashboard>({
 })
 
 onMounted(async () => {
+  void settings.load()
   try {
     data.value = await api.get<Dashboard>('/admin/dashboard')
   } catch (e) {
@@ -40,13 +44,12 @@ const stats = [
   ['failed_plugins', '异常插件', '连续失败或降级']
 ] as const
 
-const time = (v: string) =>
-  new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit'
-  }).format(new Date(v))
+const time = (v: string) => formatInstant(v, settings.timezone, {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+})
 </script>
 
 <template>

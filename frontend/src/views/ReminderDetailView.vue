@@ -13,9 +13,12 @@ import TimelineList from '@/components/data/TimelineList.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
 import { useUiStore } from '@/stores/ui'
 import InteractiveReminderPreview from '@/components/reminders/InteractiveReminderPreview.vue'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const route = useRoute()
 const ui = useUiStore()
+const settings = useSettingsStore()
 const item = ref<Reminder>()
 const action = ref('')
 const busy = ref(false)
@@ -43,16 +46,15 @@ async function execute() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void settings.load()
+  void load()
+})
 
-const time = (v?: string) =>
-  v
-    ? new Intl.DateTimeFormat('zh-CN', {
-        dateStyle: 'medium',
-        timeStyle: 'medium',
-        timeZone: item.value?.timezone || 'Asia/Shanghai'
-      }).format(new Date(v))
-    : '—'
+const time = (v?: string) => formatInstant(v, item.value?.timezone || settings.timezone, {
+  dateStyle: 'medium',
+  timeStyle: 'medium',
+})
 
 const labels: Record<string, string> = {
   pause: '暂停',

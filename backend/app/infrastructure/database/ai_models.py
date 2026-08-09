@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin, TimestampMixin
+from app.infrastructure.database.utc_datetime import UTCDateTime
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     Float,
     ForeignKey,
     Index,
@@ -35,7 +35,7 @@ class AIProvider(StringIdMixin, TimestampMixin, Base):
     structured_output_mode: Mapped[str] = mapped_column(String(20), default="auto", nullable=False)
     custom_headers_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary)
     custom_query: Mapped[dict[str, str]] = mapped_column(JSON, default=dict, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class AIProviderModel(StringIdMixin, TimestampMixin, Base):
@@ -81,7 +81,7 @@ class AIProfile(StringIdMixin, TimestampMixin, Base):
     daily_token_limit: Mapped[int | None] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class AIResponseCache(StringIdMixin, Base):
@@ -105,8 +105,8 @@ class AIResponseCache(StringIdMixin, Base):
     prompt_version: Mapped[str] = mapped_column(String(100), nullable=False)
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     result_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class AIInvocation(StringIdMixin, Base):
@@ -129,4 +129,4 @@ class AIInvocation(StringIdMixin, Base):
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)

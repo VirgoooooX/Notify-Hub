@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
+from zoneinfo import ZoneInfo
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -14,6 +15,7 @@ from app.ai.schemas import (
     AIExtractionResult,
     AISummaryResult,
 )
+from app.application.time_utils import resolve_datetime
 from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.http import RestrictedHttpClient
 
@@ -55,7 +57,7 @@ class PluginReminderDraft(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(default="", max_length=20_000)
     schedule_type: Literal["once", "interval", "cron", "recurring"]
-    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    timezone: str | None = Field(default=None, max_length=100)
     recipient_ids: tuple[str, ...] = Field(min_length=1, max_length=100)
     scheduled_at: datetime | None = None
     recurrence_rule: str | None = Field(default=None, max_length=500)
@@ -89,6 +91,25 @@ class PluginReminderDraft(BaseModel):
             raise ValueError("interval schedule requires interval_seconds and start_at")
         if self.schedule_type == "cron" and not self.cron_expression:
             raise ValueError("cron schedule requires cron_expression")
+        if self.timezone is None:
+            return self
+        try:
+            self.normalize_timezone(self.timezone)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def normalize_timezone(self, timezone: str) -> PluginReminderDraft:
+        ZoneInfo(timezone)
+        self.timezone = timezone
+        if self.scheduled_at is not None:
+            self.scheduled_at = resolve_datetime(self.scheduled_at, timezone, field="scheduled_at")
+        if self.start_at is not None:
+            self.start_at = resolve_datetime(self.start_at, timezone, field="start_at")
+        if self.end_at is not None:
+            self.end_at = resolve_datetime(self.end_at, timezone, field="end_at")
+        if self.stop_at is not None:
+            self.stop_at = resolve_datetime(self.stop_at, timezone, field="stop_at")
         return self
 
 
@@ -104,8 +125,11 @@ class ReminderCreator(Protocol):
 
 
 class PluginReminderClient:
-    def __init__(self, creator: ReminderCreator | None) -> None:
+    def __init__(
+        self, creator: ReminderCreator | None, *, default_timezone: str | None = None
+    ) -> None:
         self._creator = creator
+        self._default_timezone = default_timezone
 
     async def create(self, draft: Any = None, **values: Any) -> PluginReminderReceipt:
         if self._creator is None:
@@ -118,6 +142,10 @@ class PluginReminderClient:
         normalized = PluginReminderDraft.model_validate(
             raw, from_attributes=not isinstance(raw, dict)
         )
+        if normalized.timezone is None:
+            if self._default_timezone is None:
+                raise ValueError("timezone is required when no platform timezone is available")
+            normalized.normalize_timezone(self._default_timezone)
         return await self._creator.create(normalized)
 
 

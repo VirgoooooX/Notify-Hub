@@ -20,6 +20,8 @@ import AppCard from '@/components/ui/AppCard.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
 import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 import { useAsyncAction } from '@/composables/useAsyncAction'
 import {
   aiProfilePolicyPayload,
@@ -50,6 +52,7 @@ const verbosityLabels: Record<AIVerbosity, string> = {
 }
 
 const ui = useUiStore()
+const settings = useSettingsStore()
 const items = ref<AIProfile[]>([])
 const providers = ref<AIProvider[]>([])
 const invocations = ref<AIInvocation[]>([])
@@ -199,7 +202,10 @@ function days(seconds: number) {
   return `${Number.isInteger(value) ? value : value.toFixed(1)} 天`
 }
 
-onMounted(load)
+onMounted(() => {
+  void settings.load()
+  void load()
+})
 </script>
 
 <template>
@@ -428,7 +434,7 @@ onMounted(load)
               <input v-model="form.include_reason" type="checkbox">
               <span>
                 <strong>返回判断理由</strong>
-                <small>让插件获得简短、可审计的 reason 字段。</small>
+                <small>关闭后模型输出不再包含 reason 字段，可减少 Token 消耗。</small>
               </span>
             </label>
           </div>
@@ -607,7 +613,7 @@ onMounted(load)
           <th>状态</th>
         </template>
         <tr v-for="invocation in invocations" :key="invocation.id">
-          <td>{{ new Date(invocation.created_at).toLocaleString() }}</td>
+          <td>{{ formatInstant(invocation.created_at, settings.timezone) }}</td>
           <td>
             <span class="mono">{{ invocation.profile_id }}</span>
           </td>

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
 from app.application.audit import add_audit
+from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_service import ReminderCreate, ReminderNotFound, ReminderUpdate
+from app.application.time_utils import ensure_utc, resolve_datetime
 from app.domain.reminder_schedules import (
     CronSchedule,
     IntervalSchedule,
@@ -44,7 +46,7 @@ class ScheduleInput(BaseModel):
     rrule: str | None = Field(default=None, max_length=500)
     interval_seconds: int | None = Field(default=None, ge=300)
     cron_expression: str | None = Field(default=None, max_length=200)
-    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    timezone: str | None = Field(default=None, max_length=100)
     start_at: datetime | None = None
     end_at: datetime | None = None
     misfire_policy: Literal["fire_once", "skip"] = "fire_once"
@@ -61,6 +63,31 @@ class ScheduleInput(BaseModel):
             raise ValueError("interval schedule requires start_at")
         if self.type == "cron" and not self.cron_expression:
             raise ValueError("cron schedule requires cron_expression")
+        if self.timezone is None:
+            return self
+        try:
+            ZoneInfo(self.timezone)
+            if self.at is not None:
+                self.at = resolve_datetime(self.at, self.timezone, field="schedule.at")
+            if self.start_at is not None:
+                self.start_at = resolve_datetime(
+                    self.start_at, self.timezone, field="schedule.start_at"
+                )
+            if self.end_at is not None:
+                self.end_at = resolve_datetime(self.end_at, self.timezone, field="schedule.end_at")
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def normalize_timezone(self, timezone: str) -> ScheduleInput:
+        self.timezone = timezone
+        ZoneInfo(timezone)
+        if self.at is not None:
+            self.at = resolve_datetime(self.at, timezone, field="schedule.at")
+        if self.start_at is not None:
+            self.start_at = resolve_datetime(self.start_at, timezone, field="schedule.start_at")
+        if self.end_at is not None:
+            self.end_at = resolve_datetime(self.end_at, timezone, field="schedule.end_at")
         return self
 
 
@@ -103,11 +130,21 @@ class ReminderInput(BaseModel):
 class SnoozeInput(BaseModel):
     until: datetime
 
+    @model_validator(mode="after")
+    def normalize_until(self) -> SnoozeInput:
+        self.until = ensure_utc(self.until, field="until")
+        return self
+
 
 class CleanupInput(BaseModel):
     before: datetime
     dry_run: bool = True
     limit: int = Field(default=1000, ge=1, le=10_000)
+
+    @model_validator(mode="after")
+    def normalize_before(self) -> CleanupInput:
+        self.before = ensure_utc(self.before, field="before")
+        return self
 
 
 class ReminderPatchInput(BaseModel):
@@ -124,11 +161,7 @@ class ReminderPatchInput(BaseModel):
 
 
 def _utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+    return None if value is None else ensure_utc(value)
 
 
 def _view(reminder: Reminder) -> dict[str, object]:
@@ -207,6 +240,18 @@ async def _audit_reminder(
 async def create_reminder(
     payload: ReminderInput, request: Request, admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
+    platform_timezone = await read_platform_timezone(
+        request.app.state.session_factory, request.app.state.settings.app_timezone
+    )
+    try:
+        timezone = payload.schedule.timezone or platform_timezone
+        payload.schedule.normalize_timezone(timezone)
+        if payload.repeat is not None and payload.repeat.stop_at is not None:
+            payload.repeat.stop_at = resolve_datetime(
+                payload.repeat.stop_at, timezone, field="repeat.stop_at"
+            )
+    except ValueError as exc:
+        raise AppError("invalid_timezone", str(exc), 422) from exc
     repeat = payload.repeat
     recipient_ids = list(payload.recipients)
     if payload.broadcast:
@@ -227,6 +272,7 @@ async def create_reminder(
                 422,
             )
     try:
+        assert isinstance(timezone, str)
         item = await request.app.state.reminder_service.create(
             ReminderCreate(
                 creator_person_id=payload.creator_person_id or recipient_ids[0],
@@ -236,7 +282,7 @@ async def create_reminder(
                 media_asset_id=payload.media_asset_id,
                 url=payload.url,
                 schedule_type=ScheduleType(payload.schedule.type),
-                timezone=payload.schedule.timezone,
+                timezone=timezone,
                 recipient_ids=tuple(recipient_ids),
                 broadcast=payload.broadcast,
                 notify_on_all_completed=payload.notify_on_all_completed,
@@ -275,18 +321,49 @@ class PreviewInput(BaseModel):
     rrule: str | None = Field(default=None, max_length=500)
     interval_seconds: int | None = Field(default=None, ge=300)
     cron_expression: str | None = Field(default=None, max_length=200)
-    timezone: str = Field(default="Asia/Shanghai", max_length=100)
+    timezone: str | None = Field(default=None, max_length=100)
     start_at: datetime | None = None
     end_at: datetime | None = None
     count: int = Field(default=5, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def normalize_wall_times(self) -> PreviewInput:
+        if self.timezone is None:
+            return self
+        try:
+            ZoneInfo(self.timezone)
+            if self.start_at is not None:
+                self.start_at = resolve_datetime(self.start_at, self.timezone, field="start_at")
+            if self.end_at is not None:
+                self.end_at = resolve_datetime(self.end_at, self.timezone, field="end_at")
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(str(exc)) from exc
+        return self
+
+    def normalize_timezone(self, timezone: str) -> PreviewInput:
+        self.timezone = timezone
+        ZoneInfo(timezone)
+        if self.start_at is not None:
+            self.start_at = resolve_datetime(self.start_at, timezone, field="start_at")
+        if self.end_at is not None:
+            self.end_at = resolve_datetime(self.end_at, timezone, field="end_at")
+        return self
 
 
 @router.post("/reminders/preview")
 async def preview_rrule(
     payload: PreviewInput, request: Request, _admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
+    platform_timezone = await read_platform_timezone(
+        request.app.state.session_factory, request.app.state.settings.app_timezone
+    )
+    try:
+        payload.normalize_timezone(payload.timezone or platform_timezone)
+    except ValueError as exc:
+        raise AppError("invalid_timezone", str(exc), 422) from exc
     start = payload.start_at or request.app.state.clock.now()
     timezone = payload.timezone
+    assert isinstance(timezone, str)
     try:
         ZoneInfo(timezone)
     except ZoneInfoNotFoundError as exc:
@@ -505,6 +582,28 @@ async def update_reminder(
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     schedule, repeat = payload.schedule, payload.repeat
+    repeat_stop_at = repeat.stop_at if repeat else None
+    timezone = schedule.timezone if schedule else None
+    if timezone is None and (schedule is not None or repeat_stop_at is not None):
+        async with request.app.state.session_factory() as session:
+            timezone = await session.scalar(
+                select(Reminder.timezone).where(Reminder.id == reminder_id)
+            )
+    if not isinstance(timezone, str) and (schedule is not None or repeat_stop_at is not None):
+        raise AppError("not_found", "Reminder not found", 404)
+    if schedule is not None:
+        assert isinstance(timezone, str)
+        try:
+            schedule.normalize_timezone(timezone)
+        except ValueError as exc:
+            raise AppError("invalid_reminder", str(exc), 422) from exc
+    if repeat_stop_at is not None:
+        if not isinstance(timezone, str):
+            raise AppError("not_found", "Reminder not found", 404)
+        try:
+            repeat_stop_at = resolve_datetime(repeat_stop_at, timezone, field="repeat.stop_at")
+        except ValueError as exc:
+            raise AppError("invalid_reminder", str(exc), 422) from exc
     try:
         item = await request.app.state.reminder_service.update(
             reminder_id,
@@ -528,7 +627,7 @@ async def update_reminder(
                 ack_policy=AckPolicy(payload.ack_policy) if payload.ack_policy else None,
                 repeat_interval_seconds=repeat.interval_seconds if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
-                stop_at=repeat.stop_at if repeat else None,
+                stop_at=repeat_stop_at,
             ),
         )
     except ReminderError as exc:

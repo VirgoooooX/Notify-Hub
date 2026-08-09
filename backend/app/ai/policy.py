@@ -26,7 +26,7 @@ def profile_policy_instructions(profile: AIProfile) -> str:
     if profile.include_reason:
         instructions.append(f"Keep each reason within {profile.max_reason_characters} characters.")
     else:
-        instructions.append("Return an empty string for every reason field.")
+        instructions.append("Omit the reason field entirely from the response.")
     if profile.system_instructions.strip():
         instructions.extend(
             [
@@ -41,6 +41,22 @@ def profile_policy_instructions(profile: AIProfile) -> str:
 
 def response_format(mode: str, labels: list[str], profile: AIProfile) -> dict[str, Any] | None:
     if mode == "json_schema":
+        result_properties: dict[str, Any] = {
+            "id": {"type": "string"},
+            "label": {"type": "string", "enum": labels},
+            "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1,
+            },
+        }
+        required = ["id", "label", "confidence"]
+        if profile.include_reason:
+            result_properties["reason"] = {
+                "type": "string",
+                "maxLength": profile.max_reason_characters,
+            }
+            required.append("reason")
         return {
             "type": "json_schema",
             "json_schema": {
@@ -53,24 +69,8 @@ def response_format(mode: str, labels: list[str], profile: AIProfile) -> dict[st
                             "type": "array",
                             "items": {
                                 "type": "object",
-                                "properties": {
-                                    "id": {"type": "string"},
-                                    "label": {"type": "string", "enum": labels},
-                                    "confidence": {
-                                        "type": "number",
-                                        "minimum": 0,
-                                        "maximum": 1,
-                                    },
-                                    "reason": {
-                                        "type": "string",
-                                        "maxLength": (
-                                            profile.max_reason_characters
-                                            if profile.include_reason
-                                            else 0
-                                        ),
-                                    },
-                                },
-                                "required": ["id", "label", "confidence", "reason"],
+                                "properties": result_properties,
+                                "required": required,
                                 "additionalProperties": False,
                             },
                         }
@@ -83,6 +83,20 @@ def response_format(mode: str, labels: list[str], profile: AIProfile) -> dict[st
     if mode == "json_object":
         return {"type": "json_object"}
     return None
+
+
+def apply_reason_schema_policy(schema: dict[str, Any], profile: AIProfile) -> dict[str, Any]:
+    if profile.include_reason:
+        return schema
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or "reason" not in properties:
+        return schema
+    result = {**schema, "properties": {**properties}}
+    result["properties"].pop("reason", None)
+    required = schema.get("required")
+    if isinstance(required, list):
+        result["required"] = [field for field in required if field != "reason"]
+    return result
 
 
 def schema_response_format(

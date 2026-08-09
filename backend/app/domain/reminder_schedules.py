@@ -213,15 +213,34 @@ def _cron_calendar_matches(candidate: datetime, fields: _CronFields) -> bool:
     )
 
 
+def local_wall_time_to_utc(local: datetime, zone: ZoneInfo) -> datetime | None:
+    """Convert a wall-clock candidate to UTC, rejecting DST gaps.
+
+    ``zoneinfo`` intentionally accepts nonexistent local times by applying one
+    of the surrounding offsets.  Scheduling must not silently drift such a
+    candidate (for example, 02:30 -> 03:30 on a spring-forward day), so the
+    conversion is validated by an IANA timezone round-trip.  ``fold=0`` is the
+    deterministic policy for repeated wall-clock times.
+    """
+
+    wall = local.replace(tzinfo=None)
+    candidate = wall.replace(tzinfo=zone, fold=0)
+    instant = candidate.astimezone(UTC)
+    if instant.astimezone(zone).replace(tzinfo=None) != wall:
+        return None
+    return instant
+
+
 def _next_cron(
     schedule: CronSchedule,
     *,
     after: datetime,
     inclusive: bool,
 ) -> datetime | None:
+    normalized_after = _normalize_datetime(after, field="after")
     zone = schedule._zone
     fields = schedule._parsed
-    current_date = after.astimezone(zone).date()
+    current_date = normalized_after.astimezone(zone).date()
     limit_date = current_date + timedelta(days=366 * 5)
     while current_date <= limit_date:
         calendar_probe = datetime(
@@ -234,17 +253,32 @@ def _next_cron(
             for hour in sorted(fields.hour):
                 for minute in sorted(fields.minute):
                     local = calendar_probe.replace(hour=hour, minute=minute, fold=0)
-                    candidate = local.astimezone(UTC)
-                    if candidate < after or (candidate == after and not inclusive):
+                    candidate = local_wall_time_to_utc(local, zone)
+                    if candidate is None:
                         continue
-                    # A round trip rejects nonexistent wall times. fold=0 selects the
-                    # first occurrence when clocks repeat a wall-clock minute.
-                    round_trip = candidate.astimezone(zone)
-                    if round_trip.replace(tzinfo=None) != local.replace(tzinfo=None):
+                    if candidate < normalized_after or (
+                        candidate == normalized_after and not inclusive
+                    ):
                         continue
                     return candidate
         current_date += timedelta(days=1)
     return None
+
+
+def next_cron_occurrence(
+    expression: str,
+    *,
+    timezone: str,
+    after: datetime,
+    inclusive: bool = False,
+) -> datetime | None:
+    """Evaluate a cron expression using the reminder wall-clock semantics."""
+
+    return _next_cron(
+        CronSchedule(expression=expression, timezone=timezone),
+        after=after,
+        inclusive=inclusive,
+    )
 
 
 def _timedelta_microseconds(value: timedelta) -> int:

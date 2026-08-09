@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from app.infrastructure.database.media_models import MediaAsset
+from app.infrastructure.database.utc_datetime import restore_utc
 from app.media.errors import MediaError, MediaTooLargeError
 from app.media.validation import CHANNEL_MAX_BYTES, MediaKind, validate_media
 
@@ -51,8 +52,10 @@ class WeComTemporaryMediaAdapter:
         if len(content) > CHANNEL_MAX_BYTES:
             raise MediaTooLargeError(CHANNEL_MAX_BYTES)
         provider_expires_at = asset.provider_expires_at
-        if provider_expires_at is not None and provider_expires_at.tzinfo is None:
-            provider_expires_at = provider_expires_at.replace(tzinfo=UTC)
+        # Compatibility for callers holding a legacy/in-memory ORM object;
+        # persisted values are normalized by UTCDateTime on load.
+        if provider_expires_at is not None:
+            provider_expires_at = restore_utc(provider_expires_at)
         if (
             asset.provider_media_id
             and provider_expires_at

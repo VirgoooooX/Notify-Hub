@@ -15,7 +15,7 @@ from app.infrastructure.database.base import Base
 from app.infrastructure.database.models import AuditLog, Person
 from app.infrastructure.database.session import create_session_factory
 from app.plugin_runtime.base import EventDraft, EventReceipt
-from app.plugin_runtime.context import PluginReminderClient
+from app.plugin_runtime.context import PluginReminderClient, PluginReminderDraft
 from app.plugin_runtime.manifest import PluginManifest
 from app.plugin_runtime.registry import PluginRegistry
 from sqlalchemy import func, select
@@ -33,6 +33,28 @@ def _reminder_body(**updates: object) -> dict[str, object]:
     }
     body.update(updates)
     return body
+
+
+def test_plugin_reminder_wall_time_uses_explicit_timezone() -> None:
+    draft = PluginReminderDraft(
+        creator_person_id="person_plugin",
+        title="DST fold",
+        schedule_type="once",
+        timezone="America/New_York",
+        scheduled_at="2026-11-01T01:30:00",
+        recipient_ids=("person_plugin",),
+    )
+    assert draft.scheduled_at == datetime(2026, 11, 1, 5, 30, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="valid local time"):
+        PluginReminderDraft(
+            creator_person_id="person_plugin",
+            title="DST gap",
+            schedule_type="once",
+            timezone="America/New_York",
+            scheduled_at="2026-03-08T02:30:00",
+            recipient_ids=("person_plugin",),
+        )
 
 
 @pytest.mark.integration

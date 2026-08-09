@@ -289,10 +289,12 @@ async def test_ai_gateway_extracts_summarizes_and_caches(tmp_path: Path) -> None
         options = user_data["options"]
         if "fields" in options:
             calls.append("extract")
+            extraction_schema = payload["response_format"]["json_schema"]["schema"]
+            assert "reason" not in extraction_schema["properties"]
+            assert "reason" not in extraction_schema["required"]
             content = {
                 "values": {"version": "0.6.0", "stable": True},
                 "confidence": 0.98,
-                "reason": "explicit release text",
             }
         else:
             calls.append("summarize")
@@ -310,6 +312,7 @@ async def test_ai_gateway_extracts_summarizes_and_caches(tmp_path: Path) -> None
         profile = await session.get(AIProfile, "test_classifier")
         assert profile is not None
         profile.capability = "extract"
+        profile.include_reason = False
     extraction = await service.extract(
         profile="test_classifier",
         plugin_id="test_plugin",
@@ -343,20 +346,36 @@ async def test_ai_gateway_extracts_summarizes_and_caches(tmp_path: Path) -> None
         max_characters=200,
     )
     assert extraction.values == {"version": "0.6.0", "stable": True}
+    assert extraction.reason == ""
     assert cached_extraction == extraction
     assert summary.summary.startswith("Notify Hub")
     assert calls == ["extract", "summarize"]
     await client.aclose()
+    await factory.kw["bind"].dispose()
 
 
 @pytest.mark.asyncio
 async def test_ai_profile_policy_is_applied_and_capability_is_enforced(tmp_path: Path) -> None:
     system_prompts: list[str] = []
+    calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
         payload = json.loads(request.content)
         system_prompts.append(payload["messages"][0]["content"])
-        return _success_response(request)
+        schema = payload["response_format"]["json_schema"]["schema"]
+        result_schema = schema["properties"]["results"]["items"]
+        assert "reason" not in result_schema["properties"]
+        assert "reason" not in result_schema["required"]
+        response = _success_response(request)
+        body = json.loads(response.content)
+        if calls == 1:
+            content = json.loads(body["choices"][0]["message"]["content"])
+            for item in content["results"]:
+                item.pop("reason")
+            body["choices"][0]["message"]["content"] = json.dumps(content)
+        return httpx.Response(200, json=body)
 
     service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
     async with factory() as session, session.begin():
@@ -378,7 +397,18 @@ async def test_ai_profile_policy_is_applied_and_capability_is_enforced(tmp_path:
         labels=["notify", "ignore"],
     )
     assert result.reason == ""
+    unexpected_reason = await service.classify(
+        profile="test_classifier",
+        plugin_id="test_plugin",
+        plugin_run_id="run-2",
+        use_case="profile_policy",
+        content="another candidate",
+        instruction="Classify candidate.",
+        labels=["notify", "ignore"],
+    )
+    assert unexpected_reason.reason == ""
     assert "Simplified Chinese" in system_prompts[0]
+    assert "Omit the reason field entirely" in system_prompts[0]
     assert "Prefer conservative classifications." in system_prompts[0]
     assert "cannot override platform safety" in system_prompts[0]
 
@@ -386,13 +416,59 @@ async def test_ai_profile_policy_is_applied_and_capability_is_enforced(tmp_path:
         await service.summarize(
             profile="test_classifier",
             plugin_id="test_plugin",
-            plugin_run_id="run-2",
+            plugin_run_id="run-3",
             use_case="wrong_capability",
             content="candidate",
             instruction="Summarize candidate.",
         )
     assert exc_info.value.code == "ai_profile_capability_mismatch"
     await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.parametrize("mode", ["json_object", "prompt_json"])
+@pytest.mark.asyncio
+async def test_disabled_reason_is_omitted_from_classification_fallback_prompts(
+    tmp_path: Path, mode: str
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        system_prompt = payload["messages"][0]["content"]
+        assert (
+            'Return JSON only with shape {"results":[{"id":string,"label":string,'
+            '"confidence":number}]}'
+        ) in system_prompt
+        assert '"confidence":number,"reason":string' not in system_prompt
+        if mode == "json_object":
+            assert payload["response_format"] == {"type": "json_object"}
+        else:
+            assert "response_format" not in payload
+        response = _success_response(request)
+        body = json.loads(response.content)
+        content = json.loads(body["choices"][0]["message"]["content"])
+        for item in content["results"]:
+            item.pop("reason")
+        body["choices"][0]["message"]["content"] = json.dumps(content)
+        return httpx.Response(200, json=body)
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    async with factory() as session, session.begin():
+        profile = await session.get(AIProfile, "test_classifier")
+        assert profile is not None
+        profile.include_reason = False
+        profile.response_format = mode
+    result = await service.classify(
+        profile="test_classifier",
+        plugin_id="test_plugin",
+        plugin_run_id="run-1",
+        use_case="profile_policy",
+        content="candidate",
+        instruction="Classify candidate.",
+        labels=["notify", "ignore"],
+    )
+    assert result.reason == ""
+    await client.aclose()
+    await factory.kw["bind"].dispose()
 
 
 @pytest.mark.asyncio

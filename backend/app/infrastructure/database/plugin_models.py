@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin, TimestampMixin
-from sqlalchemy import JSON, Boolean, DateTime, Index, Integer, String, Text
+from app.infrastructure.database.utc_datetime import UTCDateTime
+from sqlalchemy import JSON, Boolean, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 
@@ -19,8 +20,8 @@ class PluginRecord(StringIdMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="disabled", nullable=False)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     circuit_open: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     last_error: Mapped[str | None] = mapped_column(String(500))
     manifest: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     schedule: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
@@ -34,7 +35,7 @@ class PluginConfig(Base):
     plugin_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     schema_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class PluginState(Base):
@@ -43,7 +44,7 @@ class PluginState(Base):
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[Any] = mapped_column(JSON, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class PluginRun(StringIdMixin, Base):
@@ -55,9 +56,9 @@ class PluginRun(StringIdMixin, Base):
     plugin_id: Mapped[str] = mapped_column(String(64), nullable=False)
     trigger_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="queued", nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     emitted_event_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cursor_before: Mapped[Any | None] = mapped_column(JSON)

@@ -13,8 +13,11 @@ import DataTable from '@/components/data/DataTable.vue'
 import TableToolbar from '@/components/data/TableToolbar.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
 import { useUiStore } from '@/stores/ui'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
+const settings = useSettingsStore()
 const page = ref(1)
 const status = ref('')
 const keyword = ref('')
@@ -52,13 +55,12 @@ watch([status, keyword], () => {
   timer = window.setTimeout(load, 250)
 })
 
-onMounted(load)
+onMounted(() => {
+  void settings.load()
+  void load()
+})
 
-const time = (v: string) =>
-  new Intl.DateTimeFormat('zh-CN', {
-    dateStyle: 'short',
-    timeStyle: 'short'
-  }).format(new Date(v))
+const time = (v: string) => formatInstant(v, settings.timezone)
 </script>
 
 <template>

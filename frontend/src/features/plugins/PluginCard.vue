@@ -3,6 +3,8 @@ import type { Plugin } from '@/types'
 import StatusBadge from '@/components/StatusBadge.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import { formatInstant } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 defineProps<{
   item: Plugin
@@ -15,13 +17,9 @@ const emit = defineEmits<{
   (e: 'toggle', item: Plugin): void
 }>()
 
-const time = (v?: string) =>
-  v
-    ? new Intl.DateTimeFormat('zh-CN', {
-        dateStyle: 'short',
-        timeStyle: 'short'
-      }).format(new Date(v))
-    : '—'
+const settings = useSettingsStore()
+
+const time = (v?: string, timezone?: string) => formatInstant(v, timezone || settings.timezone)
 
 const scheduleText = (item: Plugin) => {
   if (!item.schedule) return '手动'
@@ -60,11 +58,11 @@ const scheduleText = (item: Plugin) => {
       </div>
       <div class="meta-row">
         <span>上次运行</span>
-        <strong>{{ time(item.last_run_at) }}</strong>
+        <strong>{{ time(item.last_run_at, item.schedule?.type === 'cron' ? item.schedule.timezone : undefined) }}</strong>
       </div>
       <div class="meta-row">
         <span>下次运行</span>
-        <strong>{{ time(item.next_run_at) }}</strong>
+        <strong>{{ time(item.next_run_at, item.schedule?.type === 'cron' ? item.schedule.timezone : undefined) }}</strong>
       </div>
       <div class="meta-row">
         <span>连续失败</span>

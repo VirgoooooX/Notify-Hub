@@ -135,6 +135,8 @@ class PluginReminderCreator:
         self._permissions = permissions
 
     async def create(self, draft: PluginReminderDraft) -> PluginReminderReceipt:
+        if draft.timezone is None:
+            raise ValueError("plugin reminder timezone was not resolved")
         result = await self._access.create(
             ReminderCreate(
                 creator_person_id=draft.creator_person_id,

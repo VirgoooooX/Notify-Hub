@@ -65,4 +65,25 @@ describe('feature form models', () => {
     })
     vi.useRealTimers()
   })
+
+  it('keeps datetime-local wall values and sends the selected timezone', () => {
+    const form = defaultReminderForm('America/New_York')
+    form.at = '2026-11-01T01:30'
+    form.recipients = 'person_a'
+
+    expect(reminderCreatePayload(form).schedule).toMatchObject({
+      type: 'once',
+      at: '2026-11-01T01:30',
+      timezone: 'America/New_York',
+    })
+  })
+
+  it('does not silently convert an invalid timezone to UTC', () => {
+    const form = defaultReminderForm()
+    form.timezone = 'Mars/Olympus'
+    form.at = '2026-08-09T09:30'
+    form.recipients = 'person_a'
+
+    expect(() => reminderCreatePayload(form)).toThrow('IANA')
+  })
 })

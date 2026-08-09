@@ -2,6 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -78,6 +79,15 @@ class Settings(BaseSettings):
     def ensure_async_database(cls, value: str) -> str:
         if value.startswith("sqlite:///"):
             return value.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+        return value
+
+    @field_validator("app_timezone")
+    @classmethod
+    def validate_app_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("app_timezone must be a valid IANA timezone") from exc
         return value
 
     @field_validator("wecom_api_base_url")

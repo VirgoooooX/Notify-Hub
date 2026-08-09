@@ -406,6 +406,7 @@ PRAGMA wal_checkpoint(PASSIVE);
 - [ ] 空库升级到 head 通过；
 - [ ] 当前正式 revision 升级到 head 的副本演练通过；
 - [ ] `quick_check=ok`，`foreign_key_check` 无结果；
+- [ ] 抽查数据库时间列确认历史值遵循 UTC 约定；若曾由外部程序写入本地墙钟值，已在副本中完成专项校正；
 - [ ] 迁移前一致备份、SHA-256 和回滚点已记录；
 - [ ] 旧镜像与迁移前备份可用；
 - [ ] 隔离恢复演练验证 Secret、提醒、队列、媒体和插件游标。
@@ -414,6 +415,8 @@ PRAGMA wal_checkpoint(PASSIVE);
 
 - [ ] Delivery、Reminder Planner、Escalation 和 Interaction 崩溃/租约恢复通过；
 - [ ] 重启不丢提醒，不重复生成 Occurrence，不无界补发；
+- [ ] 使用 UTC、平台默认时区和至少一个含 DST 的 IANA 时区验证 Once/Interval/Cron/RRULE；DST 缺口跳过、重复时刻只执行一次；
+- [ ] 在浏览器时区与提醒时区不同的环境中创建提醒，实际 UTC 执行时间仍与所选墙钟时间一致；
 - [ ] 菜单事件重复投递幂等，历史 Action 重复点击幂等；
 - [ ] 交互式文字/图文/图片消息在企业微信和个人微信中的企业微信插件均可展示；
 - [ ] 【快捷操作】中的五种菜单事件均能按 UserID 操作最近一次成功发送的交互式提醒；

@@ -6,6 +6,7 @@ from typing import Any
 
 from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
+from app.application.platform_settings import read_platform_timezone
 from app.application.plugin_runtime_adapters import (
     AuthorizedSecretResolver,
     DatabasePluginConfigStore,
@@ -15,6 +16,7 @@ from app.application.plugin_runtime_adapters import (
     SecretPermissionError,
 )
 from app.application.reminder_access import ReminderAccessService, ReminderPermissions
+from app.application.time_utils import ensure_utc
 from app.config import Settings
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
@@ -190,12 +192,7 @@ class PluginService:
 
     def _plugin_dict(self, row: PluginRecord) -> dict[str, Any]:
         last_run = row.last_run_at
-        if last_run is not None and last_run.tzinfo is None:
-            last_run = last_run.replace(tzinfo=UTC)
-
         next_run = row.next_run_at
-        if next_run is not None and next_run.tzinfo is None:
-            next_run = next_run.replace(tzinfo=UTC)
 
         return {
             "id": row.id,
@@ -514,6 +511,9 @@ class PluginService:
                 key_str,
             ),
         )
+        platform_timezone = await read_platform_timezone(
+            self._factory, self._settings.app_timezone if self._settings else "UTC"
+        )
         context = PluginContext(
             plugin_id=plugin_id,
             run_id=run_id,
@@ -550,7 +550,8 @@ class PluginService:
                     ),
                 )
                 if self._reminder_access is not None and manifest.permissions.reminders.create
-                else None
+                else None,
+                default_timezone=platform_timezone,
             ),
         )
         try:
@@ -575,8 +576,7 @@ class PluginService:
         outcome: RunOutcome,
     ) -> None:
         now = self._clock()
-        if started_at.tzinfo is None:
-            started_at = started_at.replace(tzinfo=UTC)
+        started_at = ensure_utc(started_at, field="started_at")
         async with self._factory() as session, session.begin():
             run = await session.get(PluginRun, run_id)
             plugin = await session.get(PluginRecord, plugin_id)

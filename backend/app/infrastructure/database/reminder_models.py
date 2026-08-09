@@ -4,10 +4,10 @@ from datetime import datetime
 from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin
+from app.infrastructure.database.utc_datetime import UTCDateTime
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -33,16 +33,16 @@ class Reminder(StringIdMixin, Base):
     )
     url: Mapped[str | None] = mapped_column(String(2048))
     schedule_type: Mapped[str] = mapped_column(String(20), nullable=False)
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     recurrence_rule: Mapped[str | None] = mapped_column(String(500))
     schedule_config: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
-    start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    start_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    end_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     misfire_policy: Mapped[str] = mapped_column(
         String(20), default="fire_once", server_default="fire_once", nullable=False
     )
-    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_run_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     broadcast: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
@@ -55,12 +55,12 @@ class Reminder(StringIdMixin, Base):
     repeat_interval_seconds: Mapped[int | None] = mapped_column(Integer)
     max_reminders: Mapped[int | None] = mapped_column(Integer)
     reminder_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    stop_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stop_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     escalation_stop_after_seconds: Mapped[int | None] = mapped_column(Integer)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     claimed_by: Mapped[str | None] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class ReminderRecipient(StringIdMixin, Base):
@@ -72,8 +72,8 @@ class ReminderRecipient(StringIdMixin, Base):
     )
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
-    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     notify_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
@@ -94,8 +94,8 @@ class ReminderOccurrence(StringIdMixin, Base):
         ForeignKey("reminders.id", ondelete="CASCADE"), nullable=False
     )
     occurrence_key: Mapped[str] = mapped_column(String(200), nullable=False)
-    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    triggered_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     broadcast_snapshot: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
@@ -103,12 +103,10 @@ class ReminderOccurrence(StringIdMixin, Base):
     notify_on_all_completed_snapshot: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="0", nullable=False
     )
-    broadcast_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    broadcast_completion_announced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True)
-    )
+    broadcast_sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    broadcast_completion_announced_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     broadcast_claimed_by: Mapped[str | None] = mapped_column(String(100))
-    broadcast_claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    broadcast_claim_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     title_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
     content_snapshot: Mapped[str] = mapped_column(Text, default="", nullable=False)
     content_type_snapshot: Mapped[str] = mapped_column(String(20), default="text", nullable=False)
@@ -117,13 +115,13 @@ class ReminderOccurrence(StringIdMixin, Base):
     ack_policy_snapshot: Mapped[str] = mapped_column(String(10), nullable=False)
     repeat_interval_seconds_snapshot: Mapped[int | None] = mapped_column(Integer)
     max_reminders_snapshot: Mapped[int | None] = mapped_column(Integer)
-    stop_at_snapshot: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stop_at_snapshot: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     completed_by: Mapped[str | None] = mapped_column(String(64))
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class ReminderOccurrenceRecipient(StringIdMixin, Base):
@@ -139,15 +137,15 @@ class ReminderOccurrenceRecipient(StringIdMixin, Base):
     person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     notify_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    next_notify_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    last_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_notify_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_notified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    acknowledged_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     acknowledged_by: Mapped[str | None] = mapped_column(String(64))
     claimed_by: Mapped[str | None] = mapped_column(String(100))
-    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class ConversationSession(StringIdMixin, Base):
@@ -161,10 +159,10 @@ class ConversationSession(StringIdMixin, Base):
     )
     state: Mapped[str] = mapped_column(String(40), nullable=False)
     draft: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    last_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class IncomingMessage(StringIdMixin, Base):
@@ -182,8 +180,8 @@ class IncomingMessage(StringIdMixin, Base):
     text: Mapped[str | None] = mapped_column(Text)
     media_refs: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     event_payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     processing_status: Mapped[str] = mapped_column(String(30), nullable=False)
     error_message: Mapped[str | None] = mapped_column(String(500))
 
@@ -212,9 +210,9 @@ class NotificationAction(StringIdMixin, Base):
     )
     action: Mapped[str] = mapped_column(String(30), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class InteractionEvent(StringIdMixin, Base):
@@ -237,6 +235,6 @@ class InteractionEvent(StringIdMixin, Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=5, nullable=False)
     last_error: Mapped[str | None] = mapped_column(String(200))
     claimed_by: Mapped[str | None] = mapped_column(String(100))
-    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    received_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

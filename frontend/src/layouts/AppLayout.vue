@@ -18,12 +18,14 @@ import {
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
+import { useSettingsStore } from '@/stores/settings'
 import { APP_VERSION } from '@/lib/version'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const ui = useUiStore()
+const settings = useSettingsStore()
 const scrollContainer = ref<globalThis.HTMLElement>()
 const scrollbarTrack = ref<globalThis.HTMLElement>()
 const thumbHeight = ref(0)
@@ -183,6 +185,20 @@ watch(
 )
 
 onMounted(() => {
+  void settings.load().then(async () => {
+    if (!settings.loadError) return
+    if (settings.loadErrorStatus === 401) {
+      ui.toast('登录已失效，请重新登录', 'danger')
+      try {
+        await auth.logout()
+      } catch {
+        // logout() clears local credentials in finally even if the API is unavailable.
+      }
+      await router.push('/login')
+      return
+    }
+    ui.toast('平台时区加载失败，当前暂按 UTC 显示', 'danger')
+  })
   const container = scrollContainer.value
   if (!container) return
   container.addEventListener('scroll', scheduleScrollbarUpdate, { passive: true })

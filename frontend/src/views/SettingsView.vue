@@ -12,15 +12,18 @@ import DescriptionList from '@/components/data/DescriptionList.vue'
 import { useUiStore } from '@/stores/ui'
 import type { AIProfile } from '@/types'
 import { APP_VERSION } from '@/lib/version'
+import { DEFAULT_TIMEZONE } from '@/lib/time'
+import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
+const platform = useSettingsStore()
 const busy = ref(false)
 const testing = ref(false)
 const publishingMenu = ref(false)
 const parserProfiles = ref<AIProfile[]>([])
 
 const settings = reactive({
-  timezone: 'Asia/Shanghai',
+  timezone: DEFAULT_TIMEZONE,
   retention_days: 90,
   default_reminder_parser_profile_id: '',
   version: APP_VERSION,
@@ -48,6 +51,10 @@ onMounted(async () => {
       api.get<AIProfile[]>('/admin/ai/profiles')
     ])
     Object.assign(settings, platformSettings)
+    platform.setTimezone(
+      typeof settings.timezone === 'string' ? settings.timezone : DEFAULT_TIMEZONE,
+    )
+    settings.timezone = platform.timezone
     settings.default_reminder_parser_profile_id =
       typeof platformSettings.default_reminder_parser_profile_id === 'string'
         ? platformSettings.default_reminder_parser_profile_id
@@ -69,6 +76,7 @@ async function save() {
       default_reminder_parser_profile_id:
         settings.default_reminder_parser_profile_id || null
     })
+    platform.setTimezone(settings.timezone)
     ui.toast('平台设置已保存', 'success')
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '保存失败', 'danger')
