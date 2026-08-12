@@ -144,6 +144,8 @@ async def test_sqlite_datetime_round_trip_is_aware_utc(tmp_path: Path) -> None:
 def test_settings_reject_invalid_platform_timezone() -> None:
     with pytest.raises(ValueError, match="IANA timezone"):
         Settings(_env_file=None, app_timezone="Mars/Olympus")
+    with pytest.raises(ValueError, match="IANA timezone"):
+        Settings(_env_file=None, log_timezone="Mars/Olympus")
     with pytest.raises(ValueError, match="must not be null"):
         SettingsUpdate(timezone=None)
 

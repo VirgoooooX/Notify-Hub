@@ -1,0 +1,121 @@
+[
+  {
+    "container": "rsshub-browserless-1",
+    "line": "browserless:server Current period usage: {\"error\":0,\"successful\":4}",
+    "rule": null
+  },
+  {
+    "container": "cloud-media-sync",
+    "line": "INFO m115 response={\"state\": true, \"error\": \"\", \"errno\": 0}",
+    "rule": null
+  },
+  {
+    "container": "rsshub-redis-1",
+    "line": "1:M * <bf> { bf-error-rate : 0.01 }",
+    "rule": null
+  },
+  {
+    "container": "rsshub-rsshub-1",
+    "line": "error: Error in /aibase/news: FetchError: GET returned 404 Not Found",
+    "rule": null
+  },
+  {
+    "container": "fleetge",
+    "line": "Agent poll failed for cloudcone-la: Temporary failure in name resolution",
+    "rule": null
+  },
+  {
+    "container": "Vaultwarden",
+    "line": "[ERROR] 2FA token not provided",
+    "rule": null
+  },
+  {
+    "container": "MoviePilot_115",
+    "line": "ERROR [GitHub] 请求失败 Temporary failure in name resolution",
+    "rule": null
+  },
+  {
+    "container": "readflow-postgres",
+    "line": "FATAL: connection to client lost",
+    "rule": null
+  },
+  {
+    "container": "readflow-server",
+    "line": "[ERROR] [RSS Refresh] Failed for https://rss.example/path Error: HTTP 502",
+    "rule": null
+  },
+  {
+    "container": "qbittorrent",
+    "line": "Http::RequestParser::ParseResult message body parsing error",
+    "rule": null
+  },
+  {
+    "container": "ota-analyzer",
+    "line": "WARNING: Invalid HTTP request received.",
+    "rule": null
+  },
+  {
+    "container": "dailyreport-dashboard-1",
+    "line": "[CRITICAL] WORKER TIMEOUT (pid:123)",
+    "rule": null
+  },
+  {
+    "container": "obsidian-sync-db",
+    "line": "[error] CRASH REPORT Process crashed at chttpd:handle_request",
+    "rule": null
+  },
+  {
+    "container": "lucky",
+    "line": "http: TLS handshake error from 203.0.113.8: tls unsupported versions",
+    "rule": null
+  },
+  {
+    "container": "fb3",
+    "line": "level=error msg=\"path: [/api/login], status:403 username or password invalid\"",
+    "rule": null
+  },
+  {
+    "container": "emby_cms",
+    "line": "s6-svscanctl: fatal: supervisor not listening",
+    "rule": "supervisor_unavailable",
+    "threshold": 2
+  },
+  {
+    "container": "mdc",
+    "line": "ERROR Emby 演员信息拉取失败: error sending request",
+    "rule": null
+  },
+  {
+    "container": "notify-hub",
+    "line": "2026-08-09T00:30:13.256728Z {\"plugin_id\": \"codex_x_monitor\", \"plugin_run_id\": \"prun_fixture_first\", \"error_type\": \"AIGatewayError\", \"event\": \"plugin run failed\", \"level\": \"error\", \"timestamp\": \"2026-08-09T00:30:13.256728Z\"}",
+    "rule": "notify_hub_plugin_run_failed",
+    "threshold": 1
+  },
+  {
+    "container": "notify-hub",
+    "line": "level=error event=delivery_failed error=upstream unavailable",
+    "rule": null
+  },
+  {
+    "container": "wxchat",
+    "line": "ERROR callback forwarding failed",
+    "rule": null
+  },
+  {
+    "container": "it-tools",
+    "line": "ERROR application startup failed",
+    "rule": null
+  },
+  {
+    "container": "notify-hub",
+    "line": "ERROR no space left on device while writing logs",
+    "rule": "storage_exhausted",
+    "threshold": 1
+  },
+  {
+    "container": "minio",
+    "line": "panic: database disk image is malformed",
+    "rule": "storage_corruption",
+    "threshold": 1
+  }
+]

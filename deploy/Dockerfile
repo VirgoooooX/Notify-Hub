@@ -28,6 +28,7 @@ ARG APP_UID=10001
 ARG APP_GID=10001
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
+    TZ=Asia/Shanghai \
     PYTHONPATH=/app/backend \
     PATH=/opt/venv/bin:$PATH
 

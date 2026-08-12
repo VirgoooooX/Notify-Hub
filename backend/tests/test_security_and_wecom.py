@@ -12,6 +12,7 @@ from app.infrastructure.logging.setup import (
     SENSITIVE_DEPENDENCY_LOGGERS,
     SensitiveLogFilter,
     _suppress_sensitive_dependency_logs,
+    _timestamp_processor,
     redact,
 )
 from app.infrastructure.security.tokens import verify_media_signature
@@ -248,6 +249,14 @@ def test_standard_logging_filter_redacts_sensitive_url_arguments() -> None:
     assert "token-value" not in rendered
     assert "access_token=[REDACTED]" in rendered
     assert "safe=yes" in rendered
+
+
+def test_structured_log_timestamp_uses_configured_timezone_and_offset() -> None:
+    event = _timestamp_processor("Asia/Shanghai")(None, "info", {})
+    timestamp = datetime.fromisoformat(str(event["timestamp"]))
+    assert timestamp.tzinfo is not None
+    assert timestamp.utcoffset().total_seconds() == 8 * 60 * 60
+    assert str(event["timestamp"]).endswith("+08:00")
 
 
 def test_sensitive_dependency_request_loggers_are_suppressed() -> None:

@@ -1,9 +1,13 @@
 import json
 import logging
+import os
 import re
 import sys
-from collections.abc import Mapping, MutableMapping
+import time
+from collections.abc import Callable, Mapping, MutableMapping
+from datetime import UTC, datetime
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import structlog
 
@@ -50,6 +54,31 @@ def _suppress_sensitive_dependency_logs() -> None:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
+def _set_process_timezone(timezone: str) -> None:
+    """Set the process-local timezone used by third-party loggers such as loguru."""
+    os.environ["TZ"] = timezone
+    tzset = getattr(time, "tzset", None)
+    if tzset is not None:
+        tzset()
+
+
+def _timestamp_processor(
+    timezone: str,
+) -> Callable[[Any, str, MutableMapping[str, Any]], MutableMapping[str, Any]]:
+    try:
+        zone = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("log_timezone must be a valid IANA timezone") from exc
+
+    def add_timestamp(
+        _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
+    ) -> MutableMapping[str, Any]:
+        event_dict["timestamp"] = datetime.now(UTC).astimezone(zone).isoformat()
+        return event_dict
+
+    return add_timestamp
+
+
 def redact_processor(
     _logger: Any, _method_name: str, event_dict: MutableMapping[str, Any]
 ) -> Mapping[str, Any]:
@@ -57,7 +86,8 @@ def redact_processor(
     return redacted if isinstance(redacted, Mapping) else {"event": redacted}
 
 
-def configure_logging(level: str) -> None:
+def configure_logging(level: str, timezone: str = "Asia/Shanghai") -> None:
+    _set_process_timezone(timezone)
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level.upper(), force=True)
     for handler in logging.getLogger().handlers:
         handler.addFilter(SensitiveLogFilter())
@@ -66,7 +96,7 @@ def configure_logging(level: str) -> None:
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
-            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            _timestamp_processor(timezone),
             redact_processor,
             structlog.processors.JSONRenderer(serializer=json.dumps),
         ],

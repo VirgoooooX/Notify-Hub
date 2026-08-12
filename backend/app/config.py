@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     app_timezone: str = "Asia/Shanghai"
     public_base_url: str | None = None
     log_level: str = "INFO"
+    log_timezone: str = "Asia/Shanghai"
     log_dir: Path = Path("./logs")
     jwt_secret: SecretStr = Field(default=SecretStr("development-only-change-me"))
     public_media_signing_key: SecretStr = Field(
@@ -88,6 +89,15 @@ class Settings(BaseSettings):
             ZoneInfo(value)
         except ZoneInfoNotFoundError as exc:
             raise ValueError("app_timezone must be a valid IANA timezone") from exc
+        return value
+
+    @field_validator("log_timezone")
+    @classmethod
+    def validate_log_timezone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("log_timezone must be a valid IANA timezone") from exc
         return value
 
     @field_validator("wecom_api_base_url")

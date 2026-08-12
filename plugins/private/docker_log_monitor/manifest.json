@@ -1,0 +1,33 @@
+{
+  "id": "docker_log_monitor",
+  "name": "Docker Log Monitor",
+  "version": "0.1.4",
+  "description": "通过 Fleetge Agent 规则化检查多台主机上的 Docker 容器状态与日志",
+  "entrypoint": "plugin:DockerLogMonitorPlugin",
+  "api_version": "1",
+  "kind": "monitor",
+  "trusted": true,
+  "default_schedule": {
+    "type": "interval",
+    "seconds": 300
+  },
+  "max_concurrency": 1,
+  "timeout_seconds": 180,
+  "permissions": {
+    "network": [
+      "192.168.31.100",
+      "192.168.31.253",
+      "metrics.1989009.xyz",
+      "agent.562755.xyz",
+      "agent.zgo.198909.xyz"
+    ],
+    "private_network": ["192.168.31.0/24"],
+    "secrets": [
+      "istoreos_agent",
+      "zspace_nas_agent",
+      "oc_chicago_agent",
+      "cloudcone_la_agent",
+      "zgo_la_agent"
+    ]
+  }
+}

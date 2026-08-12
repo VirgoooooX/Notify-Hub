@@ -80,7 +80,7 @@ class SPAStaticFiles(StaticFiles):
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.log_timezone)
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     clock = SystemClock()

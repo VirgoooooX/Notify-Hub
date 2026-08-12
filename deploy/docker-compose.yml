@@ -7,8 +7,10 @@ services:
     restart: unless-stopped
     environment:
       # 1. 基础运行与代理设置
+      TZ: "${NOTIFY_HUB_LOG_TIMEZONE:-Asia/Shanghai}"
       FORWARDED_ALLOW_IPS: "*"
       NOTIFY_HUB_ENVIRONMENT: "production"
+      NOTIFY_HUB_LOG_TIMEZONE: "${NOTIFY_HUB_LOG_TIMEZONE:-Asia/Shanghai}"
       NOTIFY_HUB_PUBLIC_BASE_URL: "${NOTIFY_HUB_PUBLIC_BASE_URL:?set the public HTTPS URL}"
 
       # 2. 企业微信出站配置
