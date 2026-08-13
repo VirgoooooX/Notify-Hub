@@ -66,6 +66,7 @@ class DeliveryStatus(str, enum.Enum):
 class RecipientType(str, enum.Enum):
     PERSON = "person"
     BROADCAST = "broadcast"
+    PUBLISH = "publish"
 
 
 class AttemptStatus(str, enum.Enum):
@@ -252,6 +253,49 @@ class AuditLog(StringIdMixin, Base):
     details: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     request_id: Mapped[str | None] = mapped_column(String(100))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class MpArticleStatus(str, enum.Enum):
+    DRAFT = "draft"
+    READY = "ready"
+    PUBLISHED = "published"
+    IGNORED = "ignored"
+
+
+class MpArticle(StringIdMixin, Base):
+    """Article library record for the WeChat Official Account workspace."""
+
+    __tablename__ = "mp_articles"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", name="uq_mp_articles_delivery_id"),
+        Index("ix_mp_articles_status_created", "status", "created_at"),
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default=MpArticleStatus.READY.value, nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    author: Mapped[str] = mapped_column(String(100), nullable=False)
+    digest: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    content_html: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    cover_url: Mapped[str | None] = mapped_column(String(2048))
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    event_key: Mapped[str | None] = mapped_column(String(200))
+    source_type: Mapped[str | None] = mapped_column(String(30))
+    source_id: Mapped[str | None] = mapped_column(String(100))
+    event_type: Mapped[str | None] = mapped_column(String(100))
+    notification_id: Mapped[str | None] = mapped_column(
+        ForeignKey("notifications.id", ondelete="SET NULL")
+    )
+    delivery_id: Mapped[str | None] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
+    ai_profile: Mapped[str | None] = mapped_column(String(100))
+    ai_status: Mapped[str | None] = mapped_column(String(20))
+    provider_draft_media_id: Mapped[str | None] = mapped_column(String(200))
+    provider_publish_id: Mapped[str | None] = mapped_column(String(200))
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
 
 
 class WorkerHeartbeat(Base):

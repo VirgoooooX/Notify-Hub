@@ -399,7 +399,8 @@ PRAGMA wal_checkpoint(PASSIVE);
 - [ ] 镜像使用固定 tag/digest；
 - [ ] HTTPS、反向代理、请求体限制和企业微信回调地址正确；
 - [ ] 数据库与媒体挂载已核对，容器非 root，日志轮转已启用；
-- [ ] `.env` 和主加密密钥权限正确且未入库。
+- [ ] `.env` 和主加密密钥权限正确且未入库；
+- [ ] 公众号 AppID/Secret 与发布模式已核对；未启用公众号发布时可留空。
 
 ### 数据与迁移
 
@@ -452,3 +453,29 @@ npm run build
 ```
 
 提醒中心只有在本清单全部满足、待实现项不再作为发布阻断项、恢复演练证据和耐久测试结果均归档后，才可标记为可发布。
+## 12. 公众号发布渠道
+
+### 环境变量
+
+| 变量 | 说明 |
+| --- | --- |
+| `NOTIFY_HUB_MP_APP_ID` | 公众号 AppID，与 Secret 成对配置；个人订阅号可留空走文章库模式 |
+| `NOTIFY_HUB_MP_APP_SECRET` | 公众号 AppSecret |
+| `NOTIFY_HUB_MP_PUBLISH_MODE` | `library` 文章库（人工发布，默认兜底）；`draft` 官方 API 只保存草稿；`publish` 建草稿并提交发布 |
+| `NOTIFY_HUB_MP_AUTHOR` | 文章作者名，默认 `Notify Hub` |
+
+### 双路径行为
+
+- **文章库模式（library）**：未配置 AppID/Secret 或显式设置为 `library` 时，`mp_article` 投递把文章写入文章库（`ready`），后台「公众号文章」可预览、复制公众号富文本格式，或使用 `scripts/wechat-mp-import/notify-hub-mp-import.user.js` 一键填入公众号后台；发布按钮不自动点击，最终由管理员人工确认发布后再标记状态。
+- **官方 API 模式（draft/publish）**：平台下载并校验封面、上传永久素材、建草稿，再按模式保存草稿或提交发布；文章同时记录到文章库作为历史。
+- 显式配置 `draft`/`publish` 但凭证不完整时，投递以不可重试错误进入 dead，可查询、可审计，不隐式降级为文本通知。
+- Access Token 缓存并发安全，Token 失效只强制刷新重试一次；永久参数错误不反复重试；
+- 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；
+- AI 只负责文章翻译/摘要，是否发布由插件确定性规则与置信度阈值决定。
+
+### 浏览器导入脚本
+
+- 安装 Tampermonkey 后导入 `scripts/wechat-mp-import/notify-hub-mp-import.user.js`；
+- 在脚本菜单设置 Notify-Hub 地址和管理员访问令牌（保存在 Tampermonkey 自身存储）；
+- 公众号后台「新建图文」页面右侧面板列出 `ready` 文章，点「填入编辑器」自动填标题/作者/摘要/正文；封面从正文选择或手动上传；
+- 发布按钮始终由人工点击；微信改版导致选择器失效时使用面板「复制正文」兜底。

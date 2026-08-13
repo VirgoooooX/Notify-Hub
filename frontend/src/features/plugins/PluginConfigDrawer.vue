@@ -6,6 +6,7 @@ import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
+import AppSwitch from '@/components/ui/AppSwitch.vue'
 import PluginRecipientSelector from './PluginRecipientSelector.vue'
 import PluginSecretFields from './PluginSecretFields.vue'
 import PluginAiDecisionFields from './PluginAiDecisionFields.vue'
@@ -26,8 +27,10 @@ const props = defineProps<{
     include_reposts: boolean
     decision_mode: string
     ai_profile: string
+    article_ai_profile: string
     ai_min_confidence: number
     rule_ai_threshold: number
+    publish_to_official_account: boolean
     source: string
     feed_url: string
     cover_image_url: string
@@ -53,11 +56,29 @@ const allowedAiProfiles = computed(() => {
   )
 })
 
+const allowedArticleProfiles = computed(() => {
+  const permissions = props.plugin?.manifest?.permissions
+  const allowedIds = permissions?.ai_profiles ?? []
+  return props.aiProfiles.filter(
+    (profile) => profile.enabled && (allowedIds.includes(profile.id) || profile.capability === 'summarize'),
+  )
+})
+
 watch(
   [allowedAiProfiles, () => props.formState.ai_profile],
   ([profiles, selected]) => {
     if (profiles.length && !profiles.some((profile) => profile.id === selected)) {
       props.formState.ai_profile = profiles[0].id
+    }
+  },
+  { immediate: true },
+)
+
+watch(
+  [allowedArticleProfiles, () => props.formState.publish_to_official_account, () => props.formState.article_ai_profile],
+  ([profiles, enabled, selected]) => {
+    if (enabled && profiles.length && !profiles.some((profile) => profile.id === selected)) {
+      props.formState.article_ai_profile = profiles[0].id
     }
   },
   { immediate: true },
@@ -122,6 +143,27 @@ watch(
       <AppAlert variant="info" class="full-width">
         仅处理增量原创帖子；回复和转推会在规则与 AI 判定前过滤。
       </AppAlert>
+
+      <!-- Official Account Publishing (Codex X Monitor) -->
+      <template v-if="plugin.id === 'codex_x_monitor'">
+        <div class="field">
+          <label>发布到公众号</label>
+          <AppSwitch
+            v-model="formState.publish_to_official_account"
+            aria-label="发布到公众号"
+          />
+        </div>
+        <div v-if="formState.publish_to_official_account" class="field">
+          <label>文章 AI Profile（翻译/摘要）</label>
+          <AppSelect
+            v-model="formState.article_ai_profile"
+            :options="allowedArticleProfiles.map((profile) => ({ value: profile.id, label: profile.name }))"
+          />
+          <p class="field-hint">
+            仅用于翻译和摘要，不决定是否发布；未配置时使用确定性摘要。
+          </p>
+        </div>
+      </template>
 
       <!-- AI Options -->
       <template v-if="plugin.id === 'codex_x_monitor'">
@@ -192,6 +234,12 @@ watch(
   font-size: var(--text-xs);
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.field-hint {
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  margin: var(--space-1) 0 0;
 }
 
 @media (max-width: 600px) {

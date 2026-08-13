@@ -1,7 +1,7 @@
 {
   "id": "codex_x_monitor",
   "name": "Codex X Monitor",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "监控指定 X 账号中的 Codex 用量重置消息",
   "entrypoint": "plugin:CodexXMonitorPlugin",
   "api_version": "1",
@@ -18,7 +18,8 @@
     "network": ["x.com", "api.x.com", "rss.example.com"],
     "secrets": ["x_api_bearer_token", "twscrape_cookie"],
     "broadcast": false,
+    "publish_mp": true,
     "media_write": false,
-    "ai_capabilities": ["classify"]
+    "ai_capabilities": ["classify", "summarize"]
   }
 }

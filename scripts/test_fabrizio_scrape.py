@@ -1,28 +1,35 @@
 import asyncio
 import os
 import sys
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+
+import httpx
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 # Add project root and backend directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
 from scripts.set_plugin_secret import load_env_manually
+
 load_env_manually()
 
-from app.application.event_service import EventService
-from app.application.media_service import MediaService
-from app.config import get_settings
-from app.domain.clock import SystemClock
-from app.infrastructure.database.models import WeComIdentity, Secret
-from app.infrastructure.security.tokens import generate_media_signature
-from app.media.validation import MediaKind
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from app.application.event_service import EventService  # noqa: E402
+from app.application.media_service import MediaService  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.domain.clock import SystemClock  # noqa: E402
+from app.infrastructure.database.models import WeComIdentity  # noqa: E402
+from app.infrastructure.security.secret_store import SecretStore  # noqa: E402
+from app.infrastructure.security.tokens import generate_media_signature  # noqa: E402
+from app.media.downloader import SafeMediaDownloader  # noqa: E402
+from app.media.storage import MediaStorage  # noqa: E402
+from app.media.validation import MediaKind  # noqa: E402
 
-from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource
-from plugins.shared.x_monitor.media import select_cover_image
+from plugins.shared.x_monitor.media import select_cover_image  # noqa: E402
+from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource  # noqa: E402
 
 
 class DummyContext:
@@ -36,8 +43,13 @@ class DummyContext:
 
 
 async def main() -> None:
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+    reconfigure_stdout = getattr(sys.stdout, "reconfigure", None)
+    if callable(reconfigure_stdout):
+        reconfigure_stdout(encoding="utf-8")
+    reconfigure_stderr = getattr(sys.stderr, "reconfigure", None)
+    if callable(reconfigure_stderr):
+        reconfigure_stderr(encoding="utf-8")
+
     settings = get_settings()
     db_url = settings.database_url
     if db_url.startswith("sqlite+aiosqlite:///./data/"):
@@ -51,18 +63,10 @@ async def main() -> None:
 
     # 1. Retrieve twscrape_cookie from env or DB
     cookie = os.environ.get("NOTIFY_HUB_PLUGIN_FABRIZIO_HWG_MONITOR_SECRET_TWSCRAPE_COOKIE")
-    if not cookie:
-        async with factory() as session:
-            db_secret = await session.scalar(
-                select(Secret.value_encrypted).where(
-                    Secret.plugin_id == "fabrizio_hwg_monitor",
-                    Secret.name == "twscrape_cookie"
-                )
-            )
-            if db_secret:
-                from app.infrastructure.security.secret_store import SecretStore
-                store = SecretStore(settings.secret_key.get_secret_value())
-                cookie = store.decrypt(db_secret)
+    if not cookie and settings.secret_encryption_key is not None:
+        master_key = settings.secret_encryption_key.get_secret_value()
+        store = SecretStore(factory, SystemClock(), master_key)
+        cookie = await store.get("plugin", "fabrizio_hwg_monitor", "twscrape_cookie")
 
     if not cookie:
         print("Error: twscrape_cookie is not configured in env or DB.")
@@ -117,11 +121,6 @@ async def main() -> None:
     print(f"Text: {target_post.text}")
 
     # 4. Proxy/Download cover image if present
-    import httpx
-    from app.media.storage import MediaStorage
-    from app.media.downloader import SafeMediaDownloader
-    from app.domain.clock import SystemClock
-
     media_storage = MediaStorage(settings.media_root)
     media_http = httpx.AsyncClient(follow_redirects=False)
     public_cover_url = None
@@ -170,8 +169,10 @@ async def main() -> None:
                         expires,
                         settings.public_media_signing_key.get_secret_value()
                     )
-                    base_url = settings.public_base_url or "http://localhost:8000"
-                    public_cover_url = f"{base_url.rstrip('/')}/public/media/{asset.id}?expires={expires}&sig={sig}"
+                    base_url = (settings.public_base_url or "http://localhost:8000").rstrip("/")
+                    public_cover_url = (
+                        f"{base_url}/public/media/{asset.id}?expires={expires}&sig={sig}"
+                    )
                     print(f"Proxy URL generated: {public_cover_url}")
                 except Exception as e:
                     print(f"Warning: Failed to download cover image: {e}")
@@ -180,7 +181,6 @@ async def main() -> None:
 
     # 5. Dispatch manually via EventService
     event_service = EventService(factory, SystemClock())
-    import time
     event_key = f"fabrizio-test-script-{target_post.id}-{int(time.time())}"
     title = "🚨 Live Fabrizio Test (No Match Required)"
     content = f"FabrizioRomano:\n\n{target_post.text}"
@@ -213,3 +213,4 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
+

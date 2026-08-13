@@ -12,7 +12,7 @@ from plugins.shared.x_monitor.models import XPost as XPost
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.3.0"
+PLUGIN_VERSION = "0.4.0"
 STATE_KEY = "monitor_state"
 
 DEFAULT_CONTEXT_PATTERNS = [
@@ -65,8 +65,10 @@ class CodexXMonitorConfig(BaseModel):
     original_posts_only: bool = True
     decision_mode: Literal["rules", "ai", "rules_then_ai", "rules_or_ai"] = "rules"
     ai_profile: str = "semantic_classifier_fast"
+    article_ai_profile: str | None = None
     ai_min_confidence: float = Field(default=0.8, ge=0, le=1)
     rule_ai_threshold: float = Field(default=0.8, ge=0, le=1)
+    publish_to_official_account: bool = False
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
@@ -110,6 +112,11 @@ class AIClassificationResult(Protocol):
     reason: str
 
 
+class AISummaryResult(Protocol):
+    summary: str
+    key_points: list[str]
+
+
 @runtime_checkable
 class PluginAIClient(Protocol):
     async def classify_many(
@@ -121,6 +128,17 @@ class PluginAIClient(Protocol):
         labels: list[str],
         items: list[AIClassificationItem],
     ) -> list[AIClassificationResult]: ...
+
+    async def summarize(
+        self,
+        *,
+        profile: str,
+        use_case: str,
+        content: str,
+        instruction: str,
+        max_characters: int = 2000,
+        cache_key: str | None = None,
+    ) -> AISummaryResult: ...
 
 
 class ArticleDraft(BaseModel):
@@ -145,6 +163,7 @@ class EventDraft(BaseModel):
     require_ack: bool = False
     payload: dict[str, Any] = Field(default_factory=dict)
     article: ArticleDraft | None = None
+    publish_to_mp: bool = False
 
 
 class MonitorState(BaseModel):
@@ -203,6 +222,7 @@ class PluginContext(Protocol):
     http: RestrictedHttpClient
     media: PluginMediaPublisher
     ai: PluginAIClient
+    logger: Any
 
     async def get_config(self) -> Mapping[str, Any]: ...
     async def get_state(self, key: str, default: Any = None) -> Any: ...

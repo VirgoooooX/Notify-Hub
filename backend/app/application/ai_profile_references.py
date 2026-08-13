@@ -24,7 +24,7 @@ def _profile_values(value: Any) -> set[str]:
     if isinstance(value, Mapping):
         result: set[str] = set()
         for key, item in value.items():
-            if key in {"ai_profile", "profile"} and isinstance(item, str):
+            if key in {"ai_profile", "profile", "article_ai_profile"} and isinstance(item, str):
                 result.add(item.lower())
             else:
                 result.update(_profile_values(item))

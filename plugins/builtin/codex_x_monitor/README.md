@@ -37,6 +37,13 @@ RSS/Atom 条目必须能从 `guid`、Atom `id` 或帖子链接解析数字 X 帖
 
 每次规则判定同时产生 `matched` 与 `confidence`。明确否定/询问和明确的额度重置公告具有高置信度；只有上下文或弱关键词的暧昧文本具有较低置信度。在 `rules_then_ai` 模式下，仅当规则置信度低于 `rule_ai_threshold`（默认 `0.8`）时调用 AI；`ai_min_confidence` 则控制 AI 返回 `notify` 后真正发送所需的最低置信度。管理员可以提供正则表达式覆盖默认列表。
 
+## 公众号发布（可选）
+
+- 开启 `publish_to_official_account` 后，命中事件会同时生成 `mp_article` 投递，由平台发布到微信公众号；
+- 平台需要配置公众号 AppID/Secret 与发布模式（`publish` 建草稿并提交发布，`draft` 只保存草稿）；发布逻辑完全位于核心渠道，插件不接触公众号凭证；
+- 可选 `article_ai_profile` 只用于把帖子翻译成中文并写成摘要正文；未配置或 AI 失败时回退到确定性摘要；
+- 是否发布仍由规则判定与 `ai_min_confidence` 置信度阈值决定，AI 摘要不参与发布决策。
+
 ## 测试
 
 从仓库根目录运行：

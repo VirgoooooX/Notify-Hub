@@ -41,6 +41,7 @@ class EventDraft(BaseModel):
     image_url: AnyHttpUrl | None = None
     message_type: Literal["text", "article"] = "text"
     article: ArticleDraft | None = None
+    publish_to_mp: bool = False
     recipients: list[str] | None = None
     require_ack: bool = False
     payload: dict[str, Any] = Field(default_factory=dict)

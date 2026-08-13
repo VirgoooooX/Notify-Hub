@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     wecom_callback_replay_window_seconds: int = Field(default=300, ge=30, le=3600)
     wecom_callback_max_body_bytes: int = Field(default=1_048_576, ge=1024, le=10_485_760)
     allow_broadcast: bool = False
+    mp_app_id: str | None = None
+    mp_app_secret: SecretStr | None = None
+    mp_api_base_url: str = "https://api.weixin.qq.com"
+    mp_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    mp_token_refresh_skew_seconds: int = Field(default=120, ge=0)
+    mp_publish_mode: Literal["library", "draft", "publish"] = "publish"
+    mp_author: str = "Notify Hub"
     media_root: Path = Path("./data/media")
     media_image_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
     media_voice_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
@@ -114,6 +121,20 @@ class Settings(BaseSettings):
             raise ValueError("WECOM API base URL must not include a query or fragment")
         return value.rstrip("/")
 
+    @field_validator("mp_api_base_url")
+    @classmethod
+    def validate_mp_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme != "https":
+            raise ValueError("MP API base URL must use HTTPS")
+        if not parsed.hostname:
+            raise ValueError("MP API base URL must include a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("MP API base URL must not include credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("MP API base URL must not include a query or fragment")
+        return value.rstrip("/")
+
     @field_validator("wecom_agent_id", mode="before")
     @classmethod
     def blank_wecom_agent_id_is_unset(cls, value: object) -> object:
@@ -155,6 +176,13 @@ class Settings(BaseSettings):
         )
         if any(callback_wecom) and not all(callback_wecom):
             raise ValueError("WeCom callback Token and AES key must be configured together")
+
+        outbound_mp = (
+            bool(self.mp_app_id and self.mp_app_id.strip()),
+            bool(self.mp_app_secret and self.mp_app_secret.get_secret_value()),
+        )
+        if self.mp_publish_mode != "library" and any(outbound_mp) and not all(outbound_mp):
+            raise ValueError("MP App ID and Secret must be configured together")
         return self
 
     def ensure_sqlite_parent(self) -> None:

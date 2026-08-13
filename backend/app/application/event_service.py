@@ -175,12 +175,31 @@ class EventService:
         reminder_occurrence_id: str | None = None,
         media_asset_id: str | None = None,
         payload: dict[str, Any] | None = None,
+        publish_to_mp: bool = False,
     ) -> AcceptResult:
         """Accept a trusted platform event through the same durable queue boundary."""
-        if broadcast and recipients != ["@all"]:
-            raise AppError("invalid_broadcast", "Broadcast must use the sole recipient @all", 422)
-        if not recipients:
-            raise AppError("recipient_required", "At least one explicit recipient is required", 422)
+        if publish_to_mp:
+            if broadcast:
+                raise AppError(
+                    "invalid_publish",
+                    "Article publishing cannot be combined with broadcast",
+                    422,
+                )
+            if message_type != "article":
+                raise AppError(
+                    "invalid_publish",
+                    "Article publishing requires an article message",
+                    422,
+                )
+        else:
+            if broadcast and recipients != ["@all"]:
+                raise AppError(
+                    "invalid_broadcast", "Broadcast must use the sole recipient @all", 422
+                )
+            if not recipients:
+                raise AppError(
+                    "recipient_required", "At least one explicit recipient is required", 422
+                )
         key = (source_type, source_id, event_key)
         async with self._factory() as session:
             existing = await session.scalar(
@@ -210,6 +229,9 @@ class EventService:
                 status=EventStatus.ROUTED.value,
                 ignore_reason=None,
             )
+            merged_payload = dict(payload or {})
+            if publish_to_mp:
+                merged_payload["publish_to_mp"] = True
             notification = Notification(
                 id=new_id("ntf"),
                 event=event,
@@ -224,14 +246,37 @@ class EventService:
                 priority="critical" if level == "critical" else "normal",
                 require_ack=require_ack,
                 ack_policy=ack_policy,
-                payload=payload or {},
+                payload=merged_payload,
                 created_at=now,
                 expires_at=None,
             )
             session.add_all([event, notification])
-            delivery_recipients: list[str | None] = (
-                [None] if broadcast else list(dict.fromkeys(recipients))
-            )
+            if publish_to_mp:
+                session.add(
+                    Delivery(
+                        id=new_id("dlv"),
+                        notification=notification,
+                        channel="mp_article",
+                        recipient_type=RecipientType.PUBLISH.value,
+                        recipient_id=None,
+                        status=DeliveryStatus.PENDING.value,
+                        attempt_count=0,
+                        max_attempts=5,
+                        next_attempt_at=now,
+                        claimed_by=None,
+                        claim_expires_at=None,
+                        last_error_code=None,
+                        last_error_message=None,
+                        provider_message_id=None,
+                        sent_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            if broadcast:
+                delivery_recipients: list[str | None] = [None]
+            else:
+                delivery_recipients = list(dict.fromkeys(recipients))
             for recipient_id in delivery_recipients:
                 session.add(
                     Delivery(

@@ -27,6 +27,7 @@ const routes = [
     children: [
       { path: '', name: 'dashboard', component: () => import('@/views/DashboardView.vue'), meta: { title: '运行概览' } },
       { path: 'notifications', name: 'notifications', component: () => import('@/views/NotificationsView.vue'), meta: { title: '通知与投递' } },
+      { path: 'articles', name: 'articles', component: () => import('@/views/ArticlesView.vue'), meta: { title: '公众号文章' } },
       { path: 'notifications/:id', name: 'notification-detail', component: () => import('@/views/NotificationDetailView.vue'), meta: { title: '通知详情' } },
       { path: 'people', name: 'people', component: () => import('@/views/PeopleView.vue'), meta: { title: '接收人' } },
       { path: 'api-clients', name: 'api-clients', component: () => import('@/views/ApiClientsView.vue'), meta: { title: 'API Clients' } },

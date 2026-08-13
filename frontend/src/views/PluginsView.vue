@@ -35,8 +35,10 @@ const editForm = reactive({
   include_reposts: false,
   decision_mode: 'rules',
   ai_profile: 'semantic_classifier_fast',
+  article_ai_profile: '',
   ai_min_confidence: 0.8,
   rule_ai_threshold: 0.8,
+  publish_to_official_account: false,
   source: 'twscrape',
   feed_url: '',
   cover_image_url: '',
@@ -169,8 +171,10 @@ async function configure(item: Plugin) {
     editForm.include_reposts = !!conf.include_reposts
     editForm.decision_mode = (conf.decision_mode as string) || 'rules'
     editForm.ai_profile = (conf.ai_profile as string) || 'semantic_classifier_fast'
+    editForm.article_ai_profile = (conf.article_ai_profile as string) || ''
     editForm.ai_min_confidence = (conf.ai_min_confidence as number) ?? 0.8
     editForm.rule_ai_threshold = (conf.rule_ai_threshold as number) ?? 0.8
+    editForm.publish_to_official_account = !!conf.publish_to_official_account
     editForm.source = (conf.source as string) || 'twscrape'
     editForm.feed_url = (conf.feed_url as string) || ''
     editForm.cover_image_url = (conf.cover_image_url as string) || ''
@@ -212,6 +216,10 @@ async function saveConfig() {
       configData.source = editForm.source
       configData.decision_mode = editForm.decision_mode
       configData.ai_profile = editForm.ai_profile
+      configData.publish_to_official_account = editForm.publish_to_official_account
+      if (editForm.article_ai_profile) {
+        configData.article_ai_profile = editForm.article_ai_profile
+      }
       configData.ai_min_confidence = editForm.ai_min_confidence
       configData.rule_ai_threshold = editForm.rule_ai_threshold
       if (editForm.source === 'rss') {

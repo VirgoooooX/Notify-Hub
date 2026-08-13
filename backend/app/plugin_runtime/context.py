@@ -320,6 +320,7 @@ class PluginContext:
     __slots__ = (
         "_config",
         "_emitter",
+        "_publish_mp_allowed",
         "_secrets",
         "_state",
         "ai",
@@ -342,6 +343,7 @@ class PluginContext:
         secrets: SecretResolver,
         http: RestrictedHttpClient,
         ai: PluginAIClient,
+        publish_mp_allowed: bool = False,
         media: PluginMediaPublisher | None = None,
         reminders: PluginReminderClient | None = None,
     ) -> None:
@@ -351,6 +353,7 @@ class PluginContext:
         self._config = config
         self._emitter = emitter
         self._secrets = secrets
+        self._publish_mp_allowed = publish_mp_allowed
         self.http = http
         self.media = media
         self.ai = ai
@@ -368,6 +371,8 @@ class PluginContext:
             normalized = EventDraft.model_validate(raw, from_attributes=not isinstance(raw, dict))
             if normalized.article is not None and normalized.message_type == "text":
                 normalized = normalized.model_copy(update={"message_type": "article"})
+        if normalized.publish_to_mp and not self._publish_mp_allowed:
+            raise PermissionError("plugin does not have publish_mp permission")
         return await self._emitter.emit(self.plugin_id, normalized)
 
     async def get_state(self, key: str, default: Any = None) -> Any:

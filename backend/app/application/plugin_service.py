@@ -525,6 +525,7 @@ class PluginService:
             ),
             http=http,
             media=media_publisher,
+            publish_mp_allowed=manifest.permissions.publish_mp,
             ai=PluginAIClient(
                 plugin_id=plugin_id,
                 run_id=run_id,

@@ -8,6 +8,7 @@ import {
   KeyRound,
   Blocks,
   AlarmClock,
+  Newspaper,
   Settings,
   Menu,
   LogOut,
@@ -64,6 +65,7 @@ const groups: NavGroup[] = [
     groupName: '消息中心',
     items: [
       { href: '/notifications', label: '通知与投递', icon: BellRing },
+      { href: '/articles', label: '公众号文章', icon: Newspaper },
       { href: '/reminders', label: '提醒与催办', icon: AlarmClock }
     ]
   },

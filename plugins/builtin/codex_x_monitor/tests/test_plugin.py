@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -89,9 +90,18 @@ class FakeAIDecision:
 
 
 class FakeAI:
-    def __init__(self, *, label: str = "notify", error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        label: str = "notify",
+        error: Exception | None = None,
+        summary_error: Exception | None = None,
+        summary: str = "AI 生成的中文摘要正文。",
+    ) -> None:
         self.label = label
         self.error = error
+        self.summary_error = summary_error
+        self.summary = summary
         self.calls: list[dict[str, Any]] = []
 
     async def classify_many(self, **kwargs: Any) -> list[FakeAIDecision]:
@@ -100,10 +110,24 @@ class FakeAI:
             raise self.error
         return [FakeAIDecision(id=item.id, label=self.label) for item in kwargs["items"]]
 
+    async def summarize(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        if self.summary_error is not None:
+            raise self.summary_error
+        return SimpleNamespace(summary=self.summary, key_points=[])
+
 
 class FakeMedia:
     def public_static_url(self, path: str) -> str:
         return f"https://notify.example.com/{path}"
+
+
+class FakeLogger:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, dict[str, Any]]] = []
+
+    def warning(self, event: str, **kwargs: Any) -> None:
+        self.messages.append((event, kwargs))
 
 
 class FakePostSource:
@@ -137,6 +161,7 @@ class FakeContext:
         self.events: list[EventDraft] = []
         self.saved: list[Any] = []
         self.ai = ai or FakeAI(error=AssertionError("unexpected AI call"))
+        self.logger = FakeLogger()
 
     async def get_config(self) -> Mapping[str, Any]:
         return self.config
@@ -208,6 +233,72 @@ def test_scan_recent_processes_history_and_uses_stable_event_key() -> None:
     assert result.emitted_events == 1
     assert [event.event_key for event in context.events] == ["x-post-2061106703446450392"]
     assert context.events[0].article is not None
+
+
+def test_publish_to_official_account_emits_publish_event_with_ai_summary() -> None:
+    context = FakeContext(
+        {
+            **BASE_CONFIG,
+            "first_run_mode": "scan_recent",
+            "scan_recent_limit": 1,
+            "publish_to_official_account": True,
+            "article_ai_profile": "article_summarizer",
+        },
+        [FakeResponse(text=fixture_text("baseline.xml"))],
+        ai=FakeAI(summary="AI 翻译后的公众号正文。"),
+    )
+
+    result = asyncio.run(CodexXMonitorPlugin().run(context))
+
+    assert result.emitted_events == 1
+    event = context.events[0]
+    assert event.publish_to_mp is True
+    assert event.content == "AI 翻译后的公众号正文。"
+    assert event.article is not None
+    assert context.ai.calls[-1]["profile"] == "article_summarizer"
+
+
+def test_publish_ai_summary_failure_falls_back_to_deterministic_summary() -> None:
+    context = FakeContext(
+        {
+            **BASE_CONFIG,
+            "first_run_mode": "scan_recent",
+            "scan_recent_limit": 1,
+            "publish_to_official_account": True,
+            "article_ai_profile": "article_summarizer",
+        },
+        [FakeResponse(text=fixture_text("baseline.xml"))],
+        ai=FakeAI(summary_error=RuntimeError("provider down")),
+    )
+
+    result = asyncio.run(CodexXMonitorPlugin().run(context))
+
+    assert result.emitted_events == 1
+    event = context.events[0]
+    assert event.publish_to_mp is True
+    assert event.content.startswith("@thsottiaux 发布了")
+    assert context.logger.messages[0][0] == "article_ai_summary_failed"
+
+
+def test_publish_to_official_account_defaults_to_off() -> None:
+    context = FakeContext(
+        {**BASE_CONFIG, "first_run_mode": "scan_recent", "scan_recent_limit": 1},
+        [FakeResponse(text=fixture_text("baseline.xml"))],
+    )
+
+    result = asyncio.run(CodexXMonitorPlugin().run(context))
+
+    assert result.emitted_events == 1
+    assert context.events[0].publish_to_mp is False
+
+
+def test_publish_config_allows_deterministic_fallback_without_article_profile() -> None:
+    config = CodexXMonitorConfig.model_validate(
+        {**BASE_CONFIG, "publish_to_official_account": True}
+    )
+
+    assert config.publish_to_official_account is True
+    assert config.article_ai_profile is None
 
 
 def test_posts_are_processed_in_order_and_negative_match_is_excluded() -> None:

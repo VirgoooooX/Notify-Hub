@@ -13,6 +13,7 @@ class ChannelMessage:
     broadcast: bool = False
     payload: dict[str, Any] = field(default_factory=dict)
     media_asset_id: str | None = None
+    delivery_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,15 @@ class FakeChannel:
 
 
 class UnconfiguredChannel:
+    def __init__(self, channel_name: str = "WeCom channel") -> None:
+        self._channel_name = channel_name
+
     async def send(self, _message: ChannelMessage) -> ChannelResult:
         return ChannelResult(
             success=False,
             retryable=False,
             error_code="CHANNEL_NOT_CONFIGURED",
-            error_message="WeCom channel is not configured",
+            error_message=f"{self._channel_name} is not configured",
         )
 
     async def test(self, _recipient: str) -> ChannelResult:

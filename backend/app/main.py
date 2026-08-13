@@ -21,6 +21,7 @@ from app.application.event_service import EventService
 from app.application.media_service import MediaService
 from app.application.mobile_identity_service import MobileIdentityService
 from app.application.mobile_reminder_query_service import MobileReminderQueryService
+from app.application.mp_article_service import MPArticleLibraryService
 from app.application.notification_service import NotificationService
 from app.application.plugin_service import PluginService
 from app.application.reminder_access import ReminderAccessService
@@ -41,6 +42,8 @@ from app.application.wecom_media_service import (
 )
 from app.application.wecom_menu_service import WeComMenuService
 from app.channels.base import UnconfiguredChannel
+from app.channels.mp.adapter import MPArticleAdapter
+from app.channels.mp.client import MPClient
 from app.channels.wecom.adapter import WeComAdapter
 from app.channels.wecom.client import WeComClient
 from app.channels.wecom.crypto import WeComCrypto
@@ -174,6 +177,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.wecom_corp_id
         else UnconfiguredChannel()
     )
+    mp_client = MPClient(settings, clock)
+    mp_library = MPArticleLibraryService(factory, clock, settings)
+    mp_credentials = bool(settings.mp_app_id) and settings.mp_app_secret is not None
+    mp_channel = MPArticleAdapter(
+        mp_client if mp_credentials else None,
+        settings,
+        downloader=media_service.downloader,
+        library=mp_library,
+    )
+    channels = {"wecom": channel, "mp_article": mp_channel}
 
     async def prepare_tts(text: str) -> str:
         if tts_media_service is None:
@@ -186,7 +199,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     worker = DeliveryWorker(
         factory,
-        channel,
+        channels,
         clock,
         "delivery-main",
         settings.delivery_lease_seconds,
@@ -294,6 +307,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if tasks:
             await asyncio.gather(*tasks)
         await wecom_client.close()
+        await mp_client.close()
         await media_http.aclose()
         await engine.dispose()
 
@@ -322,6 +336,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.media_service = media_service
     app.state.tts_media_service = tts_media_service
     app.state.plugin_service = plugin_service
+    app.state.mp_article_library = mp_library
     app.state.plugin_worker = plugin_worker
     app.state.secret_store = secret_store
     if (
@@ -351,6 +366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
 
     # Routers are imported lazily so infrastructure modules remain independently testable.
+    from app.api.admin_articles import router as articles_router
     from app.api.admin_auth import router as auth_router
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
@@ -368,6 +384,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router, prefix="/api/v1/admin/auth")
     app.include_router(ai_router, prefix="/api/v1/admin")
     app.include_router(admin_router, prefix="/api/v1/admin")
+    app.include_router(articles_router, prefix="/api/v1/admin")
     app.include_router(management_router, prefix="/api/v1/admin")
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(client_reminders_router, prefix="/api/v1")

@@ -165,6 +165,28 @@ class CodexXMonitorPlugin:
             if should_notify:
                 matched += 1
                 summary = format_post_summary(post)
+                content = summary
+                article_ai_status = "rules_summary"
+                if config.publish_to_official_account and config.article_ai_profile:
+                    try:
+                        article_result = await context.ai.summarize(
+                            profile=config.article_ai_profile,
+                            use_case="codex_usage_reset_article",
+                            content=post.text,
+                            instruction=(
+                                "把帖子翻译成中文并写成一段适合微信公众号文章的摘要正文，"
+                                "保留关键信息，不添加原文没有的结论。"
+                            ),
+                            max_characters=2000,
+                            cache_key=f"x:{post.author_username}:{post.id}",
+                        )
+                        content = article_result.summary.strip() or summary
+                        article_ai_status = "ai_summarized"
+                    except Exception as exc:
+                        article_ai_status = "fallback_summary"
+                        context.logger.warning(
+                            "article_ai_summary_failed", post_id=post.id, error=str(exc)
+                        )
 
                 cover_url = (
                     str(config.cover_image_url) if config.cover_image_url is not None else None
@@ -177,7 +199,7 @@ class CodexXMonitorPlugin:
                         event_type="codex.usage_reset",
                         event_key=f"x-post-{post.id}",
                         title="Codex 用量可能已重置",
-                        content=summary,
+                        content=content,
                         level=config.notification_level,
                         occurred_at=post.published_at,
                         url=post.url,
@@ -195,6 +217,12 @@ class CodexXMonitorPlugin:
                             "ai_label": getattr(ai_decision, "label", None),
                             "ai_confidence": getattr(ai_decision, "confidence", None),
                             "ai_reason": getattr(ai_decision, "reason", None),
+                            "article_ai_profile": (
+                                config.article_ai_profile
+                                if config.publish_to_official_account
+                                else None
+                            ),
+                            "article_ai_status": article_ai_status,
                         },
                         article=ArticleDraft(
                             title="Codex 用量可能已重置",
@@ -202,6 +230,7 @@ class CodexXMonitorPlugin:
                             url=post.url,
                             image_url=cover_url,
                         ),
+                        publish_to_mp=config.publish_to_official_account,
                     )
                 )
                 status = _receipt_status(receipt)

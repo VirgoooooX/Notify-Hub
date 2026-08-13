@@ -33,6 +33,7 @@ class PluginEventEmitterAdapter:
             image_url=str(event.image_url) if event.image_url else None,
             require_ack=event.require_ack,
             payload=event.payload,
+            publish_to_mp=event.publish_to_mp,
         )
         return EventReceipt(
             event_id=result.event_id,

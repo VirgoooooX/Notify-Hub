@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import replace
 from datetime import datetime, timedelta
@@ -35,14 +35,15 @@ class DeliveryWorker:
     def __init__(
         self,
         factory: async_sessionmaker[AsyncSession],
-        channel: NotificationChannel,
+        channels: Mapping[str, NotificationChannel] | NotificationChannel,
         clock: Clock,
         worker_id: str,
         lease_seconds: int = 120,
         prepare_tts: Callable[[str], Awaitable[str]] | None = None,
         action_token_for_id: Callable[[str], str] | None = None,
     ) -> None:
-        self._factory, self._channel, self._clock = factory, channel, clock
+        self._factory, self._clock = factory, clock
+        self._channels = dict(channels) if isinstance(channels, Mapping) else {"wecom": channels}
         self.worker_id, self._lease_seconds = worker_id, lease_seconds
         self._prepare_tts = prepare_tts
         self._action_token_for_id = action_token_for_id
@@ -134,12 +135,26 @@ class DeliveryWorker:
         delivery_id = await self.claim_one()
         if delivery_id is None:
             return False
-        message = await self._load_message(delivery_id)
-        if message is None:
+        loaded = await self._load_message(delivery_id)
+        if loaded is None:
             await self._finish(
                 delivery_id,
                 ChannelResult(
                     False, False, "RECIPIENT_INVALID", "Recipient identity is unavailable"
+                ),
+                started_at=self._clock.now(),
+            )
+            return True
+        channel_name, message = loaded
+        channel = self._channels.get(channel_name)
+        if channel is None:
+            await self._finish(
+                delivery_id,
+                ChannelResult(
+                    False,
+                    False,
+                    "CHANNEL_NOT_CONFIGURED",
+                    f"Channel {channel_name!r} is not configured",
                 ),
                 started_at=self._clock.now(),
             )
@@ -156,7 +171,7 @@ class DeliveryWorker:
                 message = replace(message, message_type="text", media_asset_id=None)
         attempt_started_at = self._clock.now()
         try:
-            result = await self._channel.send(
+            result = await channel.send(
                 message
             )  # Network call intentionally outside DB transaction.
         except Exception as exc:
@@ -169,7 +184,7 @@ class DeliveryWorker:
         if message.message_type == "voice" and result.error_code == "MEDIA_NOT_SENT":
             await self._enable_text_fallback(delivery_id)
             try:
-                result = await self._channel.send(
+                result = await channel.send(
                     replace(message, message_type="text", media_asset_id=None)
                 )
             except Exception as exc:
@@ -209,7 +224,7 @@ class DeliveryWorker:
                 payload["voice_text_fallback"] = True
                 delivery.notification.payload = payload
 
-    async def _load_message(self, delivery_id: str) -> ChannelMessage | None:
+    async def _load_message(self, delivery_id: str) -> tuple[str, ChannelMessage] | None:
         async with self._factory() as session:
             delivery = await session.scalar(
                 select(Delivery)
@@ -220,7 +235,8 @@ class DeliveryWorker:
                 return None
             notification = delivery.notification
             if (
-                notification.reminder_id
+                delivery.channel == "wecom"
+                and notification.reminder_id
                 and notification.reminder_occurrence_id is None
                 and delivery.recipient_id
             ):
@@ -260,8 +276,10 @@ class DeliveryWorker:
                 await session.commit()
                 return None
             broadcast = delivery.recipient_type == RecipientType.BROADCAST.value
-            if broadcast:
+            if delivery.channel == "mp_article":
                 recipients: list[str] = []
+            elif broadcast:
+                recipients = []
             else:
                 identity = await session.scalar(
                     select(WeComIdentity).where(
@@ -279,20 +297,24 @@ class DeliveryWorker:
                 if isinstance(action_id, str) and self._action_token_for_id is not None:
                     payload["task_id"] = action_id
                     payload["action_token"] = self._action_token_for_id(action_id)
-            return ChannelMessage(
-                message_type=(
-                    "text"
-                    if notification.payload.get("voice_text_fallback")
-                    else notification.message_type
+            return (
+                delivery.channel,
+                ChannelMessage(
+                    message_type=(
+                        "text"
+                        if notification.payload.get("voice_text_fallback")
+                        else notification.message_type
+                    ),
+                    title=notification.title,
+                    content=notification.content,
+                    recipients=recipients,
+                    url=notification.url,
+                    image_url=notification.image_url,
+                    broadcast=broadcast,
+                    payload=payload,
+                    media_asset_id=notification.media_asset_id,
+                    delivery_id=delivery_id,
                 ),
-                title=notification.title,
-                content=notification.content,
-                recipients=recipients,
-                url=notification.url,
-                image_url=notification.image_url,
-                broadcast=broadcast,
-                payload=payload,
-                media_asset_id=notification.media_asset_id,
             )
 
     async def _finish(

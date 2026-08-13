@@ -65,3 +65,37 @@ export interface PluginSecret {
   source?: string
   updated_at?: UtcInstant
 }
+
+export type MpArticleStatus = 'draft' | 'ready' | 'published' | 'ignored'
+export interface MpArticle {
+  id: string
+  status: MpArticleStatus
+  title: string
+  author: string
+  digest: string
+  content: string
+  content_html: string
+  cover_url: string | null
+  source_url: string | null
+  event_key: string | null
+  source_type: string | null
+  source_id: string | null
+  event_type: string | null
+  notification_id: string | null
+  delivery_id: string | null
+  ai_profile: string | null
+  ai_status: string | null
+  provider_draft_media_id: string | null
+  provider_publish_id: string | null
+  published_at: UtcInstant | null
+  created_at: UtcInstant
+  updated_at: UtcInstant
+  payload: Record<string, unknown>
+}
+export interface MpArticleConfig {
+  configured: boolean
+  publish_mode: 'library' | 'draft' | 'publish'
+  effective_mode: 'library' | 'draft' | 'publish'
+  author: string
+  mp_editor_url: string
+}

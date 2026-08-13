@@ -474,3 +474,54 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
 - ORM 底层仍使用现有数据库列类型，本决策本身不要求修改 SQLite 表结构；发布前仍需完成一致备份和 Alembic 空库升级验证。
 - 现有 SQLite 无时区时间值按项目原有约定视为 UTC。若部署曾由外部程序写入本地墙钟值，升级前必须单独审计和校正，不能由应用猜测。
 - 旧客户端若向绝对时间字段提交无 offset 值将收到稳定的校验错误；计划表单应改为同时提交本地墙钟值和 IANA 时区。
+## ADR-027：公众号文章发布作为平台渠道能力
+
+**状态：已接受**
+
+### 决策
+
+新增 `mp_article` 投递渠道。插件只通过 `EventDraft.publish_to_mp` 表达发布意图并提供文章标题、正文、封面和摘要；公众号 AppID/Secret、Access Token、永久素材、草稿与发布调用全部由核心 `channels/mp` 负责。发布事件必须同时满足：
+
+- `message_type == "article"` 且携带封面；
+- 不与 `@all` 广播组合；
+- Manifest 声明 `publish_mp: true` 权限，运行时缺少权限直接拒绝。
+
+插件是否发布仍由确定性规则和 AI 分类置信度阈值决定；AI 摘要（`summarize`）只生成文章正文，失败时回退确定性摘要，不参与发布决策。`mp_publish_mode` 支持 `draft`（仅建草稿）与 `publish`（建草稿后提交发布）。未配置公众号凭证的投递按不可重试错误进入 dead，不隐式降级为文本通知。
+
+### 原因
+
+- 插件保持“只发现事件”的边界，渠道凭证和微信接口调用集中在核心；
+- 公众号发布复用既有 Event/Notification/Delivery 的幂等、重试和审计链路；
+- AI 作为建议层，不获得“是否发布”的决定权；
+- 未启用公众号的插件（fabrizio_hwg_monitor、docker_log_monitor 等）完全不受影响。
+
+### 后果
+
+- Delivery 新增 `recipient_type=publish` 与 `channel=mp_article`；
+- 新增环境变量 `NOTIFY_HUB_MP_APP_ID`、`NOTIFY_HUB_MP_APP_SECRET`、`NOTIFY_HUB_MP_PUBLISH_MODE`、`NOTIFY_HUB_MP_AUTHOR`；
+- 既有企业微信投递路径保持不变。
+## ADR-028：公众号文章库与人工最终发布（library 模式）
+
+**状态：已接受**
+
+### 决策
+
+在 ADR-027 的官方 API 路径之外，新增 `library` 文章库路径，两条路径并存：
+
+- `mp_publish_mode=library` 或未配置 AppID/Secret 时，`mp_article` 投递不再进入 dead，而是把文章写入 `mp_articles` 文章库（状态 `ready`），通过管理后台「公众号文章」工作台预览、复制公众号富文本格式，或由 Tampermonkey 脚本一键填入公众号后台；**发布按钮不自动点击，最终发布由管理员人工确认**。
+- 显式配置 `mp_publish_mode=draft|publish` 且凭证完整时，仍走 ADR-027 官方 API 路径（上传永久素材 → 建草稿 → 可选提交发布），文章同时记录到文章库作为历史。
+- 状态机：`draft/ready → published | ignored`，`ignored/published → ready`（restore）。`published` 与 `ignored` 之间不允许直接转换。
+- 文章库只存储平台生成、内容已转义的 HTML；前端预览按只读处理，禁止回填到插件或渠道。
+
+### 原因
+
+- 个人主体订阅号不能使用公众号官方发布 API（无认证/服务号能力），但插件已完成的 AI 判断、翻译、封面和排版不应浪费；
+- 把“生成/排版/保存”与“最终发布”分离，既保留官方 API 自动化，又为个人号提供可靠的半自动路径；
+- 人工最终发布比无人值守自动化更稳，且不需要维护微信模拟登录态。
+
+### 后果
+
+- 新增 `MpArticle` 模型与迁移 `0014_add_mp_articles`、管理 API `/api/v1/admin/articles*` 和前端文章工作台；
+- `ChannelMessage` 增加 `delivery_id`，文章库按 delivery 幂等落库；
+- 新增 `scripts/wechat-mp-import/notify-hub-mp-import.user.js` 浏览器导入脚本；
+- ADR-027 中“未配置公众号凭证即进入 dead”的行为仅对显式 `draft|publish` 模式保留，未配置凭证默认走 `library`。

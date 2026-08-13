@@ -10,6 +10,18 @@
 
 ## 功能进展
 
+### 2026-08-13 - 公众号文章工作台与人工发布路径（library 模式）
+
+- 摘要：在官方 API 路径之外新增 `library` 文章库模式，解决个人订阅号无法使用官方发布 API 的问题；`mp_article` 投递未配置凭证时自动写入文章库，管理后台「公众号文章」预览、复制公众号富文本格式，并经 Tampermonkey 脚本一键填入公众号后台，发布按钮仍由人工点击。
+- 影响：新增 `MpArticle` 模型/迁移、管理 API 与前端工作台；Codex X Monitor 生成的文章在个人号场景可直接走半自动发布；官方 `draft`/`publish` 路径保留并存。
+- 验证：MP 渠道/文章库集成测试与前端工作台测试通过；README/总纲/ADR/运维文档同步更新。
+
+### 2026-08-12 - 公众号文章发布渠道
+
+- 摘要：新增 `mp_article` 平台渠道，插件以 `publish_to_mp` 声明发布意图，核心负责公众号 Token、永久素材、草稿与发布。
+- 影响：Codex X Monitor 可把命中事件发布为公众号文章；发布与否仍由规则与 AI 置信度决定，AI 摘要只生成正文并支持确定性回退。
+- 验证：MP Client/Adapter、Event/Delivery 集成与插件测试通过；fabrizio_hwg_monitor 与 docker_log_monitor 未改动。
+
 ### 2026-07-16 - Reminder Center 完整系统
 
 - 摘要：完成 Reminder 定义、Occurrence、逐接收人状态、Once/Interval/Cron/RRULE 调度、持续催办、企业微信菜单和移动端提醒页面。
