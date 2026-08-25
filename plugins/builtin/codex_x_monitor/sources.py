@@ -12,6 +12,7 @@ from xml.etree.ElementTree import Element
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
 
+from plugins.shared.x_monitor.rsshub_source import RssHubTimelineSource
 from plugins.shared.x_monitor.twscrape_source import (
     TwscrapeTimelineSource,
     XMonitorError,
@@ -41,6 +42,16 @@ class SourceRateLimited(SourceError):
 
 class PostSource(Protocol):
     async def fetch(self, context: PluginContext, config: CodexXMonitorConfig) -> list[XPost]: ...
+
+
+class CodexRssHubSource:
+    async def fetch(self, context: PluginContext, config: CodexXMonitorConfig) -> list[XPost]:
+        return await RssHubTimelineSource().fetch(
+            context,
+            config.username,
+            config.fetch_limit,
+            config.include_replies,
+        )
 
 
 def extract_post_id(*candidates: str | None) -> str | None:

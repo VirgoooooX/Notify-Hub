@@ -1,5 +1,3 @@
-import asyncio
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -8,8 +6,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "backend"))
 
-from plugins.builtin.codex_x_monitor.schemas import CodexXMonitorConfig, XPost
 from plugins.builtin.codex_x_monitor.matcher import match_post
+from plugins.builtin.codex_x_monitor.schemas import CodexXMonitorConfig, XPost
 
 tweets = [
     # 1. 包含 ChatGPT Work
@@ -38,7 +36,7 @@ tweets = [
     "We are giving all Codex users a usage reset on the house. Should be showing in your accounts in the next few hours."
 ]
 
-config = CodexXMonitorConfig(source="twscrape")
+config = CodexXMonitorConfig(source="rsshub")
 
 print("--- Running Codex X Monitor Matching Test (With Updated Context Rules) ---")
 for idx, t in enumerate(tweets, 1):

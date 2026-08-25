@@ -26,8 +26,14 @@ services:
       NOTIFY_HUB_WECOM_CALLBACK_TOKEN: "${NOTIFY_HUB_WECOM_CALLBACK_TOKEN:-}"
       NOTIFY_HUB_WECOM_CALLBACK_AES_KEY: "${NOTIFY_HUB_WECOM_CALLBACK_AES_KEY:-}"
 
-      # 4. 插件敏感凭据 (内置 Codex X 监控插件的 Twitter Cookie，格式：'auth_token=xxx; ct0=yyy')
-      NOTIFY_HUB_PLUGIN_CODEX_X_MONITOR_SECRET_TWSCRAPE_COOKIE: "${NOTIFY_HUB_PLUGIN_CODEX_X_MONITOR_SECRET_TWSCRAPE_COOKIE:-}"
+      # 4. X source integration. RSSHub owns the X Cookie/auth_token.
+      NOTIFY_HUB_X_SOURCE_PROVIDER: "${NOTIFY_HUB_X_SOURCE_PROVIDER:-rsshub}"
+      NOTIFY_HUB_RSSHUB_BASE_URL: "${NOTIFY_HUB_RSSHUB_BASE_URL:-http://rsshub:1200}"
+      NOTIFY_HUB_RSSHUB_ACCESS_KEY: "${NOTIFY_HUB_RSSHUB_ACCESS_KEY:-}"
+      NOTIFY_HUB_X_HEALTH_ALERT_ENABLED: "${NOTIFY_HUB_X_HEALTH_ALERT_ENABLED:-true}"
+      NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS: "${NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS:-[]}"
+      # Optional cold standby. Leave empty while RSSHub is healthy.
+      NOTIFY_HUB_X_TWSCRAPE_COOKIE: "${NOTIFY_HUB_X_TWSCRAPE_COOKIE:-}"
 
       # 5. Optional AI Gateway bootstrap. Leave disabled/blank to configure later in the admin UI.
       NOTIFY_HUB_AI_ENABLED: "${NOTIFY_HUB_AI_ENABLED:-false}"

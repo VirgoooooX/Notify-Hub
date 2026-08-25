@@ -21,7 +21,7 @@ from .schemas import (
     PluginRunResult,
     XPost,
 )
-from .sources import PostSource, RssAtomSource, TwscrapeSource, XApiSource
+from .sources import CodexRssHubSource, PostSource, RssAtomSource, TwscrapeSource, XApiSource
 
 MAX_RECENT_PROCESSED_IDS = 200
 
@@ -56,6 +56,7 @@ class CodexXMonitorPlugin:
 
     def __init__(self, sources: Mapping[str, PostSource] | None = None) -> None:
         self._sources: Mapping[str, PostSource] = sources or {
+            "rsshub": CodexRssHubSource(),
             "rss": RssAtomSource(),
             "x_api": XApiSource(),
             "twscrape": TwscrapeSource(),
@@ -71,7 +72,17 @@ class CodexXMonitorPlugin:
 
     @classmethod
     def validate_config(cls, config: Mapping[str, Any]) -> dict[str, Any]:
-        return CodexXMonitorConfig.model_validate(config).model_dump(mode="json")
+        normalized = dict(config)
+        # Provider selection moved to the platform X source integration. Keep
+        # old rows readable, but never let a legacy plugin setting bypass it.
+        normalized["source"] = "rsshub"
+        if "fetch_limit" not in normalized and "twscrape_fetch_limit" in normalized:
+            normalized["fetch_limit"] = normalized["twscrape_fetch_limit"]
+        normalized.pop("twscrape_fetch_limit", None)
+        normalized["feed_url"] = None
+        validated = CodexXMonitorConfig.model_validate(normalized).model_dump(mode="json")
+        validated.pop("twscrape_fetch_limit", None)
+        return validated
 
     async def run(self, context: PluginContext) -> PluginRunResult:
         config = CodexXMonitorConfig.model_validate(await context.get_config())

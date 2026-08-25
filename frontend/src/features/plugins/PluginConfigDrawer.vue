@@ -22,7 +22,6 @@ const props = defineProps<{
   // Form fields
   formState: PluginScheduleFormState & {
     username: string
-    twscrape_fetch_limit: number
     include_replies: boolean
     include_reposts: boolean
     decision_mode: string
@@ -31,8 +30,6 @@ const props = defineProps<{
     ai_min_confidence: number
     rule_ai_threshold: number
     publish_to_official_account: boolean
-    source: string
-    feed_url: string
     cover_image_url: string
     fallback_cover_url: string
     recipients: string[]
@@ -104,41 +101,9 @@ watch(
         :default-schedule="plugin.manifest?.default_schedule"
       />
 
-      <!-- Codex X Monitor Specific -->
-      <template v-if="plugin.id === 'codex_x_monitor'">
-        <div class="field">
-          <label>数据源</label>
-          <AppSelect v-model="formState.source">
-            <option value="rss">
-              RSS
-            </option>
-            <option value="x_api">
-              X API
-            </option>
-            <option value="twscrape">
-              twscrape
-            </option>
-          </AppSelect>
-        </div>
-
-        <div v-if="formState.source === 'rss'" class="field">
-          <label>RSS Feed URL</label>
-          <AppInput v-model="formState.feed_url" type="url" required />
-        </div>
-
-        <div v-if="formState.source === 'twscrape'" class="field">
-          <label>twscrape 抓取条数</label>
-          <AppInput v-model.number="formState.twscrape_fetch_limit" type="number" min="10" max="100" required />
-        </div>
-      </template>
-
-      <!-- HWG Monitor Specific -->
-      <template v-if="plugin.id === 'fabrizio_hwg_monitor'">
-        <div class="field">
-          <label>twscrape 抓取条数</label>
-          <AppInput v-model.number="formState.twscrape_fetch_limit" type="number" min="10" max="100" required />
-        </div>
-      </template>
+      <AppAlert variant="info" class="full-width">
+        X 内容统一由平台 RSSHub 集成读取；Cookie、Token 和备用 Provider 不在插件配置中管理。
+      </AppAlert>
 
       <AppAlert variant="info" class="full-width">
         仅处理增量原创帖子；回复和转推会在规则与 AI 判定前过滤。

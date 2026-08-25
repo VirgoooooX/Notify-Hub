@@ -243,6 +243,35 @@ class PlatformSetting(TimestampMixin, Base):
     value: Mapped[Any] = mapped_column(JSON, nullable=False)
 
 
+class XSourceHealth(TimestampMixin, Base):
+    """Durable health/incident state for the platform X source capability."""
+
+    __tablename__ = "x_source_health"
+    __table_args__ = (
+        Index("ix_x_source_health_provider_status", "provider", "status"),
+        Index("ix_x_source_health_username", "username"),
+    )
+
+    scope_key: Mapped[str] = mapped_column(String(180), primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    username: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20), default="healthy", nullable=False)
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    consecutive_successes: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    incident_id: Mapped[str | None] = mapped_column(String(64))
+    incident_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    first_failure_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_failure_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_post_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_alert_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    stale_since: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    stale_last_alert_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    last_error_code: Mapped[str | None] = mapped_column(String(100))
+    last_error_message: Mapped[str | None] = mapped_column(String(500))
+
+
 class AuditLog(StringIdMixin, Base):
     __tablename__ = "audit_logs"
     actor_type: Mapped[str] = mapped_column(String(30), nullable=False)

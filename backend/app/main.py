@@ -41,6 +41,8 @@ from app.application.wecom_media_service import (
     OutboundWeComMediaService,
 )
 from app.application.wecom_menu_service import WeComMenuService
+from app.application.x_health_service import XHealthService
+from app.application.x_source_service import XSourceService
 from app.channels.base import UnconfiguredChannel
 from app.channels.mp.adapter import MPArticleAdapter
 from app.channels.mp.client import MPClient
@@ -66,6 +68,7 @@ from app.workers.interaction_worker import InteractionWorker
 from app.workers.media_cleanup_worker import MediaCleanupWorker
 from app.workers.plugin_worker import PluginWorker
 from app.workers.reminder_worker import ReminderWorker
+from app.workers.x_health_worker import XHealthWorker
 
 
 class SPAStaticFiles(StaticFiles):
@@ -142,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         voice_max_seconds=settings.media_voice_max_seconds,
         retention_seconds=settings.media_retention_seconds,
     )
+    x_source = XSourceService(settings)
     temporary_media = WeComTemporaryMediaAdapter(
         wecom_client,
         DatabaseMediaCacheRepository(factory),
@@ -216,10 +220,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         clock=clock.now,
         media_service=media_service,
         settings=settings,
+        x_source=x_source,
         ai_service=ai_service,
         reminder_access=reminder_access_service,
     )
     plugin_worker = PluginWorker(plugin_service, worker_id="plugin-main")
+    x_health_service = XHealthService(
+        factory,
+        clock,
+        event_service,
+        x_source,
+        plugin_service.list_x_health_targets,
+        settings,
+    )
+    x_health_worker = XHealthWorker(
+        x_health_service,
+        poll_seconds=settings.x_health_poll_seconds,
+    )
 
     async def interaction_loop() -> None:
         while not worker_stop.is_set():
@@ -299,15 +316,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ]
             )
             await plugin_worker.start()
+            await x_health_worker.start()
         yield
         app.state.ready = False
         worker_stop.set()
         if settings.environment != "test":
+            await x_health_worker.stop()
             await plugin_worker.stop()
         if tasks:
             await asyncio.gather(*tasks)
         await wecom_client.close()
         await mp_client.close()
+        await x_source.close()
         await media_http.aclose()
         await engine.dispose()
 
@@ -336,6 +356,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.media_service = media_service
     app.state.tts_media_service = tts_media_service
     app.state.plugin_service = plugin_service
+    app.state.x_source = x_source
+    app.state.x_health_service = x_health_service
+    app.state.x_health_worker = x_health_worker
     app.state.mp_article_library = mp_library
     app.state.plugin_worker = plugin_worker
     app.state.secret_store = secret_store

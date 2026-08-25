@@ -28,9 +28,9 @@ def load_env_manually() -> None:
 
 load_env_manually()
 
-from app.config import get_settings
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from app.config import get_settings  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 
 async def main() -> None:
@@ -48,12 +48,14 @@ async def main() -> None:
 
     plugin_id = "codex_x_monitor"
 
-    # Default config structure for twscrape source
+    # X provider selection and credentials belong to platform settings. This
+    # helper only writes plugin business configuration; the platform defaults
+    # to RSSHub and owns the optional twscrape cold standby.
     config_data = {
         "enabled": True,
         "username": "thsottiaux",
-        "source": "twscrape",
-        "twscrape_fetch_limit": 40,
+        "source": "rsshub",
+        "fetch_limit": 40,
         "include_replies": True,
         "include_reposts": False,
         "notification_level": "info",
@@ -71,11 +73,12 @@ async def main() -> None:
         if exists:
             await conn.execute(
                 text(
-                    "UPDATE plugin_configs SET config = :config, updated_at = :now WHERE plugin_id = :pid"
+                    "UPDATE plugin_configs SET config = :config, updated_at = :now "
+                    "WHERE plugin_id = :pid"
                 ),
                 {"config": config_json, "now": now_str, "pid": plugin_id},
             )
-            print("Successfully updated existing config to 'twscrape' source!")
+            print("Successfully updated Codex plugin config; platform X source remains RSSHub.")
         else:
             await conn.execute(
                 text(
@@ -84,7 +87,7 @@ async def main() -> None:
                 ),
                 {"pid": plugin_id, "config": config_json, "now": now_str},
             )
-            print("Successfully inserted new config with 'twscrape' source!")
+            print("Successfully inserted Codex plugin config; platform X source is RSSHub.")
 
     await engine.dispose()
 

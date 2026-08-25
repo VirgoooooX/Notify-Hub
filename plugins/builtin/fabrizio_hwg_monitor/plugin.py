@@ -6,7 +6,7 @@ from typing import Any
 
 from plugins.shared.x_monitor.media import select_cover_image
 from plugins.shared.x_monitor.models import XPost
-from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource
+from plugins.shared.x_monitor.rsshub_source import RssHubTimelineSource
 
 from .matcher import match_hwg
 from .schemas import (
@@ -48,10 +48,10 @@ def format_summary(post: XPost, max_length: int = 800) -> str:
 class FabrizioHwgPlugin:
     plugin_id = "fabrizio_hwg_monitor"
     api_version = "1"
-    version = "0.1.0"
+    version = "0.2.0"
 
     def __init__(self, source: Any = None) -> None:
-        self._source = source or TwscrapeTimelineSource()
+        self._source = source or RssHubTimelineSource()
 
     @classmethod
     def metadata(cls) -> dict[str, str]:
@@ -60,6 +60,17 @@ class FabrizioHwgPlugin:
     @classmethod
     def config_schema(cls) -> dict[str, Any]:
         return FabrizioHwgConfig.model_json_schema()
+
+    @classmethod
+    def validate_config(cls, config: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = dict(config)
+        normalized["source"] = "rsshub"
+        if "fetch_limit" not in normalized and "twscrape_fetch_limit" in normalized:
+            normalized["fetch_limit"] = normalized["twscrape_fetch_limit"]
+        normalized.pop("twscrape_fetch_limit", None)
+        validated = FabrizioHwgConfig.model_validate(normalized).model_dump(mode="json")
+        validated.pop("twscrape_fetch_limit", None)
+        return validated
 
     async def run(self, context: PluginContext) -> PluginRunResult:
         config = FabrizioHwgConfig.model_validate(await context.get_config())
@@ -70,7 +81,7 @@ class FabrizioHwgPlugin:
             await self._source.fetch(
                 context,
                 config.username,
-                config.twscrape_fetch_limit,
+                config.fetch_limit,
                 config.include_replies,
             ),
             key=_post_sort_key,
@@ -84,7 +95,7 @@ class FabrizioHwgPlugin:
                 state.last_seen_post_id = latest.id
                 state.last_seen_published_at = latest.published_at
                 state.recent_processed_ids = [post.id for post in posts[-MAX_RECENT_PROCESSED_IDS:]]
-            state.last_source = config.source
+            state.last_source = "rsshub"
             state.last_success_at = datetime.now(UTC)
             await self._save_state(context, state)
             return PluginRunResult(status="baseline_initialized", fetched_posts=len(posts))
@@ -97,14 +108,14 @@ class FabrizioHwgPlugin:
         matched = 0
         for post in candidates:
             if post.is_repost:
-                await self._checkpoint(context, state, post, config.source)
+                await self._checkpoint(context, state, post, "rsshub")
                 continue
             if post.is_reply:
-                await self._checkpoint(context, state, post, config.source)
+                await self._checkpoint(context, state, post, "rsshub")
                 continue
 
             if not match_hwg(post.text):
-                await self._checkpoint(context, state, post, config.source)
+                await self._checkpoint(context, state, post, "rsshub")
                 continue
 
             matched += 1
@@ -137,7 +148,7 @@ class FabrizioHwgPlugin:
                     payload={
                         "post_id": post.id,
                         "author": post.author_username,
-                        "source": "twscrape",
+                        "source": "rsshub",
                         "original_image_url": str(original_cover) if original_cover else None,
                     },
                     article=ArticleDraft(
@@ -156,9 +167,9 @@ class FabrizioHwgPlugin:
             if status == "accepted":
                 emitted += 1
 
-            await self._checkpoint(context, state, post, config.source)
+            await self._checkpoint(context, state, post, "rsshub")
 
-        state.last_source = config.source
+        state.last_source = "rsshub"
         state.last_success_at = datetime.now(UTC)
         await self._save_state(context, state)
         return PluginRunResult(

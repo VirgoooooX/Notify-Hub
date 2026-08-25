@@ -28,9 +28,9 @@ def load_env_manually() -> None:
 
 load_env_manually()
 
-from app.config import get_settings
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from app.config import get_settings  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import create_async_engine  # noqa: E402
 
 
 async def main() -> None:
@@ -57,20 +57,29 @@ async def main() -> None:
 
         if row:
             config = json.loads(row[0])
+            if "fetch_limit" not in config and "twscrape_fetch_limit" in config:
+                config["fetch_limit"] = config["twscrape_fetch_limit"]
+            config["source"] = "rsshub"
+            config.pop("twscrape_fetch_limit", None)
             config["cover_image_url"] = target_url
             await conn.execute(
                 text(
-                    "UPDATE plugin_configs SET config = :config, updated_at = :now WHERE plugin_id = :pid"
+                    "UPDATE plugin_configs SET config = :config, updated_at = :now "
+                    "WHERE plugin_id = :pid"
                 ),
-                {"config": json.dumps(config), "now": datetime.now(UTC).isoformat(), "pid": plugin_id},
+                {
+                    "config": json.dumps(config),
+                    "now": datetime.now(UTC).isoformat(),
+                    "pid": plugin_id,
+                },
             )
             print(f"Successfully updated cover_image_url in existing config to: {target_url}")
         else:
             config = {
                 "enabled": True,
                 "username": "thsottiaux",
-                "source": "twscrape",
-                "twscrape_fetch_limit": 40,
+                "source": "rsshub",
+                "fetch_limit": 40,
                 "include_replies": True,
                 "include_reposts": False,
                 "notification_level": "info",
@@ -81,7 +90,11 @@ async def main() -> None:
                     "INSERT INTO plugin_configs (plugin_id, config, schema_version, updated_at) "
                     "VALUES (:pid, :config, 1, :now)"
                 ),
-                {"pid": plugin_id, "config": json.dumps(config), "now": datetime.now(UTC).isoformat()},
+                {
+                    "pid": plugin_id,
+                    "config": json.dumps(config),
+                    "now": datetime.now(UTC).isoformat(),
+                },
             )
             print(f"Successfully created config and set cover_image_url to: {target_url}")
 

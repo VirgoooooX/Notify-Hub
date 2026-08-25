@@ -44,6 +44,9 @@ def test_validate_config_expands_ai_profile_default() -> None:
     validated = CodexXMonitorPlugin.validate_config({**BASE_CONFIG, "decision_mode": "ai"})
 
     assert validated["ai_profile"] == "semantic_classifier_fast"
+    assert validated["source"] == "rsshub"
+    assert validated["feed_url"] is None
+    assert "twscrape_fetch_limit" not in validated
 
 
 @dataclass

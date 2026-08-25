@@ -14,8 +14,11 @@ class FabrizioHwgConfig(BaseModel):
 
     enabled: bool = True
     username: str = "FabrizioRomano"
-    source: Literal["twscrape"] = "twscrape"
+    # Kept for one-way compatibility with stored v0.1 configs. Provider
+    # selection is now platform-owned and the runtime always uses context.x.
+    source: Literal["rsshub", "twscrape"] = "rsshub"
     twscrape_fetch_limit: int = Field(default=40, ge=10, le=100)
+    fetch_limit: int = Field(default=40, ge=10, le=100)
     first_run_mode: Literal["baseline", "scan_recent"] = "baseline"
     scan_recent_limit: int = Field(default=10, ge=1, le=100)
     recipients: list[str] = Field(default_factory=list)
@@ -24,6 +27,8 @@ class FabrizioHwgConfig(BaseModel):
     include_replies: bool = False
     original_posts_only: bool = True
     fallback_cover_url: AnyHttpUrl | None = None
+    content_silence_alert_enabled: bool | None = None
+    content_silence_seconds: int | None = Field(default=None, ge=3600, le=2_592_000)
 
     @field_validator("username")
     @classmethod
@@ -74,7 +79,7 @@ class MonitorState(BaseModel):
     last_seen_published_at: datetime | None = None
     recent_processed_ids: list[str] = Field(default_factory=list)
     last_success_at: datetime | None = None
-    last_source: Literal["twscrape"] | None = None
+    last_source: Literal["rsshub", "twscrape"] | None = None
 
 
 class PluginRunResult(BaseModel):

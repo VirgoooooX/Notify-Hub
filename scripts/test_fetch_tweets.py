@@ -28,51 +28,18 @@ def load_env_manually() -> None:
 
 load_env_manually()
 
-from app.config import get_settings
-from app.domain.clock import SystemClock
-from app.infrastructure.security.secret_store import SecretStore
-from plugins.builtin.codex_x_monitor.schemas import CodexXMonitorConfig
-from plugins.builtin.codex_x_monitor.sources import TwscrapeSource
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-
-
-class FakeContextForPrint:
-    def __init__(self, secret_store) -> None:
-        self.secret_store = secret_store
-
-    async def get_secret(self, name: str) -> str:
-        val = await self.secret_store.get("plugin", "codex_x_monitor", name)
-        if val is None:
-            raise ValueError(f"Secret {name} not found")
-        return val
+from app.application.x_source_service import XSourceService  # noqa: E402
+from app.config import get_settings  # noqa: E402
 
 
 async def main() -> None:
     settings = get_settings()
-    db_url = settings.database_url
-    if db_url.startswith("sqlite+aiosqlite:///./data/"):
-        for p in [Path("data/notify-hub.db"), Path("backend/data/notify-hub.db")]:
-            if p.is_file():
-                db_url = "sqlite+aiosqlite:///" + str(p.resolve())
-                break
-
-    engine = create_async_engine(db_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-
-    store = SecretStore(
-        factory, SystemClock(), settings.secret_encryption_key.get_secret_value()
-    )
-    context = FakeContextForPrint(store)
-
-    config = CodexXMonitorConfig(
-        username="thsottiaux", source="twscrape", twscrape_fetch_limit=10, include_replies=True
-    )
-
-    source = TwscrapeSource()
-    print("Fetching tweets from X using your configured twscrape_cookie...")
+    source = XSourceService(settings)
+    username = "thsottiaux"
+    print(f"Fetching tweets from @{username} via platform provider '{source.provider_name}'...")
     try:
-        posts = await source.fetch(context, config)
-        print(f"\nSuccessfully fetched {len(posts)} tweets from @{config.username}:\n")
+        posts = await source.fetch_records(username, limit=10, include_replies=True)
+        print(f"\nSuccessfully fetched {len(posts)} tweets from @{username}:\n")
         # Print up to 3 tweets
         for i, post in enumerate(posts[:3], 1):
             print(f"[{i}] Tweet ID: {post.id}")
@@ -81,10 +48,10 @@ async def main() -> None:
             print(f"    URL: {post.url}")
             print(f"    Text: {post.text}")
             print("-" * 50)
-    except Exception as e:
-        print(f"Error fetching tweets: {e}")
-
-    await engine.dispose()
+    except Exception as exc:
+        print(f"Error fetching tweets: {type(exc).__name__}: {exc}")
+    finally:
+        await source.close()
 
 
 if __name__ == "__main__":

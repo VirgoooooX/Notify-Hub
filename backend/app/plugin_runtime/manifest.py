@@ -77,6 +77,7 @@ class PluginPermissions(BaseModel):
     broadcast: bool = False
     publish_mp: bool = False
     media_write: bool = False
+    x_source: bool = False
     private_network: list[str] = Field(default_factory=list)
     ai_profiles: list[str] = Field(default_factory=list)
     ai_capabilities: list[Literal["classify", "extract", "summarize"]] = Field(default_factory=list)

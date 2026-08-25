@@ -38,6 +38,35 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 | P2 | `ready` 持续失败、Worker 心跳过期、dead/retry 队列持续增长、SQLite 锁错误持续出现 | 暂停变更，检查数据库和租约，评估是否需要回滚 |
 | P3 | 单条永久失败、单个非法回调、单个媒体缺失 | 隔离单条记录，按审计流程重试或修正配置 |
 
+### 2.3 X 数据源与健康告警
+
+Notify Hub 的 X 时间线是平台能力，不是插件私有网络配置。生产默认使用 RSSHub：
+
+```dotenv
+NOTIFY_HUB_X_SOURCE_PROVIDER=rsshub
+NOTIFY_HUB_RSSHUB_BASE_URL=http://rsshub:1200
+NOTIFY_HUB_RSSHUB_ACCESS_KEY=
+NOTIFY_HUB_X_HEALTH_ALERT_ENABLED=true
+NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS=["person_admin"]
+```
+
+- RSSHub 自己维护 X Cookie/auth_token；Notify Hub 只请求 RSSHub 的规范化用户时间线，不在插件配置或普通日志中保存 X Cookie。
+- `NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS` 是 Notify Hub 内部 Person ID 的 JSON 数组，不是企业微信 `@all`。为空时仍会记录健康状态，但不会创建告警投递；不会隐式广播。
+- 健康 Worker 独立于插件调度和插件熔断运行，默认每 300 秒检查所有启用且声明 `x_source` 权限的 X 插件账号。连续 3 次失败后告警；故障期间按重复间隔提醒；连续 2 次成功后发送恢复通知。状态落在 `x_source_health`，重启可恢复。
+- 账号不存在、账号级 HTTP 错误只产生账号告警，不误报 RSSHub 整体故障；RSSHub 超时、5xx、限流或解析失败才会进入数据源级状态。
+- 可选的内容静默检查只表示“请求成功但长时间没有新推文”，不等价于数据源故障。默认关闭，可用平台默认值或插件字段开启。
+- twscrape 仍保留为冷备，但不自动切换。只有显式部署 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape` 并提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 才会启用；验证完成后要显式切回 RSSHub。
+- 仓库中的 X 诊断脚本也通过平台级 Provider 运行；`scripts/set_plugin_secret.py` 仅显示当前平台源状态，不再写入插件级 Cookie Secret。
+
+排查顺序：
+
+1. 先检查 RSSHub 自身路由是否能返回 200 和有效条目；不要先更新 Notify Hub 的 Cookie：`curl --fail --silent http://127.0.0.1:1200/twitter/user/<username>`。
+2. 检查 Notify Hub 的 `ready`、`x_source_health` 记录、健康 Worker 日志和最近的 `system.x_source_*` / `system.x_account_*` Event。
+3. 检查 Event 是否已进入 Notification/Delivery，以及 Delivery 是否因企业微信接收人或渠道配置进入 `dead`；数据源故障和投递故障是两条独立链路。
+4. 需要切换冷备时先备份数据库、记录当前镜像和配置，停止自动化变更，完成一次手工抓取验证后再恢复插件；不要在生产上同时运行两套 Provider。
+
+健康告警本身也依赖 Notify Hub 的数据库和企业微信 Delivery，因此它不能替代宿主机对 `/health/ready`、容器重启、磁盘和备份的外部监控。
+
 ## 3. SQLite 一致备份
 
 ### 3.1 备份集合
@@ -429,6 +458,7 @@ PRAGMA wal_checkpoint(PASSIVE);
 - [ ] 迁移前一致备份、SHA-256 和回滚点已记录；
 - [ ] 旧镜像与迁移前备份可用；
 - [ ] 隔离恢复演练验证 Secret、提醒、队列、媒体和插件游标。
+- [x] `x_source_health` 迁移完成，RSSHub 200/超时、账号错误、恢复和内容静默告警已在隔离环境验证；
 
 ### 可靠性
 
@@ -452,6 +482,7 @@ PRAGMA wal_checkpoint(PASSIVE);
 - [ ] 外部监控覆盖 live、ready、容器重启、磁盘和备份；
 - [ ] 队列深度、最老任务、Worker heartbeat、锁错误和媒体容量可观测；
 - [ ] 告警通知不只依赖 Notify Hub 自身；
+- [ ] X 数据源健康告警已配置明确 Person ID，且没有把空接收人或 `@all` 当作默认收件人；
 - [ ] 日志和审计不含 Secret、历史 Action Token、完整回调或敏感正文；
 - [ ] 管理员重试、取消、清理、备份和恢复均有审计记录；
 - [ ] 发布后观察至少一个完整 Once/Interval/Cron 和持续催办完成周期。

@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,12 +12,12 @@ from scripts.set_plugin_secret import load_env_manually
 
 load_env_manually()
 
-from app.application.event_service import EventService
-from app.config import get_settings
-from app.domain.clock import SystemClock
-from app.infrastructure.database.models import WeComIdentity
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from app.application.event_service import EventService  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.domain.clock import SystemClock  # noqa: E402
+from app.infrastructure.database.models import WeComIdentity  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 
 async def main() -> None:
@@ -50,7 +49,8 @@ async def main() -> None:
     # 3. Simulate tweet contents
     tweet_text = (
         "Enjoy a full reset of your usage limits for ChatGPT Work and Codex. "
-        "Propagating in the next hour. Rolling out to Pro plans first and then all paid plans over the next 24 hours."
+        "Propagating in the next hour. Rolling out to Pro plans first and then all "
+        "paid plans over the next 24 hours."
     )
     summary = f"@thsottiaux 发布了与 Codex 用量重置相关的新消息:\n\n{tweet_text}"
 
@@ -78,7 +78,7 @@ async def main() -> None:
             "post_id": "test_id_123",
             "author": "thsottiaux",
             "matched_rules": ["codex", "chatgpt work", "reset"],
-            "source": "twscrape",
+            "source": "rsshub",
         },
     )
 

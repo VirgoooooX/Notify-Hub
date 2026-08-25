@@ -53,6 +53,18 @@ class Settings(BaseSettings):
     delivery_lease_seconds: int = Field(default=120, ge=5)
     worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=60)
     reminder_poll_seconds: float = Field(default=5.0, gt=0, le=60)
+    x_source_provider: Literal["rsshub", "twscrape"] = "rsshub"
+    rsshub_base_url: str = "http://rsshub:1200"
+    rsshub_access_key: SecretStr | None = None
+    x_twscrape_cookie: SecretStr | None = None
+    x_health_alert_enabled: bool = True
+    x_health_alert_recipient_ids: list[str] = Field(default_factory=list, max_length=100)
+    x_health_poll_seconds: float = Field(default=300.0, gt=0, le=3600)
+    x_health_failure_threshold: int = Field(default=3, ge=1, le=100)
+    x_health_repeat_interval_seconds: int = Field(default=21_600, ge=300, le=604_800)
+    x_health_recovery_success_threshold: int = Field(default=2, ge=1, le=20)
+    x_health_content_silence_enabled: bool = False
+    x_health_content_silence_seconds: int = Field(default=86_400, ge=3600, le=2_592_000)
     wecom_corp_id: str | None = None
     wecom_agent_id: int | None = None
     wecom_secret: SecretStr | None = None
@@ -107,6 +119,26 @@ class Settings(BaseSettings):
             raise ValueError("log_timezone must be a valid IANA timezone") from exc
         return value
 
+    @field_validator("rsshub_base_url")
+    @classmethod
+    def validate_rsshub_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("RSSHub base URL must use http or https")
+        if not parsed.hostname:
+            raise ValueError("RSSHub base URL must include a host")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("RSSHub base URL must not include credentials")
+        if parsed.query or parsed.fragment:
+            raise ValueError("RSSHub base URL must not include a query or fragment")
+        return value.rstrip("/")
+
+    @field_validator("x_health_alert_recipient_ids")
+    @classmethod
+    def normalize_x_health_recipients(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        return list(dict.fromkeys(cleaned))
+
     @field_validator("wecom_api_base_url")
     @classmethod
     def validate_wecom_url(cls, value: str) -> str:
@@ -142,6 +174,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def production_secrets_are_strong(self) -> "Settings":
+        if self.x_source_provider == "twscrape":
+            cookie = (
+                self.x_twscrape_cookie.get_secret_value().strip()
+                if self.x_twscrape_cookie is not None
+                else ""
+            )
+            cookie_lower = cookie.casefold()
+            if not cookie:
+                raise ValueError("x_twscrape_cookie is required when twscrape is selected")
+            if "auth_token=" not in cookie_lower or "ct0=" not in cookie_lower:
+                raise ValueError("x_twscrape_cookie must contain auth_token and ct0")
         if self.environment == "production":
             jwt = self.jwt_secret.get_secret_value()
             if len(jwt) < 32 or jwt == "development-only-change-me":

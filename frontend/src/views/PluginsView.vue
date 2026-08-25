@@ -26,7 +26,6 @@ const currentDefaultSchedule = ref<PluginSchedule | null>(null)
 
 const editForm = reactive({
   username: '',
-  twscrape_fetch_limit: 40,
   schedule_mode: 'default' as PluginScheduleMode,
   schedule_interval_minutes: 3,
   schedule_cron_expression: '*/10 * * * *',
@@ -39,8 +38,6 @@ const editForm = reactive({
   ai_min_confidence: 0.8,
   rule_ai_threshold: 0.8,
   publish_to_official_account: false,
-  source: 'twscrape',
-  feed_url: '',
   cover_image_url: '',
   fallback_cover_url: '',
   recipients: [] as string[],
@@ -163,8 +160,6 @@ async function configure(item: Plugin) {
 
     const conf = details.config || {}
     editForm.username = (conf.username as string) || ''
-    editForm.twscrape_fetch_limit = (conf.twscrape_fetch_limit as number) || 40
-
     loadScheduleForm(details)
 
     editForm.include_replies = false
@@ -175,8 +170,6 @@ async function configure(item: Plugin) {
     editForm.ai_min_confidence = (conf.ai_min_confidence as number) ?? 0.8
     editForm.rule_ai_threshold = (conf.rule_ai_threshold as number) ?? 0.8
     editForm.publish_to_official_account = !!conf.publish_to_official_account
-    editForm.source = (conf.source as string) || 'twscrape'
-    editForm.feed_url = (conf.feed_url as string) || ''
     editForm.cover_image_url = (conf.cover_image_url as string) || ''
     editForm.fallback_cover_url = (conf.fallback_cover_url as string) || ''
     editForm.recipients = (conf.recipients as string[]) || []
@@ -213,7 +206,7 @@ async function saveConfig() {
     }
 
     if (pluginId === 'codex_x_monitor') {
-      configData.source = editForm.source
+      configData.source = 'rsshub'
       configData.decision_mode = editForm.decision_mode
       configData.ai_profile = editForm.ai_profile
       configData.publish_to_official_account = editForm.publish_to_official_account
@@ -222,17 +215,11 @@ async function saveConfig() {
       }
       configData.ai_min_confidence = editForm.ai_min_confidence
       configData.rule_ai_threshold = editForm.rule_ai_threshold
-      if (editForm.source === 'rss') {
-        configData.feed_url = editForm.feed_url
-      } else if (editForm.source === 'twscrape') {
-        configData.twscrape_fetch_limit = editForm.twscrape_fetch_limit
-      }
       if (editForm.cover_image_url) {
         configData.cover_image_url = editForm.cover_image_url
       }
     } else if (pluginId === 'fabrizio_hwg_monitor') {
-      configData.source = 'twscrape'
-      configData.twscrape_fetch_limit = editForm.twscrape_fetch_limit
+      configData.source = 'rsshub'
       if (editForm.fallback_cover_url) {
         configData.fallback_cover_url = editForm.fallback_cover_url
       }

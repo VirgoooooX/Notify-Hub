@@ -1,5 +1,4 @@
 import asyncio
-import os
 import sys
 import time
 from datetime import UTC, datetime
@@ -19,27 +18,16 @@ load_env_manually()
 
 from app.application.event_service import EventService  # noqa: E402
 from app.application.media_service import MediaService  # noqa: E402
+from app.application.x_source_service import XSourceService  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.domain.clock import SystemClock  # noqa: E402
 from app.infrastructure.database.models import WeComIdentity  # noqa: E402
-from app.infrastructure.security.secret_store import SecretStore  # noqa: E402
 from app.infrastructure.security.tokens import generate_media_signature  # noqa: E402
 from app.media.downloader import SafeMediaDownloader  # noqa: E402
 from app.media.storage import MediaStorage  # noqa: E402
 from app.media.validation import MediaKind  # noqa: E402
 
 from plugins.shared.x_monitor.media import select_cover_image  # noqa: E402
-from plugins.shared.x_monitor.twscrape_source import TwscrapeTimelineSource  # noqa: E402
-
-
-class DummyContext:
-    def __init__(self, cookie: str) -> None:
-        self.cookie = cookie
-
-    async def get_secret(self, key: str) -> str:
-        if key == "twscrape_cookie":
-            return self.cookie
-        raise KeyError(key)
 
 
 async def main() -> None:
@@ -61,20 +49,7 @@ async def main() -> None:
     engine = create_async_engine(db_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
 
-    # 1. Retrieve twscrape_cookie from env or DB
-    cookie = os.environ.get("NOTIFY_HUB_PLUGIN_FABRIZIO_HWG_MONITOR_SECRET_TWSCRAPE_COOKIE")
-    if not cookie and settings.secret_encryption_key is not None:
-        master_key = settings.secret_encryption_key.get_secret_value()
-        store = SecretStore(factory, SystemClock(), master_key)
-        cookie = await store.get("plugin", "fabrizio_hwg_monitor", "twscrape_cookie")
-
-    if not cookie:
-        print("Error: twscrape_cookie is not configured in env or DB.")
-        print("Please configure it in the Admin console plugins page first.")
-        await engine.dispose()
-        return
-
-    # 2. Fetch active recipients
+    # 1. Fetch active recipients
     async with factory() as session:
         result = await session.scalars(
             select(WeComIdentity.person_id).where(WeComIdentity.active.is_(True))
@@ -85,27 +60,27 @@ async def main() -> None:
         print("Warning: No active WeCom users found. Defaulting to 'admin'.")
         recipients = ["admin"]
 
-    # 3. Fetch latest tweets using the shared timeline source
-    source = TwscrapeTimelineSource()
-    dummy_ctx = DummyContext(cookie)
+    # 2. Fetch through the platform-owned provider. Set
+    # NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape to exercise the cold standby.
+    source = XSourceService(settings)
     username = "FabrizioRomano"
     fetch_limit = 5
 
-    print(f"Connecting to X and scraping latest {fetch_limit} tweets from @{username}...")
+    print(
+        f"Fetching latest {fetch_limit} tweets from @{username} "
+        f"via platform provider '{source.provider_name}'..."
+    )
     try:
-        posts = await source.fetch(
-            dummy_ctx,
-            username=username,
-            fetch_limit=fetch_limit,
-            include_replies=False
-        )
-    except Exception as e:
-        print(f"Error scraping timeline: {e}")
+        posts = await source.fetch_records(username, limit=fetch_limit, include_replies=False)
+    except Exception as exc:
+        print(f"Error fetching timeline: {type(exc).__name__}: {exc}")
+        await source.close()
         await engine.dispose()
         return
 
     if not posts:
         print("No tweets found or scraped.")
+        await source.close()
         await engine.dispose()
         return
 
@@ -208,9 +183,9 @@ async def main() -> None:
 
     print(f"\n[Success] Created simulated event: {res.event_id}")
     print("Check WeCom for the card notification!")
+    await source.close()
     await engine.dispose()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
-

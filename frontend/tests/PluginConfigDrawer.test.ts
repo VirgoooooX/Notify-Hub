@@ -48,7 +48,6 @@ describe('PluginConfigDrawer', () => {
     }
     const formState = {
       username: 'thsottiaux',
-      twscrape_fetch_limit: 20,
       schedule_mode: 'default' as const,
       schedule_interval_minutes: 5,
       schedule_cron_expression: '*/10 * * * *',
@@ -61,8 +60,6 @@ describe('PluginConfigDrawer', () => {
       ai_min_confidence: 0.8,
       rule_ai_threshold: 0.8,
       publish_to_official_account: false,
-      source: 'twscrape',
-      feed_url: '',
       cover_image_url: '',
       fallback_cover_url: '',
       recipients: [],

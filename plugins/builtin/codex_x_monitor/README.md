@@ -1,35 +1,35 @@
 # Codex X Monitor
 
-内置插件 `codex_x_monitor` 监控指定 X 账号的 RSS/Atom Feed，或可选的 X API v2，发现与 Codex 用量重置、额度恢复或限制变化有关的帖子后向 Notify Hub 核心提交 `codex.usage_reset` 事件。
+内置插件 `codex_x_monitor` 监控指定 X 账号的时间线，发现与 Codex 用量重置、额度恢复或限制变化有关的帖子后向 Notify Hub 核心提交 `codex.usage_reset` 事件。生产时间线由平台统一的 X 数据源能力读取，默认是 RSSHub。
 
 ## 边界与可靠性
 
 - 插件只通过 `PluginContext` 获取配置、状态、Secret、受限 HTTP 和提交事件；不导入 ORM 或企业微信渠道。
-- 事件键固定为 `x-post-<post_id>`。RSS 与 X API 对同一帖子生成相同键，切源时仍由核心幂等。
+- 事件键固定为 `x-post-<post_id>`。RSSHub 与冷备 Provider 对同一帖子生成相同键，切源时仍由核心幂等。
 - 默认首次运行执行 baseline，只保存最新稳定帖子 ID，不通知历史内容。
 - Feed 会先按发布时间和数字帖子 ID 升序处理。无关帖子也推进游标；匹配帖子仅在核心返回 `accepted` 或 `duplicate` 后推进。
-- HTTP 请求总超时为 20 秒。X API Bearer Token 只从名为 `x_api_bearer_token` 的插件 Secret 获取，绝不进入普通配置或日志。
+- 插件本身不配置 RSSHub 地址、RSSHub Token、X Cookie 或 Provider；这些由平台部署环境管理，绝不进入普通插件配置或日志。
+- 平台健康 Worker 独立检查启用账号，在连续失败、恢复或可选的内容静默时通过核心 Event/Delivery 流程告警。
 
-## RSS 配置示例
+## 插件配置示例
 
 ```json
 {
   "enabled": true,
   "username": "thsottiaux",
-  "source": "rss",
-  "feed_url": "https://rss.example.com/thsottiaux/rss",
+  "source": "rsshub",
+  "fetch_limit": 40,
   "interval_seconds": 600,
   "first_run_mode": "baseline",
   "recipients": []
 }
 ```
 
-RSS/Atom 条目必须能从 `guid`、Atom `id` 或帖子链接解析数字 X 帖子 ID。插件不会以标题或正文哈希代替稳定 ID。
-实际部署时应将 `manifest.json` 中的 `rss.example.com` 替换为管理员审核过的 Feed 主机；运行时网络权限不会接受未列入 manifest 的任意域名。
+`source`、`feed_url` 和 `twscrape_fetch_limit` 仅为旧版本配置迁移保留，平台启动时会把它们归一化为 RSSHub；新配置不应再写入这些字段。RSSHub 返回的条目必须能从 `guid`、Atom `id` 或帖子链接解析数字 X 帖子 ID。插件不会以标题或正文哈希代替稳定 ID。
 
-## X API
+## twscrape 冷备
 
-将 `source` 设为 `x_api`，并由平台为插件配置 `x_api_bearer_token` Secret。普通配置中不得保存 Token。429 响应会转换为明确的 `SourceRateLimited`，不会在插件内高频循环重试。
+仓库保留 twscrape 适配器和自动依赖检查工作流，便于 RSSHub 故障时人工切换验证。它不是插件页面的可选项，也不会自动故障转移；切换需显式设置 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape`、提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 并重新部署。切回 RSSHub 也必须显式部署变更。
 
 ## 匹配
 
@@ -49,5 +49,5 @@ RSS/Atom 条目必须能从 `guid`、Atom `id` 或帖子链接解析数字 X 帖
 从仓库根目录运行：
 
 ```powershell
-python -m pytest plugins/builtin/codex_x_monitor/tests -q
+uv run --locked --extra dev pytest plugins/builtin/codex_x_monitor/tests -q
 ```

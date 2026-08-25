@@ -12,7 +12,7 @@ from plugins.shared.x_monitor.models import XPost as XPost
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.4.0"
+PLUGIN_VERSION = "0.5.0"
 STATE_KEY = "monitor_state"
 
 DEFAULT_CONTEXT_PATTERNS = [
@@ -52,9 +52,10 @@ class CodexXMonitorConfig(BaseModel):
 
     enabled: bool = True
     username: str = "thsottiaux"
-    source: Literal["rss", "x_api", "twscrape"] = "twscrape"
+    source: Literal["rsshub", "rss", "x_api", "twscrape"] = "rsshub"
     feed_url: AnyHttpUrl | None = None
     twscrape_fetch_limit: int = Field(default=40, ge=10, le=100)
+    fetch_limit: int = Field(default=40, ge=10, le=100)
     interval_seconds: int = Field(default=600, ge=60, le=86400)
     first_run_mode: Literal["baseline", "scan_recent"] = "baseline"
     scan_recent_limit: int = Field(default=10, ge=1, le=100)
@@ -75,6 +76,8 @@ class CodexXMonitorConfig(BaseModel):
     )
     negative_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_NEGATIVE_PATTERNS))
     cover_image_url: AnyHttpUrl | None = None
+    content_silence_alert_enabled: bool | None = None
+    content_silence_seconds: int | None = Field(default=None, ge=3600, le=2_592_000)
 
     @field_validator("username")
     @classmethod
@@ -172,7 +175,7 @@ class MonitorState(BaseModel):
     last_seen_published_at: datetime | None = None
     recent_processed_ids: list[str] = Field(default_factory=list)
     last_success_at: datetime | None = None
-    last_source: Literal["rss", "x_api", "twscrape"] | None = None
+    last_source: Literal["rsshub", "rss", "x_api", "twscrape"] | None = None
 
 
 class PluginRunResult(BaseModel):

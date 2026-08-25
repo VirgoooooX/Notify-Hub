@@ -113,7 +113,7 @@ flowchart LR
 | `codex_x_monitor` | 监控指定 X 账号中的 Codex 用量重置消息 | 工作时段每 10 分钟 | X 数据源、AI 分类、可靠游标、公众号发布 |
 | `fabrizio_hwg_monitor` | 识别 Fabrizio Romano 的 “HERE WE GO” 转会消息 | 每 3 分钟 | X 数据源、媒体写入、规则匹配 |
 
-插件均包含 Manifest、配置模型、固定测试数据和单元测试。管理员可以在后台配置普通字段、独立 Secret、接收人、AI Profile 与调度规则。
+插件均包含 Manifest、配置模型、固定测试数据和单元测试。X 插件的时间线由平台统一从 RSSHub 读取，后台只配置账号、规则、接收人、AI Profile 与调度；RSSHub Token、X Cookie 和备用 Provider 不进入插件页面。平台健康 Worker 可选地把数据源/账号故障、恢复和内容长期静默通过核心投递链路通知企业微信。
 
 ---
 

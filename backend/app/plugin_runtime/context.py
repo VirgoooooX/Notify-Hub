@@ -48,6 +48,16 @@ class EventEmitter(Protocol):
     async def emit(self, plugin_id: str, event: EventDraft) -> EventReceipt: ...
 
 
+class XTimelineClient(Protocol):
+    async def timeline(
+        self,
+        username: str,
+        *,
+        limit: int = 40,
+        include_replies: bool = False,
+    ) -> list[Mapping[str, Any]]: ...
+
+
 class PluginReminderDraft(BaseModel):
     """Channel-neutral reminder input accepted from a trusted plugin."""
 
@@ -330,6 +340,7 @@ class PluginContext:
         "plugin_id",
         "reminders",
         "run_id",
+        "x",
     )
 
     def __init__(
@@ -343,6 +354,7 @@ class PluginContext:
         secrets: SecretResolver,
         http: RestrictedHttpClient,
         ai: PluginAIClient,
+        x: XTimelineClient | None = None,
         publish_mp_allowed: bool = False,
         media: PluginMediaPublisher | None = None,
         reminders: PluginReminderClient | None = None,
@@ -355,6 +367,7 @@ class PluginContext:
         self._secrets = secrets
         self._publish_mp_allowed = publish_mp_allowed
         self.http = http
+        self.x = x
         self.media = media
         self.ai = ai
         self.reminders = reminders or PluginReminderClient(None)

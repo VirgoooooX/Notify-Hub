@@ -17,6 +17,7 @@ from app.application.plugin_runtime_adapters import (
 )
 from app.application.reminder_access import ReminderAccessService, ReminderPermissions
 from app.application.time_utils import ensure_utc
+from app.application.x_source_service import XHealthTarget, XSourceService
 from app.config import Settings
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
@@ -92,6 +93,7 @@ class PluginService:
         clock: Callable[[], datetime] = utcnow,
         media_service: MediaService | None = None,
         settings: Settings | None = None,
+        x_source: XSourceService | None = None,
         ai_service: Any = None,
         reminder_access: ReminderAccessService | None = None,
     ) -> None:
@@ -105,6 +107,7 @@ class PluginService:
         self._config = DatabasePluginConfigStore(session_factory)
         self._media_service = media_service
         self._settings = settings
+        self._x_source = x_source
         self._ai_service = ai_service
         self._reminder_access = reminder_access
 
@@ -154,21 +157,34 @@ class PluginService:
                     row.install_type = registered.install_type
                     row.manifest = manifest.model_dump(mode="json")
                     row.updated_at = now
-                    if manifest.permissions.ai_capabilities:
-                        config_row = await session.get(PluginConfig, manifest.id)
-                        if config_row is not None:
-                            try:
-                                config_row.config = self._validate_config(
-                                    registered.plugin_class, config_row.config
-                                )
-                                config_row.updated_at = now
-                            except Exception:  # Plugin validation is an isolation boundary.
-                                row.enabled = False
-                                row.status = "failed"
-                                row.next_run_at = None
-                                row.last_error = (
-                                    "plugin configuration is incompatible with the current schema"
-                                )
+                    config_row = await session.get(PluginConfig, manifest.id)
+                    if config_row is not None:
+                        try:
+                            previous_config = dict(config_row.config)
+                            validated_config = self._validate_config(
+                                registered.plugin_class, config_row.config
+                            )
+                            config_row.config = validated_config
+                            config_row.updated_at = now
+                            if (
+                                validated_config != previous_config
+                                and manifest.permissions.x_source
+                            ):
+                                # A source migration must not leave a circuit open for
+                                # the provider that is no longer being used.
+                                row.circuit_open = False
+                                row.consecutive_failures = 0
+                                row.last_error = None
+                                if row.enabled:
+                                    row.status = "healthy"
+                                    row.next_run_at = next_run_at(self._schedule(row), now)
+                        except Exception:  # Plugin validation is an isolation boundary.
+                            row.enabled = False
+                            row.status = "failed"
+                            row.next_run_at = None
+                            row.last_error = (
+                                "plugin configuration is incompatible with the current schema"
+                            )
             stale = await session.scalars(select(PluginRun).where(PluginRun.status == "running"))
             for run in stale:
                 run.status = "queued"
@@ -525,6 +541,7 @@ class PluginService:
             ),
             http=http,
             media=media_publisher,
+            x=self._x_source if manifest.permissions.x_source else None,
             publish_mp_allowed=manifest.permissions.publish_mp,
             ai=PluginAIClient(
                 plugin_id=plugin_id,
@@ -650,6 +667,57 @@ class PluginService:
                 select(PluginState).where(PluginState.plugin_id == plugin_id)
             )
             return {row.key: {"value": row.value, "version": row.version} for row in rows}
+
+    async def list_x_health_targets(self) -> list[XHealthTarget]:
+        """Expose enabled X subscriptions without exposing plugin storage to workers."""
+
+        targets: dict[str, XHealthTarget] = {}
+        async with self._factory() as session:
+            rows = await session.scalars(select(PluginRecord).where(PluginRecord.enabled.is_(True)))
+            for plugin in rows:
+                manifest = PluginManifest.model_validate(plugin.manifest)
+                if not manifest.permissions.x_source:
+                    continue
+                config_row = await session.get(PluginConfig, plugin.id)
+                if config_row is None:
+                    continue
+                try:
+                    config = self._validate_config(
+                        self.registry.get(plugin.id).plugin_class,
+                        config_row.config,
+                    )
+                except (PluginLoadError, TypeError, ValueError):
+                    continue
+                username = str(config.get("username", "")).strip().lstrip("@")
+                if not username:
+                    continue
+                configured_silence_enabled = config.get("content_silence_alert_enabled")
+                configured_silence_seconds = config.get("content_silence_seconds")
+                targets[username.casefold()] = XHealthTarget(
+                    plugin_id=plugin.id,
+                    username=username,
+                    fetch_limit=max(1, min(int(config.get("fetch_limit", 40)), 100)),
+                    include_replies=bool(config.get("include_replies", False)),
+                    silence_enabled=(
+                        bool(configured_silence_enabled)
+                        if configured_silence_enabled is not None
+                        else (
+                            self._settings.x_health_content_silence_enabled
+                            if self._settings is not None
+                            else False
+                        )
+                    ),
+                    silence_seconds=int(
+                        configured_silence_seconds
+                        if configured_silence_seconds is not None
+                        else (
+                            self._settings.x_health_content_silence_seconds
+                            if self._settings is not None
+                            else 86_400
+                        )
+                    ),
+                )
+        return list(targets.values())
 
     @staticmethod
     def _schedule(plugin: PluginRecord) -> PluginSchedule:
