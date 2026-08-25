@@ -17,29 +17,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
-      - name: Install backend dependencies
-        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install locked backend dependencies
+        run: uv sync --locked --extra dev
       - name: Validate release version and tag
         run: python scripts/check_version.py --tag "${{ github.ref_name }}"
       - name: Check formatting
-        run: ruff format --check backend plugins
+        run: uv run --locked --extra dev ruff format --check backend plugins
       - name: Lint
-        run: ruff check backend plugins
+        run: uv run --locked --extra dev ruff check backend plugins
       - name: Type check
         env:
           PYTHONPATH: backend
-        run: mypy backend plugins
+        run: uv run --locked --extra dev mypy backend plugins
       - name: Test
-        run: pytest
+        run: uv run --locked --extra dev pytest
       - name: Migrate an empty SQLite database
         env:
           NOTIFY_HUB_DATABASE_URL: sqlite+aiosqlite:////tmp/notify-hub-release.db
-        run: cd backend && alembic upgrade head
+        run: cd backend && uv run --locked --extra dev alembic upgrade head
       - name: Audit Python dependencies
-        run: |
-          python -m pip install "pip-audit>=2.10,<3"
-          pip-audit --skip-editable
+        run: uv run --locked --extra dev --with "pip-audit>=2.10,<3" pip-audit --skip-editable
 
   validate-frontend:
     runs-on: ubuntu-latest

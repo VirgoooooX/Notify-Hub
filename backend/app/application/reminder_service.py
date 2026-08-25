@@ -326,6 +326,7 @@ class ReminderService:
                     raise ReminderError("media asset does not exist")
                 if asset.kind != "image":
                     raise ReminderError("reminder media asset must be an image")
+                asset.expires_at = None
             session.add(reminder)
             session.add_all(
                 ReminderRecipient(
@@ -377,6 +378,7 @@ class ReminderService:
                         raise ReminderError("media asset does not exist")
                     if asset.kind != "image":
                         raise ReminderError("reminder media asset must be an image")
+                    asset.expires_at = None
                 reminder.media_asset_id = command.media_asset_id or None
             if command.url is not None:
                 if command.url and not command.url.startswith(("https://", "http://")):

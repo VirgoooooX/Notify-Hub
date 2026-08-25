@@ -33,6 +33,10 @@ class TwscrapeTimelineSource:
         # Disable third-party telemetry for the self-hosted deployment.
         os.environ.setdefault("TWS_TELEMETRY", "0")
         os.environ.setdefault("TWS_LOG_LEVEL", "WARNING")
+        # X may serve a browser challenge to the default httpx fingerprint.
+        # Keep an explicit environment override, but use twscrape's curl-cffi
+        # browser impersonation by default for this X-only integration.
+        os.environ.setdefault("TWS_HTTP_BACKEND", "curl")
 
         try:
             with TemporaryDirectory(prefix="notify-hub-twscrape-") as temp_dir:

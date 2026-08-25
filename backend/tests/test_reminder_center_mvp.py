@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -43,13 +43,14 @@ class MockAIService:
 async def test_reminder_media_and_url_creation(api: tuple[Any, Any]) -> None:
     _client, app = api
     service = app.state.reminder_service
+    asset_created_at = datetime.now(UTC)
     async with app.state.session_factory() as session:
         person = Person(
             id="usr_bob",
             display_name="Bob",
             active=True,
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
+            created_at=asset_created_at,
+            updated_at=asset_created_at,
         )
         session.add_all(
             [
@@ -64,8 +65,8 @@ async def test_reminder_media_and_url_creation(api: tuple[Any, Any]) -> None:
                     duration_seconds=None,
                     source="upload",
                     created_by="usr_bob",
-                    created_at=datetime.now(UTC),
-                    expires_at=None,
+                    created_at=asset_created_at,
+                    expires_at=asset_created_at + timedelta(days=30),
                     provider_media_id=None,
                     provider_expires_at=None,
                 ),
@@ -93,6 +94,10 @@ async def test_reminder_media_and_url_creation(api: tuple[Any, Any]) -> None:
 
     assert reminder.content_type == "image"
     assert reminder.url == "https://example.com/image.png"
+    async with app.state.session_factory() as session:
+        persisted_asset = await session.get(MediaAsset, "med_reminder_image")
+    assert persisted_asset is not None
+    assert persisted_asset.expires_at is None
 
     assert await service.claim_due(worker_id="test-worker", now=start) == [reminder.id]
     await service.trigger_claimed(reminder.id, worker_id="test-worker", now=start)

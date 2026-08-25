@@ -14,13 +14,18 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 WORKDIR /build
 RUN python -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml uv.lock README.md LICENSE ./
 COPY backend/app/ backend/app/
+# Export the lockfile so the release image uses the exact dependency set tested by CI.
 # Keep build tooling out of the runtime image. Modern pip pulls CacheControl/msgpack
 # for its own use, while setuptools/wheel are only needed to build the application.
 RUN pip install --upgrade pip \
-    && pip install . \
-    && pip uninstall --yes cachecontrol msgpack setuptools wheel \
+    && pip install "uv==0.12.5" \
+    && uv export --frozen --no-dev --no-editable --no-emit-project \
+        --format requirements.txt --output-file /tmp/requirements.txt > /dev/null \
+    && pip install --require-hashes --requirement /tmp/requirements.txt \
+    && pip install --no-deps . \
+    && pip uninstall --yes uv cachecontrol msgpack setuptools wheel \
     && pip uninstall --yes pip
 
 FROM python:3.12-slim AS runtime

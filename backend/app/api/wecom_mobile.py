@@ -292,6 +292,7 @@ async def upload_mobile_media(
             MediaKind.IMAGE,
             source="wecom-mobile-upload",
             created_by=member.person_id,
+            persistent=True,
         )
     except MediaError as exc:
         raise AppError(exc.code, str(exc), 422) from exc

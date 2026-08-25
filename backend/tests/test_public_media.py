@@ -31,6 +31,25 @@ def png_bytes() -> bytes:
 
 
 @pytest.mark.asyncio
+async def test_persistent_uploaded_media_does_not_expire(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    _client, app = api
+    async with app.state.session_factory() as session:
+        asset = await app.state.media_service.create(
+            session,
+            png_bytes(),
+            MediaKind.IMAGE,
+            source="upload",
+            created_by="test-user",
+            retention_seconds=1,
+            persistent=True,
+        )
+
+    assert asset.expires_at is None
+
+
+@pytest.mark.asyncio
 async def test_public_media_retrieval_success_and_errors(
     api: tuple[httpx.AsyncClient, Any],
 ) -> None:

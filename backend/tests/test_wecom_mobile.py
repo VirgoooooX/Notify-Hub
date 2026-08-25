@@ -1001,6 +1001,10 @@ async def test_mobile_api_enforces_member_scope_and_supports_image_creation(api)
     )
     assert upload.status_code == 201, upload.text
     media_id = upload.json()["data"]["id"]
+    async with app.state.session_factory() as session:
+        uploaded_asset = await session.get(MediaAsset, media_id)
+    assert uploaded_asset is not None
+    assert uploaded_asset.expires_at is None
 
     created = await client.post(
         "/api/v1/mobile/reminders",

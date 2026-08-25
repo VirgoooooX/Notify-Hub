@@ -128,8 +128,9 @@ async function publishReminderMenu() {
           <AppInput v-model="settings.timezone" />
         </div>
         <div class="field mt-4">
-          <label>历史保留天数</label>
+          <label>临时媒体保留天数</label>
           <AppInput v-model.number="settings.retention_days" type="number" min="7" max="3650" />
+          <span class="field-help">仅用于外部抓取、插件和生成的临时媒体；用户上传并被提醒使用的图片不会过期。</span>
         </div>
         <div class="field mt-4">
           <label>提醒自然语言解析 Profile</label>

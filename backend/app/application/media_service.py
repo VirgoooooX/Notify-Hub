@@ -51,6 +51,7 @@ class MediaService:
         source: str,
         created_by: str | None = None,
         retention_seconds: int | None = None,
+        persistent: bool = False,
     ) -> MediaAsset:
         validated = validate_media(
             data,
@@ -72,7 +73,17 @@ class MediaService:
             source=source,
             created_by=created_by,
             created_at=now,
-            expires_at=now + timedelta(seconds=retention) if retention > 0 else None,
+            # User-uploaded reminder media is explicitly persistent.  The
+            # retention setting remains useful for temporary downloads, plugin
+            # media, and generated voice assets, but must not expire a media
+            # asset that a reminder may reuse indefinitely.
+            expires_at=(
+                None
+                if persistent
+                else now + timedelta(seconds=retention)
+                if retention > 0
+                else None
+            ),
             provider_media_id=None,
             provider_expires_at=None,
         )

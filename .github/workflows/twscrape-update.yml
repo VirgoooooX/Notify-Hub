@@ -1,0 +1,67 @@
+name: Update twscrape
+
+on:
+  schedule:
+    # Run daily so X compatibility fixes are proposed promptly.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: twscrape-update
+  cancel-in-progress: true
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.5"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Update twscrape lock entry
+        run: python scripts/update_twscrape.py
+
+      - name: Install the locked development environment
+        run: uv sync --locked --extra dev
+
+      - name: Run backend and X monitor tests
+        run: uv run --locked --extra dev pytest
+
+      - name: Check Python formatting
+        run: uv run --locked --extra dev ruff format --check backend plugins
+
+      - name: Lint Python
+        run: uv run --locked --extra dev ruff check backend plugins
+
+      - name: Type check Python
+        env:
+          PYTHONPATH: backend
+        run: uv run --locked --extra dev mypy backend plugins
+
+      - name: Open an upgrade pull request
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "build(deps): update twscrape"
+          title: "build(deps): update twscrape"
+          body: |
+            This automated PR updates `twscrape` and its locked curl backend.
+
+            The workflow ran the full Python test suite, formatting check, lint, and mypy before opening this PR. Review the upstream changelog and the X monitor behavior before merging; production deployment remains a separate release step.
+          branch: automation/twscrape-update
+          delete-branch: true
+          add-paths: |
+            pyproject.toml
+            uv.lock

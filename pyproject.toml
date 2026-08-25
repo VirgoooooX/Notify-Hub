@@ -30,7 +30,7 @@ dependencies = [
   "structlog>=25.4,<26",
   "tzdata>=2026.1,<2027",
   "uvicorn[standard]>=0.35,<1",
-  "twscrape>=0.19.2,<0.20",
+  "twscrape[curl]>=0.20,<1",
   "pillow>=12.3,<13",
 ]
 
@@ -54,6 +54,7 @@ packages = ["backend/app"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=app --cov-report=term-missing --cov-report=xml"
 asyncio_mode = "auto"
+pythonpath = ["."]
 testpaths = ["backend/tests", "plugins"]
 markers = [
   "integration: exercises database, HTTP, or application boundaries",

@@ -69,7 +69,14 @@ async def upload_media(
     service = _service(request)
     data = await file.read(service.limit_for(kind) + 1)
     try:
-        asset = await service.create(session, data, kind, source="upload", created_by=admin.id)
+        asset = await service.create(
+            session,
+            data,
+            kind,
+            source="upload",
+            created_by=admin.id,
+            persistent=True,
+        )
     except MediaError as exc:
         raise _map_error(exc) from exc
     return MediaAssetResponse.model_validate(asset)

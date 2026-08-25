@@ -162,6 +162,7 @@ Provider、API Key、模型目录、Profile、缓存、预算和调用日志属�
 - 下载外部媒体时校验协议、DNS、实际连接地址、重定向、MIME、尺寸和时长。
 - 文件存储路径由平台生成，禁止调用方选择本地路径，防止路径穿越。
 - 企业微信临时素材过期后重新上传，不把 provider media ID 当永久资源。
+- 用户上传并被 Reminder 引用的媒体是持久资源；临时媒体保留期不得使周期提醒的封面失效。
 - 静态资源 URL 和签名媒体 URL 由核心 `PublicMediaUrlBuilder` 统一生成。
 - Codex 使用内置静态封面；Romano 下载、处理并保存来源图片；提醒由手机或后台上传为 `MediaAsset`。
 - 图文消息使用可公网访问的签名 `picurl`；没有独立跳转 URL 时可使用封面 URL。
