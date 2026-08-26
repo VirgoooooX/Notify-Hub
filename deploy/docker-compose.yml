@@ -34,6 +34,8 @@ services:
       NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS: "${NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS:-[]}"
       # Optional cold standby. Leave empty while RSSHub is healthy.
       NOTIFY_HUB_X_TWSCRAPE_COOKIE: "${NOTIFY_HUB_X_TWSCRAPE_COOKIE:-}"
+      # Bounded source-image download limit; output remains capped at 2 MiB.
+      NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES: "${NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES:-16777216}"
 
       # 5. Optional AI Gateway bootstrap. Leave disabled/blank to configure later in the admin UI.
       NOTIFY_HUB_AI_ENABLED: "${NOTIFY_HUB_AI_ENABLED:-false}"

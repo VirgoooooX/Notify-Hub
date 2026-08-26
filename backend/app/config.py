@@ -85,6 +85,7 @@ class Settings(BaseSettings):
     mp_author: str = "Notify Hub"
     media_root: Path = Path("./data/media")
     media_image_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
+    media_source_image_max_bytes: int = Field(default=16_777_216, ge=2_097_152, le=20_971_520)
     media_voice_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
     media_voice_max_seconds: float = Field(default=60.0, gt=0, le=60)
     media_download_timeout_seconds: float = Field(default=20.0, gt=0, le=60)

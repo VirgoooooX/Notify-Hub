@@ -141,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             max_redirects=settings.media_download_max_redirects,
         ),
         image_max_bytes=settings.media_image_max_bytes,
+        source_image_max_bytes=settings.media_source_image_max_bytes,
         voice_max_bytes=settings.media_voice_max_bytes,
         voice_max_seconds=settings.media_voice_max_seconds,
         retention_seconds=settings.media_retention_seconds,

@@ -447,12 +447,15 @@ class PluginMediaPublisher:
         from app.media.validation import MediaKind
 
         data = await downloader.download(
-            source_url, max_bytes=self._media_service.limit_for(MediaKind.IMAGE)
+            source_url, max_bytes=self._media_service.source_image_max_bytes
         )
 
         from app.media.processing import make_blurred_background_cover
 
-        data = make_blurred_background_cover(data)
+        data = make_blurred_background_cover(
+            data,
+            max_bytes=self._media_service.limit_for(MediaKind.IMAGE),
+        )
 
         duration = (
             retention_seconds

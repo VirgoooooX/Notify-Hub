@@ -21,12 +21,15 @@ class MediaService:
         *,
         downloader: SafeMediaDownloader | None = None,
         image_max_bytes: int = CHANNEL_MAX_BYTES,
+        source_image_max_bytes: int = 16 * 1024 * 1024,
         voice_max_bytes: int = CHANNEL_MAX_BYTES,
         voice_max_seconds: float = 60.0,
         retention_seconds: int = 24 * 60 * 60,
     ) -> None:
         if not 0 < image_max_bytes <= CHANNEL_MAX_BYTES:
             raise ValueError("image_max_bytes exceeds the channel limit")
+        if not image_max_bytes <= source_image_max_bytes <= 20 * 1024 * 1024:
+            raise ValueError("source_image_max_bytes must cover the channel limit and stay bounded")
         if not 0 < voice_max_bytes <= CHANNEL_MAX_BYTES:
             raise ValueError("voice_max_bytes exceeds the channel limit")
         if not 0 < voice_max_seconds <= 60:
@@ -35,6 +38,7 @@ class MediaService:
         self.clock = clock
         self.downloader = downloader
         self.image_max_bytes = image_max_bytes
+        self.source_image_max_bytes = source_image_max_bytes
         self.voice_max_bytes = voice_max_bytes
         self.voice_max_seconds = voice_max_seconds
         self.retention_seconds = retention_seconds

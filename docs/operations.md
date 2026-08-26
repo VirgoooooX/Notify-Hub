@@ -55,6 +55,7 @@ NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS=["person_admin"]
 - 健康 Worker 独立于插件调度和插件熔断运行，默认每 300 秒检查所有启用且声明 `x_source` 权限的 X 插件账号。连续 3 次失败后告警；故障期间按重复间隔提醒；连续 2 次成功后发送恢复通知。状态落在 `x_source_health`，重启可恢复。
 - 账号不存在、账号级 HTTP 错误只产生账号告警，不误报 RSSHub 整体故障；RSSHub 超时、5xx、限流或解析失败才会进入数据源级状态。
 - 可选的内容静默检查只表示“请求成功但长时间没有新推文”，不等价于数据源故障。默认关闭，可用平台默认值或插件字段开启。
+- 外部插件图片默认最多下载 16 MiB，随后会在落盘前缩放/压缩到企业微信 2 MiB 媒体上限；`NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES` 只能在有界范围内调整，不能改成无限制下载。
 - twscrape 仍保留为冷备，但不自动切换。只有显式部署 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape` 并提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 才会启用；验证完成后要显式切回 RSSHub。
 - 仓库中的 X 诊断脚本也通过平台级 Provider 运行；`scripts/set_plugin_secret.py` 仅显示当前平台源状态，不再写入插件级 Cookie Secret。
 
