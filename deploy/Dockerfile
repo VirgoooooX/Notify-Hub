@@ -37,7 +37,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/backend \
     PATH=/opt/venv/bin:$PATH
 
-RUN groupadd --gid "$APP_GID" notifyhub \
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid "$APP_GID" notifyhub \
     && useradd --uid "$APP_UID" --gid "$APP_GID" --create-home --shell /usr/sbin/nologin notifyhub \
     && mkdir -p /app/data /logs /media /run/secrets \
     && chown -R notifyhub:notifyhub /app /logs /media

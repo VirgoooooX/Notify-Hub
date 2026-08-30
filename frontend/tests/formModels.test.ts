@@ -27,7 +27,7 @@ describe('feature form models', () => {
     expect(aiProfilePolicyPayload(form)).toMatchObject({
       provider_id: 'provider-1',
       daily_request_limit: null,
-      daily_token_limit: 1000000,
+      daily_token_limit: 5000000,
     })
   })
 
