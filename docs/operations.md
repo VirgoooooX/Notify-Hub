@@ -178,8 +178,8 @@ PY
 
 ```bash
 docker compose -f deploy/docker-compose.yml config --quiet
-docker compose -f deploy/docker-compose.yml run --rm --entrypoint sh notify-hub -c 'cd /app/backend && alembic current'
-docker compose -f deploy/docker-compose.yml run --rm --entrypoint sh notify-hub -c 'cd /app/backend && alembic heads'
+docker compose -f deploy/docker-compose.yml run --rm --entrypoint sh notify-hub -c 'cd /app && alembic -c /app/backend/alembic.ini current'
+docker compose -f deploy/docker-compose.yml run --rm --entrypoint sh notify-hub -c 'cd /app && alembic -c /app/backend/alembic.ini heads'
 ```
 
 随后：

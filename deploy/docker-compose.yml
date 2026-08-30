@@ -10,6 +10,8 @@ services:
       TZ: "${NOTIFY_HUB_LOG_TIMEZONE:-Asia/Shanghai}"
       FORWARDED_ALLOW_IPS: "*"
       NOTIFY_HUB_ENVIRONMENT: "production"
+      # Keep Alembic and the application on the same persistent database file.
+      NOTIFY_HUB_DATABASE_URL: "sqlite+aiosqlite:////app/data/notify-hub.db"
       NOTIFY_HUB_LOG_TIMEZONE: "${NOTIFY_HUB_LOG_TIMEZONE:-Asia/Shanghai}"
       NOTIFY_HUB_PUBLIC_BASE_URL: "${NOTIFY_HUB_PUBLIC_BASE_URL:?set the public HTTPS URL}"
 

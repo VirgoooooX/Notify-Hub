@@ -86,6 +86,17 @@ def redact_processor(
     return redacted if isinstance(redacted, Mapping) else {"event": redacted}
 
 
+def _structlog_processors(timezone: str) -> list[Any]:
+    return [
+        structlog.contextvars.merge_contextvars,
+        structlog.processors.add_log_level,
+        structlog.processors.format_exc_info,
+        _timestamp_processor(timezone),
+        redact_processor,
+        structlog.processors.JSONRenderer(serializer=json.dumps),
+    ]
+
+
 def configure_logging(level: str, timezone: str = "Asia/Shanghai") -> None:
     _set_process_timezone(timezone)
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level.upper(), force=True)
@@ -93,13 +104,7 @@ def configure_logging(level: str, timezone: str = "Asia/Shanghai") -> None:
         handler.addFilter(SensitiveLogFilter())
     _suppress_sensitive_dependency_logs()
     structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            _timestamp_processor(timezone),
-            redact_processor,
-            structlog.processors.JSONRenderer(serializer=json.dumps),
-        ],
+        processors=_structlog_processors(timezone),
         wrapper_class=structlog.make_filtering_bound_logger(
             getattr(logging, level.upper(), logging.INFO)
         ),

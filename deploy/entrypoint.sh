@@ -2,15 +2,15 @@
 set -eu
 
 if [ "${1:-}" = "migrate" ]; then
-  cd /app/backend
-  exec alembic upgrade head
+  cd /app
+  exec alembic -c /app/backend/alembic.ini upgrade head
 fi
 
 if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
 
-(cd /app/backend && alembic upgrade head)
+(cd /app && alembic -c /app/backend/alembic.ini upgrade head)
 
 exec uvicorn app.main:app \
   --host "${APP_HOST:-0.0.0.0}" \
