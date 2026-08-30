@@ -113,7 +113,7 @@ class AIProfileCreate(BaseModel):
     verbosity: Verbosity = "standard"
     include_reason: bool = True
     max_reason_characters: int = Field(default=200, ge=0, le=1000)
-    system_instructions: str = Field(default="", max_length=4000)
+    system_instructions: str = Field(default="", max_length=16000)
     timeout_seconds: float = Field(default=20, ge=1, le=300)
     cache_ttl_seconds: int = Field(default=2592000, ge=0, le=31536000)
     daily_request_limit: int | None = Field(default=None, ge=1, le=1000000)
@@ -137,7 +137,7 @@ class AIProfileUpdate(BaseModel):
     verbosity: Verbosity | None = None
     include_reason: bool | None = None
     max_reason_characters: int | None = Field(default=None, ge=0, le=1000)
-    system_instructions: str | None = Field(default=None, max_length=4000)
+    system_instructions: str | None = Field(default=None, max_length=16000)
     timeout_seconds: float | None = Field(default=None, ge=1, le=300)
     cache_ttl_seconds: int | None = Field(default=None, ge=0, le=31536000)
     daily_request_limit: int | None = Field(default=None, ge=1, le=1000000)

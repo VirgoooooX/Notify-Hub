@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 from twscrape.accounts_pool import NoAccountError
 
+from plugins.builtin.codex_x_monitor.decision_prompt import RESET_CLASSIFICATION_INSTRUCTION
 from plugins.builtin.codex_x_monitor.matcher import match_post
 from plugins.builtin.codex_x_monitor.plugin import CodexXMonitorPlugin
 from plugins.builtin.codex_x_monitor.schemas import (
@@ -424,6 +425,46 @@ def test_matcher_confidently_filters_reset_questions_without_ai() -> None:
     )
 
 
+def test_matcher_recognizes_historical_reseted_brand_new_usage_signal() -> None:
+    config = CodexXMonitorConfig.model_validate(BASE_CONFIG)
+    post = XPost.model_validate(
+        {
+            "id": "2093014447833116908",
+            "author_username": "thsottiaux",
+            "text": (
+                "Never slept better and feeling reseted. Brand new me and brand new usage "
+                "for all ChatGPT Work and Codex users. The power of one button press before bed."
+            ),
+            "url": "https://x.com/thsottiaux/status/2093014447833116908",
+            "published_at": "2026-08-27T12:00:00Z",
+        }
+    )
+
+    result = match_post(post, config)
+
+    assert result.matched is True
+    assert result.confidence >= config.rule_ai_threshold
+
+
+def test_matcher_excludes_explicit_but_no_retraction() -> None:
+    config = CodexXMonitorConfig.model_validate(BASE_CONFIG)
+    post = XPost.model_validate(
+        {
+            "id": "2093014447833116909",
+            "author_username": "thsottiaux",
+            "text": "Thinking I am about to announce a Codex usage reset. But no.",
+            "url": "https://x.com/thsottiaux/status/2093014447833116909",
+            "published_at": "2026-08-27T12:01:00Z",
+        }
+    )
+
+    result = match_post(post, config)
+
+    assert result.matched is False
+    assert result.confidence == 0.99
+    assert result.excluded_by
+
+
 def test_source_timeout_propagates_without_cursor_change() -> None:
     context = FakeContext(BASE_CONFIG, [], state={"last_seen_post_id": "1"})
     context.fake_http.error = TimeoutError("source timed out")
@@ -460,6 +501,28 @@ def test_ai_mode_batches_five_incremental_original_posts_once() -> None:
     assert len(ai.calls[0]["items"]) == 5
     assert result.emitted_events == 5
     assert context.states[STATE_KEY]["last_seen_post_id"] == "5"
+
+
+def test_ai_prompt_contains_account_history_and_neighboring_posts() -> None:
+    ai = FakeAI()
+    posts = [_post(1), _post(2), _post(3)]
+    context = FakeContext(
+        {**BASE_CONFIG, "decision_mode": "ai"},
+        [],
+        state={"last_seen_post_id": "1"},
+        ai=ai,
+    )
+
+    asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource(posts)}).run(context))
+
+    assert ai.calls
+    call = ai.calls[0]
+    assert call["instruction"] == RESET_CLASSIFICATION_INSTRUCTION
+    assert "最近约 150 条历史帖" in call["instruction"]
+    assert "brand new usage" in call["instruction"]
+    item_payload = json.loads(call["items"][0].content)
+    assert item_payload["target_post"]["id"] == "2"
+    assert [post["id"] for post in item_payload["nearby_posts"]] == ["1", "3"]
 
 
 def test_replies_and_reposts_never_reach_ai() -> None:

@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from .decision_prompt import RESET_CLASSIFICATION_INSTRUCTION, build_classification_content
 from .matcher import match_post
 from .schemas import (
     PLUGIN_API_VERSION,
@@ -137,16 +138,12 @@ class CodexXMonitorPlugin:
             decisions = await context.ai.classify_many(
                 profile=config.ai_profile,
                 use_case="codex_usage_reset",
-                instruction=(
-                    "判断每条原创帖子是否明确表示 Codex、ChatGPT 或相关服务的使用配额、"
-                    "周限额或速率限制已经恢复、已确定将重置或明显改善。仅仅询问、讨论、"
-                    "提议或猜测是否要重置必须标记为 ignore；无法确定时标记为 uncertain。"
-                ),
+                instruction=RESET_CLASSIFICATION_INSTRUCTION,
                 labels=["notify", "ignore", "uncertain"],
                 items=[
                     AIClassificationItem(
                         id=post.id,
-                        content=post.text,
+                        content=build_classification_content(post, posts),
                         cache_key=f"x:{post.author_username}:{post.id}",
                     )
                     for post in batch

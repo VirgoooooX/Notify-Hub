@@ -66,6 +66,8 @@ NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS=["person_admin"]
 3. 检查 Event 是否已进入 Notification/Delivery，以及 Delivery 是否因企业微信接收人或渠道配置进入 `dead`；数据源故障和投递故障是两条独立链路。
 4. 需要切换冷备时先备份数据库、记录当前镜像和配置，停止自动化变更，完成一次手工抓取验证后再恢复插件；不要在生产上同时运行两套 Provider。
 
+插件执行状态也必须单独检查。`plugin_runs.status=running` 不代表抓取仍在进行：Worker 异常退出时会立即尝试把该运行重新排队；如果当时数据库仍不可写，调度循环会在 Manifest `timeout_seconds` 加 30 秒宽限期后回收过期运行租约。新鲜运行不会被回收，重试仍使用原 `run_id`，外部事件继续依赖稳定 `event_key` 幂等。若同一运行长期超过该期限仍停在 `running`，应按 SQLite 写入故障排查，而不是先归因于 RSSHub。
+
 健康告警本身也依赖 Notify Hub 的数据库和企业微信 Delivery，因此它不能替代宿主机对 `/health/ready`、容器重启、磁盘和备份的外部监控。
 
 ## 3. SQLite 一致备份

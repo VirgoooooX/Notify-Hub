@@ -12,7 +12,7 @@ from plugins.shared.x_monitor.models import XPost as XPost
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.5.0"
+PLUGIN_VERSION = "0.6.0"
 STATE_KEY = "monitor_state"
 
 DEFAULT_CONTEXT_PATTERNS = [
@@ -23,6 +23,7 @@ DEFAULT_CONTEXT_PATTERNS = [
 ]
 DEFAULT_POSITIVE_PATTERNS = [
     r"\bresets?\b",
+    r"\breset(?:ed|ted)\b",
     r"\bresetting\b",
     r"\brefreshed?\b",
     r"\brestored?\b",
@@ -32,6 +33,8 @@ DEFAULT_POSITIVE_PATTERNS = [
     r"\bquota\b",
     r"\ballowance\b",
     r"\bweekly\s+limits?\b",
+    r"\bbrand\s+new\s+usage\b",
+    r"\bone\s+button\s+press\b",
 ]
 BUILTIN_QUESTION_PATTERNS = [
     r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+reset\b",
@@ -41,6 +44,8 @@ DEFAULT_NEGATIVE_PATTERNS = [
     r"\bnot\s+(?:been\s+)?reset\b",
     r"\bwon['\u2019]?t\s+reset\b",
     r"\bcannot\s+reset\b",
+    r"\b(?:announce|announcing).{0,80}\breset\b.{0,80}\bbut\s+no\b",
+    r"\breset\s+button\b.{0,40}\bnot\b.{0,20}\bused\b",
     *BUILTIN_QUESTION_PATTERNS,
     r"\bunrelated\s+benchmark\b",
     r"\bquoted\s+old\s+post\b",

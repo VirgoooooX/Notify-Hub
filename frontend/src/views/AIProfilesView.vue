@@ -450,17 +450,19 @@ onMounted(() => {
             >
           </div>
           <div class="field field--full">
-            <label for="profile-system-instructions">系统补充指令</label>
+            <label for="profile-system-instructions">系统补充指令（Profile 上下文）</label>
             <textarea
               id="profile-system-instructions"
               v-model="form.system_instructions"
               class="input textarea mono"
-              rows="4"
+              rows="8"
+              maxlength="16000"
               placeholder="例如：判断要保守，证据不足时返回 uncertain。"
             />
             <div class="constraint-note">
               <strong>只会追加，不会替换。</strong>
-              该内容会追加到平台强制安全约束之后，不能覆盖注入防护、工具禁用或输出 Schema。
+              该内容会追加到平台强制安全约束之后，不能覆盖注入防护、工具禁用或输出 Schema；
+              最多 16,000 个字符。
             </div>
           </div>
         </div>

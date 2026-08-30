@@ -127,7 +127,7 @@ class AIControlService:
                 "provider_id": "aip_bootstrap",
                 "model": model,
                 "temperature": 0,
-                "max_output_tokens": 160,
+                "max_output_tokens": 2048,
                 "response_format": "auto",
                 "output_language": "auto",
                 "reasoning_effort": "low",
@@ -138,7 +138,7 @@ class AIControlService:
                 "timeout_seconds": 20,
                 "cache_ttl_seconds": 2_592_000,
                 "daily_request_limit": 500,
-                "daily_token_limit": None,
+                "daily_token_limit": 5_000_000,
                 "enabled": True,
             }
         )

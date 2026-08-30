@@ -16,7 +16,7 @@ from app.application.plugin_service import (
     _DatabaseStateStore,
 )
 from app.infrastructure.database.base import Base
-from app.infrastructure.database.plugin_models import PluginConfig, PluginRecord
+from app.infrastructure.database.plugin_models import PluginConfig, PluginRecord, PluginRun
 from app.infrastructure.database.session import create_session_factory
 from app.plugin_runtime.base import EventDraft, EventReceipt
 from app.plugin_runtime.context import PluginAIClient
@@ -24,6 +24,7 @@ from app.plugin_runtime.http import RestrictedHttpClient, RestrictedHttpError
 from app.plugin_runtime.manifest import PluginManifest
 from app.plugin_runtime.registry import PluginRegistry
 from app.plugin_runtime.schedule import ScheduleError, next_run_at
+from app.workers.plugin_worker import PluginWorker
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
@@ -422,6 +423,61 @@ async def test_plugin_service_recovers_runs_and_executes_structural_plugin(tmp_p
     runs = await service.list_runs("fake_monitor")
     assert runs[0]["status"] == "succeeded"
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_enqueue_due_recovers_only_expired_running_lease(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "builtin"
+    _write_fake_plugin(plugin_root)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    current = [datetime(2026, 8, 30, 0, 0, tzinfo=UTC)]
+    service = PluginService(
+        session_factory=factory,
+        registry=PluginRegistry({"builtin": plugin_root}),
+        event_emitter=FakeEmitter(),
+        secret_resolver=FakeSecrets(),
+        clock=lambda: current[0],
+    )
+    await service.initialize()
+    await service.update_config("fake_monitor", {})
+    await service.enable("fake_monitor")
+    run_id = await service.queue_manual("fake_monitor")
+    assert await service.claim_next("worker-a") == run_id
+
+    current[0] += timedelta(seconds=10)
+    await service.enqueue_due()
+    async with factory() as session:
+        fresh = await session.get(PluginRun, run_id)
+        assert fresh is not None
+        assert fresh.status == "running"
+
+    current[0] += timedelta(seconds=26)
+    await service.enqueue_due()
+    async with factory() as session:
+        expired = await session.get(PluginRun, run_id)
+        assert expired is not None
+        assert expired.status == "queued"
+        assert expired.started_at is None
+        assert expired.worker_id is None
+    assert await service.claim_next("worker-b") == run_id
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_plugin_worker_requeues_run_when_execute_escapes() -> None:
+    service = AsyncMock(spec=PluginService)
+    service.enqueue_due.return_value = 0
+    service.claim_next.return_value = "prun_interrupted"
+    service.execute.side_effect = RuntimeError("database is locked")
+    service.requeue_interrupted_run.return_value = True
+    worker = PluginWorker(service, worker_id="worker-a")
+
+    assert await worker.run_once() is True
+
+    service.requeue_interrupted_run.assert_awaited_once_with("prun_interrupted", "worker-a")
 
 
 @pytest.mark.asyncio

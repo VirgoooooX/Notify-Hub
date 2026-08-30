@@ -48,6 +48,16 @@ class PluginWorker:
             await self._service.execute(run_id)
         except Exception:
             self._logger.exception("plugin worker iteration failed", plugin_run_id=run_id)
+            try:
+                recovered = await self._service.requeue_interrupted_run(run_id, self._worker_id)
+            except Exception:
+                self._logger.exception("plugin run recovery failed", plugin_run_id=run_id)
+            else:
+                if recovered:
+                    self._logger.warning(
+                        "plugin run requeued after interrupted execution",
+                        plugin_run_id=run_id,
+                    )
         return True
 
     async def _loop(self) -> None:

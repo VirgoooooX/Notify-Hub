@@ -17,6 +17,7 @@ QUOTA_SIGNAL_PATTERNS = (
     r"\bquota\b",
     r"\ballowance\b",
     r"\bbanked\s+reset\b",
+    r"\bbrand\s+new\s+usage\b",
 )
 DECLARATIVE_CHANGE_PATTERNS = (
     r"\b(?:has|have|had|was|were|is|are)\s+(?:\w+\s+){0,4}"
@@ -28,6 +29,8 @@ DECLARATIVE_CHANGE_PATTERNS = (
     r"\b(?:resets?|restores?|refreshes?)\s+(?:\w+\s+){0,3}"
     r"(?:usage|quota|allowance|limits?)\b",
     r"\bback\s+to\s+normal\b",
+    r"\bbrand\s+new\s+usage\b",
+    r"\bone\s+button\s+press\b",
 )
 
 

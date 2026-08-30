@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.application.ai_profile_references import referenced_ai_profiles
@@ -81,6 +81,7 @@ def utcnow() -> datetime:
 class PluginService:
     DEGRADED_AFTER = 5
     CIRCUIT_OPEN_AFTER = 10
+    RUN_LEASE_GRACE_SECONDS = 30
 
     def __init__(
         self,
@@ -433,6 +434,7 @@ class PluginService:
         now = self._clock()
         count = 0
         async with self._factory() as session, session.begin():
+            await self._recover_stale_runs(session, now)
             rows = await session.scalars(
                 select(PluginRecord)
                 .where(
@@ -464,6 +466,52 @@ class PluginService:
                     count += 1
                 plugin.next_run_at = next_run_at(self._schedule(plugin), now)
         return count
+
+    async def _recover_stale_runs(self, session: AsyncSession, now: datetime) -> int:
+        """Requeue runs whose worker lease outlived the plugin timeout."""
+
+        recovered = 0
+        runs = await session.scalars(select(PluginRun).where(PluginRun.status == "running"))
+        for run in runs:
+            plugin = await session.get(PluginRecord, run.plugin_id)
+            if plugin is None:
+                continue
+            try:
+                timeout_seconds = PluginManifest.model_validate(plugin.manifest).timeout_seconds
+            except Exception:  # A malformed stored manifest is isolated to that plugin.
+                timeout_seconds = 3600
+            started_at = (
+                ensure_utc(run.started_at, field="started_at")
+                if run.started_at is not None
+                else None
+            )
+            lease_deadline = (
+                started_at + timedelta(seconds=timeout_seconds + self.RUN_LEASE_GRACE_SECONDS)
+                if started_at is not None
+                else now
+            )
+            if lease_deadline > now:
+                continue
+            run.status = "queued"
+            run.started_at = None
+            run.worker_id = None
+            recovered += 1
+        return recovered
+
+    async def requeue_interrupted_run(self, run_id: str, worker_id: str) -> bool:
+        """Release a run when execution escaped before its terminal state was persisted."""
+
+        async with self._factory() as session, session.begin():
+            result = await session.execute(
+                update(PluginRun)
+                .where(
+                    PluginRun.id == run_id,
+                    PluginRun.status == "running",
+                    PluginRun.worker_id == worker_id,
+                )
+                .values(status="queued", started_at=None, worker_id=None)
+            )
+            return int(getattr(result, "rowcount", 0)) == 1
 
     async def claim_next(self, worker_id: str) -> str | None:
         async with self._factory() as session, session.begin():

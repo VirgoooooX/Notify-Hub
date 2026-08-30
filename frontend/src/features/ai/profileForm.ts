@@ -38,7 +38,7 @@ export function defaultAIProfileForm(providerId = ''): AIProfileFormState {
     provider_id: providerId,
     model: '',
     temperature: 0,
-    max_output_tokens: 160,
+    max_output_tokens: 2048,
     response_format: 'auto',
     timeout_seconds: 20,
     output_language: 'auto',
@@ -49,7 +49,7 @@ export function defaultAIProfileForm(providerId = ''): AIProfileFormState {
     system_instructions: '',
     cache_ttl_seconds: 2592000,
     daily_request_limit: 500,
-    daily_token_limit: 1000000,
+    daily_token_limit: 5000000,
     enabled: true,
   }
 }
