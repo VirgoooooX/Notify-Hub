@@ -98,12 +98,13 @@ async def main() -> None:
         summarize_profile_id = profile.id
 
     print("\n--- 2. Preparing Codex X Monitor Posts Context ---")
+    now_digits = f"20769{int(datetime.now(UTC).timestamp())}"
     target_post = XPost(
-        id="2076915116231275003",
+        id=now_digits,
         author_username="thsottiaux",
         author_display_name="Thomas Sottiaux",
         text="Hit the reset button for all ChatGPT Work and Codex users. Enjoy coding this weekend!",
-        url="https://x.com/thsottiaux/status/2076915116231275003",
+        url=f"https://x.com/thsottiaux/status/{now_digits}",
         published_at=datetime.now(UTC),
     )
     prequel_post = XPost(
