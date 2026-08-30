@@ -6,7 +6,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
-from .decision_prompt import RESET_CLASSIFICATION_INSTRUCTION, build_classification_content
+from .decision_prompt import (
+    ARTICLE_GENERATION_INSTRUCTION,
+    RESET_CLASSIFICATION_INSTRUCTION,
+    build_article_content,
+    build_classification_content,
+)
 from .matcher import match_post
 from .schemas import (
     PLUGIN_API_VERSION,
@@ -177,16 +182,14 @@ class CodexXMonitorPlugin:
                 article_ai_status = "rules_summary"
                 if config.publish_to_official_account and config.article_ai_profile:
                     try:
+                        article_content = build_article_content(post, posts)
                         article_result = await context.ai.summarize(
                             profile=config.article_ai_profile,
                             use_case="codex_usage_reset_article",
-                            content=post.text,
-                            instruction=(
-                                "把帖子翻译成中文并写成一段适合微信公众号文章的摘要正文，"
-                                "保留关键信息，不添加原文没有的结论。"
-                            ),
+                            content=article_content,
+                            instruction=ARTICLE_GENERATION_INSTRUCTION,
                             max_characters=2000,
-                            cache_key=f"x:{post.author_username}:{post.id}",
+                            cache_key=f"x:{post.author_username}:{post.id}:article",
                         )
                         content = article_result.summary.strip() or summary
                         article_ai_status = "ai_summarized"

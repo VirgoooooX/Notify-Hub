@@ -259,7 +259,10 @@ def test_publish_to_official_account_emits_publish_event_with_ai_summary() -> No
     assert event.publish_to_mp is True
     assert event.content == "AI 翻译后的公众号正文。"
     assert event.article is not None
-    assert context.ai.calls[-1]["profile"] == "article_summarizer"
+    summarize_call = context.ai.calls[-1]
+    assert summarize_call["profile"] == "article_summarizer"
+    assert "target_post" in summarize_call["content"]
+    assert "你是一位在前沿一线冲浪的科技博主" in summarize_call["instruction"]
 
 
 def test_publish_ai_summary_failure_falls_back_to_deterministic_summary() -> None:

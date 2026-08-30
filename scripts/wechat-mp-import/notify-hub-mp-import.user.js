@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Notify Hub 公众号导入助手
 // @namespace    notify-hub
-// @version      0.2.0
+// @version      0.3.0
 // @description  从 Notify Hub 文章库把 AI 生成的文章一键填入公众号编辑器；发布按钮不自动点击，最终发布由人工确认。
 // @author       Notify Hub
 // @match        https://mp.weixin.qq.com/*
@@ -112,6 +112,20 @@
       })
   }
 
+  function markPublished(article) {
+    if (!article || !article.id) return
+    if (!confirm('确认将文章《' + (article.title || '未命名') + '》标记为已发布？')) return
+    toast('正在标记已发布…', 'info')
+    request('POST', '/api/v1/admin/articles/' + encodeURIComponent(article.id) + '/publish')
+      .then(function () {
+        toast('已标记为已发布', 'ok')
+        loadArticles()
+      })
+      .catch(function (error) {
+        toast('操作失败：' + error.message, 'err')
+      })
+  }
+
   function renderList() {
     if (!listBox) return
     listBox.innerHTML = ''
@@ -162,6 +176,16 @@
         copyArticle(article)
       })
       actions.appendChild(copy)
+
+      var publish = document.createElement('button')
+      publish.type = 'button'
+      publish.className = 'nhmp-btn nhmp-btn-outline'
+      publish.textContent = '标记已发'
+      publish.title = '发布完成后，点击直接标记为已发布'
+      publish.addEventListener('click', function () {
+        markPublished(article)
+      })
+      actions.appendChild(publish)
 
       row.appendChild(actions)
       listBox.appendChild(row)
@@ -455,6 +479,8 @@
       '.nhmp-btn:hover{border-color:#07c160;color:#07c160}' +
       '.nhmp-btn-primary{background:#07c160;border-color:#07c160;color:#fff}' +
       '.nhmp-btn-primary:hover{background:#06ad56;border-color:#06ad56;color:#fff}' +
+      '.nhmp-btn-outline{border-color:#576b95;color:#576b95}' +
+      '.nhmp-btn-outline:hover{background:#f0f4f9;border-color:#3d507a;color:#3d507a}' +
       '.nhmp-toolbar{padding:10px 14px;border-bottom:1px solid #f0f0f0;background:#fafafa}' +
       '.nhmp-status{padding:6px 14px;font-size:12px;color:#576b95;background:#f4f6f9}' +
       '.nhmp-status.ok{color:#07c160;background:#eefbf3}.nhmp-status.err{color:#fa5151;background:#fef2f2}.nhmp-status.warn{color:#fa9d3b;background:#fffbe6}' +
