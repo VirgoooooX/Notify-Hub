@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Notify Hub 公众号导入助手
 // @namespace    notify-hub
-// @version      0.3.0
+// @version      0.3.1
 // @description  从 Notify Hub 文章库把 AI 生成的文章一键填入公众号编辑器；发布按钮不自动点击，最终发布由人工确认。
 // @author       Notify Hub
 // @match        https://mp.weixin.qq.com/*
@@ -221,9 +221,36 @@
   }
 
   function findEditor() {
-    return document.querySelector('#js_editor_content') ||
-      document.querySelector('div[contenteditable="true"][id*="editor" i]') ||
-      document.querySelector('.js_editor_content')
+    // 1. Direct modern ProseMirror or contenteditable editors
+    var direct = document.querySelector('.ProseMirror') ||
+      document.querySelector('[data-placeholder*="从这里开始写正文"]') ||
+      document.querySelector('[placeholder*="从这里开始写正文"]') ||
+      document.querySelector('.rich_media_content') ||
+      document.querySelector('#js_editor_content') ||
+      document.querySelector('.js_editor_content') ||
+      document.querySelector('.appmsg_editor_content') ||
+      document.querySelector('div[contenteditable="true"]:not(#title):not(#author):not(#js_summary)') ||
+      document.querySelector('div[contenteditable="true"]')
+    if (direct) return direct
+
+    // 2. Check iframes (e.g. ueditor_0)
+    var iframes = document.querySelectorAll('iframe')
+    for (var i = 0; i < iframes.length; i++) {
+      try {
+        var doc = iframes[i].contentDocument || iframes[i].contentWindow.document
+        if (doc) {
+          var inFrame = doc.querySelector('body[contenteditable="true"]') ||
+            doc.querySelector('.ProseMirror') ||
+            doc.querySelector('#js_editor_content') ||
+            doc.querySelector('body.view') ||
+            doc.querySelector('body')
+          if (inFrame && (inFrame.contentEditable === 'true' || inFrame.classList.contains('ProseMirror') || inFrame.classList.contains('view'))) {
+            return inFrame
+          }
+        }
+      } catch (_) {}
+    }
+    return null
   }
 
   function fillArticle(article) {
@@ -246,8 +273,17 @@
     var editor = findEditor()
     if (editor) {
       editor.focus()
-      editor.innerHTML = article.content_html || ''
+      var html = article.content_html || ''
+      var inserted = false
+      try {
+        document.execCommand('selectAll', false, null)
+        inserted = document.execCommand('insertHTML', false, html)
+      } catch (_) {}
+      if (!inserted || !editor.innerHTML.trim() || editor.innerHTML === '<p><br></p>') {
+        editor.innerHTML = html
+      }
       editor.dispatchEvent(new Event('input', { bubbles: true }))
+      editor.dispatchEvent(new Event('change', { bubbles: true }))
       filledNames.push('正文')
     }
     var filled = ['标题', '作者', '摘要', '正文'].filter(function (name) {

@@ -9,9 +9,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
-from scripts.set_plugin_secret import load_env_manually
-
-load_env_manually()
+try:
+    from scripts.set_plugin_secret import load_env_manually
+    load_env_manually()
+except ImportError:
+    pass
 
 from app.ai.service import AIService
 from app.application.event_service import EventService
@@ -56,8 +58,16 @@ async def main() -> None:
             raise RuntimeError("No active AI Provider found in database")
         print(f"Using AI Provider: {provider.name} ({provider.base_url})")
 
-        profile = await session.get(AIProfile, "article_summarizer")
-        if profile is None:
+        existing_summarizer = await session.scalar(
+            select(AIProfile).where(
+                AIProfile.capability == "summarize",
+                AIProfile.enabled.is_(True),
+            )
+        )
+        if existing_summarizer is not None:
+            profile = existing_summarizer
+            print(f"Using existing AI Profile '{profile.id}' ({profile.name}, model={profile.model})")
+        else:
             now = clock.now()
             profile = AIProfile(
                 id="article_summarizer",
@@ -85,11 +95,7 @@ async def main() -> None:
             )
             session.add(profile)
             print("Created AI Profile 'article_summarizer' (capability: summarize)")
-        else:
-            profile.model = "Gemini 3.5 Flash"
-            profile.capability = "summarize"
-            profile.enabled = True
-            print("Found existing AI Profile 'article_summarizer', updated model to 'Gemini 3.5 Flash'")
+        summarize_profile_id = profile.id
 
     print("\n--- 2. Preparing Codex X Monitor Posts Context ---")
     target_post = XPost(
@@ -116,7 +122,7 @@ async def main() -> None:
 
     print("\n--- 3. Invoking AI Service Summarize Gateway ---")
     summary_result = await ai_service.summarize(
-        profile="article_summarizer",
+        profile=summarize_profile_id,
         plugin_id="codex_x_monitor",
         plugin_run_id=None,
         use_case="codex_usage_reset_article",
