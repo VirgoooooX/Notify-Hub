@@ -1,5 +1,4 @@
 import asyncio
-import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,27 +10,29 @@ sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
 try:
     from scripts.set_plugin_secret import load_env_manually
+
     load_env_manually()
 except ImportError:
     pass
 
-from app.ai.service import AIService
-from app.application.event_service import EventService
-from app.application.mp_article_service import MPArticleLibraryService
-from app.channels.mp.adapter import MPArticleAdapter
-from app.config import get_settings
-from app.domain.clock import SystemClock
-from app.infrastructure.database.ai_models import AIProfile, AIProvider
-from app.infrastructure.database.models import Delivery, MpArticle, Notification
-from app.infrastructure.database.plugin_models import PluginConfig
-from app.infrastructure.security.secret_store import SecretStore
-from plugins.builtin.codex_x_monitor.decision_prompt import (
+from app.ai.service import AIService  # noqa: E402
+from app.application.event_service import EventService  # noqa: E402
+from app.application.mp_article_service import MPArticleLibraryService  # noqa: E402
+from app.channels.base import ChannelMessage  # noqa: E402
+from app.channels.mp.adapter import MPArticleAdapter  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.domain.clock import SystemClock  # noqa: E402
+from app.infrastructure.database.ai_models import AIProfile, AIProvider  # noqa: E402
+from app.infrastructure.database.models import Delivery, MpArticle, Notification  # noqa: E402
+from app.infrastructure.security.secret_store import SecretStore  # noqa: E402
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+
+from plugins.builtin.codex_x_monitor.decision_prompt import (  # noqa: E402
     ARTICLE_GENERATION_INSTRUCTION,
     build_article_content,
 )
-from plugins.builtin.codex_x_monitor.schemas import ArticleDraft, EventDraft, XPost
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from plugins.builtin.codex_x_monitor.schemas import XPost  # noqa: E402
 
 
 async def main() -> None:
@@ -39,21 +40,23 @@ async def main() -> None:
     engine = create_async_engine(settings.database_url)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     clock = SystemClock()
-    secret_store = SecretStore(
-        factory, clock, settings.secret_encryption_key.get_secret_value()
+    secret_store = (
+        SecretStore(
+            factory,
+            clock,
+            settings.secret_encryption_key.get_secret_value(),
+        )
+        if settings.secret_encryption_key is not None
+        else None
     )
     ai_service = AIService(factory, secret_store=secret_store)
     event_service = EventService(factory, clock)
     library_service = MPArticleLibraryService(factory, clock, settings)
-    mp_adapter = MPArticleAdapter(
-        client=None, settings=settings, library=library_service
-    )
+    mp_adapter = MPArticleAdapter(client=None, settings=settings, library=library_service)
 
     print("--- 1. Ensuring AI Profile & Provider for Article Generation ---")
     async with factory() as session, session.begin():
-        provider = await session.scalar(
-            select(AIProvider).where(AIProvider.enabled.is_(True))
-        )
+        provider = await session.scalar(select(AIProvider).where(AIProvider.enabled.is_(True)))
         if provider is None:
             raise RuntimeError("No active AI Provider found in database")
         print(f"Using AI Provider: {provider.name} ({provider.base_url})")
@@ -66,7 +69,9 @@ async def main() -> None:
         )
         if existing_summarizer is not None:
             profile = existing_summarizer
-            print(f"Using existing AI Profile '{profile.id}' ({profile.name}, model={profile.model})")
+            print(
+                f"Using existing AI Profile '{profile.id}' ({profile.name}, model={profile.model})"
+            )
         else:
             now = clock.now()
             profile = AIProfile(
@@ -103,7 +108,9 @@ async def main() -> None:
         id=now_digits,
         author_username="thsottiaux",
         author_display_name="Thomas Sottiaux",
-        text="Hit the reset button for all ChatGPT Work and Codex users. Enjoy coding this weekend!",
+        text=(
+            "Hit the reset button for all ChatGPT Work and Codex users. Enjoy coding this weekend!"
+        ),
         url=f"https://x.com/thsottiaux/status/{now_digits}",
         published_at=datetime.now(UTC),
     )
@@ -170,16 +177,15 @@ async def main() -> None:
     print("\n--- 5. Delivering to WeChat Article Library ---")
     async with factory() as session:
         delivery = await session.scalar(
-            select(Delivery).where(
+            select(Delivery)
+            .where(
                 Delivery.channel == "mp_article",
                 Delivery.status == "pending",
-            ).order_by(Delivery.created_at.desc())
+            )
+            .order_by(Delivery.created_at.desc())
         )
         if delivery is None:
             raise RuntimeError("Could not find pending mp_article delivery")
-
-        # Deliver via adapter
-        from app.channels.base import ChannelMessage
 
         notification = await session.get(Notification, delivery.notification_id)
         assert notification is not None
@@ -195,7 +201,10 @@ async def main() -> None:
             payload=notification.payload,
         )
         res = await mp_adapter.send(channel_msg)
-        print(f"MP Adapter Delivery Result: success={res.success}, article_id={res.provider_message_id}")
+        print(
+            f"MP Adapter Delivery Result: success={res.success}, "
+            f"article_id={res.provider_message_id}"
+        )
 
         # Update delivery status
         delivery.status = "delivered" if res.success else "failed"
@@ -205,7 +214,7 @@ async def main() -> None:
         article = await session.get(MpArticle, res.provider_message_id)
         if article:
             print("\n" + "#" * 60)
-            print(f"[Success] Created WeChat Official Account Article Record:")
+            print("[Success] Created WeChat Official Account Article Record:")
             print(f"  Article ID:   {article.id}")
             print(f"  Status:       {article.status}")
             print(f"  Title:        {article.title}")
