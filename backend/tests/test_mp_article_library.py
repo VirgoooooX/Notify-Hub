@@ -368,3 +368,79 @@ async def test_article_admin_api_rejects_bad_status_and_unknown_article(
 
     missing = await client.get("/api/v1/admin/articles/mpa_missing", headers=headers)
     assert missing.status_code == 404
+
+
+@pytest.mark.integration
+async def test_article_admin_api_authenticates_with_api_client_and_static_tokens(
+    api: tuple[Any, Any],
+) -> None:
+    client, app = api
+    initialized = await client.post(
+        "/api/v1/admin/auth/initialize",
+        json={"username": "administrator", "password": "correct-horse-battery-staple"},
+    )
+    admin_token = initialized.json()["data"]["access_token"]
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    article_id = await app.state.mp_article_library.store_from_delivery(
+        delivery_id=None,
+        message=article_message("delivery_api_actor"),
+        status="ready",
+    )
+
+    # 1. Create an ApiClient
+    created = await client.post(
+        "/api/v1/admin/api-clients",
+        headers=admin_headers,
+        json={"name": "mp-helper"},
+    )
+    assert created.status_code == 201
+    api_key = created.json()["data"]["api_key"]
+    client_id = created.json()["data"]["id"]
+
+    # 1a. Test ApiClient with Authorization: Bearer nfy_...
+    res = await client.get("/api/v1/admin/articles", headers={"Authorization": f"Bearer {api_key}"})
+    assert res.status_code == 200
+    assert res.json()["data"]["total"] == 1
+
+    # 1b. Test ApiClient with X-API-Key: nfy_...
+    res = await client.get(f"/api/v1/admin/articles/{article_id}", headers={"X-API-Key": api_key})
+    assert res.status_code == 200
+    assert res.json()["data"]["id"] == article_id
+
+    # 1c. Test publish with ApiClient (audit actor_type="api_client")
+    pub = await client.post(
+        f"/api/v1/admin/articles/{article_id}/publish",
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert pub.status_code == 200
+    assert pub.json()["data"]["status"] == "published"
+
+    # 2. Test static mp_article_token
+    app.state.settings.mp_article_token = SecretStr("custom_mp_static_token_123")
+    res = await client.get(
+        "/api/v1/admin/articles",
+        headers={"Authorization": "Bearer custom_mp_static_token_123"},
+    )
+    assert res.status_code == 200
+
+    # 3. Test static admin_api_key
+    app.state.settings.admin_api_key = SecretStr("custom_admin_key_456")
+    res = await client.get(
+        "/api/v1/admin/articles",
+        headers={"Authorization": "Bearer custom_admin_key_456"},
+    )
+    assert res.status_code == 200
+
+    # 4. Revoked ApiClient returns 401
+    await client.post(f"/api/v1/admin/api-clients/{client_id}/revoke", headers=admin_headers)
+    revoked_res = await client.get(
+        "/api/v1/admin/articles", headers={"Authorization": f"Bearer {api_key}"}
+    )
+    assert revoked_res.status_code == 401
+
+    # 5. Invalid token returns 401
+    bad_res = await client.get(
+        "/api/v1/admin/articles", headers={"Authorization": "Bearer invalid_token"}
+    )
+    assert bad_res.status_code == 401

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.api.dependencies import require_admin
+from app.api.dependencies import require_article_actor
 from app.api.errors import AppError
 from app.application.audit import add_audit
-from app.infrastructure.database.models import Admin, MpArticle
+from app.infrastructure.database.models import Admin, ApiClient, MpArticle
 from fastapi import APIRouter, Depends, Query, Request
 
 router = APIRouter(tags=["admin-articles"])
@@ -44,7 +44,7 @@ def _serialize(article: MpArticle) -> dict[str, Any]:
 @router.get("/articles")
 async def list_articles(
     request: Request,
-    _admin: Admin = Depends(require_admin),
+    _actor: Admin | ApiClient = Depends(require_article_actor),
     status: str | None = Query(default=None, max_length=20),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
@@ -70,7 +70,7 @@ async def list_articles(
 
 @router.get("/articles/config")
 async def article_config(
-    request: Request, _admin: Admin = Depends(require_admin)
+    request: Request, _actor: Admin | ApiClient = Depends(require_article_actor)
 ) -> dict[str, object]:
     settings = request.app.state.settings
     configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
@@ -95,7 +95,7 @@ async def article_config(
 async def get_article(
     article_id: str,
     request: Request,
-    _admin: Admin = Depends(require_admin),
+    _actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
     article = await request.app.state.mp_article_library.get_article(article_id)
     if article is None:
@@ -107,10 +107,10 @@ async def get_article(
 async def mark_published(
     article_id: str,
     request: Request,
-    admin: Admin = Depends(require_admin),
+    actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
     article = await request.app.state.mp_article_library.mark_published(article_id)
-    await _audit(request, admin, article_id, "article.publish")
+    await _audit(request, actor, article_id, "article.publish")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 
 
@@ -118,10 +118,10 @@ async def mark_published(
 async def mark_ignored(
     article_id: str,
     request: Request,
-    admin: Admin = Depends(require_admin),
+    actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
     article = await request.app.state.mp_article_library.mark_ignored(article_id)
-    await _audit(request, admin, article_id, "article.ignore")
+    await _audit(request, actor, article_id, "article.ignore")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 
 
@@ -129,25 +129,26 @@ async def mark_ignored(
 async def restore_article(
     article_id: str,
     request: Request,
-    admin: Admin = Depends(require_admin),
+    actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
     article = await request.app.state.mp_article_library.restore(article_id)
-    await _audit(request, admin, article_id, "article.restore")
+    await _audit(request, actor, article_id, "article.restore")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 
 
 async def _audit(
     request: Request,
-    admin: Admin,
+    actor: Admin | ApiClient,
     article_id: str,
     action: str,
 ) -> None:
+    actor_type = "admin" if isinstance(actor, Admin) else "api_client"
     async with request.app.state.session_factory() as session, session.begin():
         add_audit(
             session,
             request.app.state.clock,
-            actor_type="admin",
-            actor_id=admin.id,
+            actor_type=actor_type,
+            actor_id=actor.id,
             action=action,
             resource_type="mp_article",
             resource_id=article_id,

@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     ai_bootstrap_api_key: SecretStr | None = None
     access_token_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_days: int = Field(default=30, ge=1, le=365)
+    admin_api_key: SecretStr | None = None
+    mp_article_token: SecretStr | None = None
     login_max_attempts: int = Field(default=5, ge=1, le=100)
     login_window_seconds: int = Field(default=300, ge=1)
     api_rate_limit_per_minute: int = Field(default=60, ge=1)

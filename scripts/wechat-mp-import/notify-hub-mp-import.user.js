@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Notify Hub 公众号导入助手
 // @namespace    notify-hub
-// @version      0.3.1
+// @version      0.4.0
 // @description  从 Notify Hub 文章库把 AI 生成的文章一键填入公众号编辑器；发布按钮不自动点击，最终发布由人工确认。
 // @author       Notify Hub
 // @match        https://mp.weixin.qq.com/*
@@ -58,13 +58,17 @@
         reject(new Error('未配置访问令牌：请在脚本菜单里设置'))
         return
       }
+      var headers = {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + token,
+      }
+      if (token.startsWith('nfy_')) {
+        headers['X-API-Key'] = token
+      }
       GM_xmlhttpRequest({
         method: method,
         url: fmt(base) + path,
-        headers: {
-          Accept: 'application/json',
-          Authorization: 'Bearer ' + token,
-        },
+        headers: headers,
         timeout: 15000,
         onload: function (response) {
           var body = null
@@ -93,7 +97,7 @@
 
   function loadArticles() {
     if (!token) {
-      toast('请先在脚本菜单设置访问令牌', 'warn')
+      toast('请先在脚本菜单设置访问令牌 (API Key / Token)', 'warn')
       return
     }
     toast('加载中…', 'info')
@@ -192,7 +196,15 @@
     })
   }
 
-  function setNativeValue(element, value) {
+  function setElementValue(element, value) {
+    if (!element) return
+    if (element.isContentEditable || element.getAttribute('contenteditable') === 'true') {
+      element.focus()
+      element.textContent = value
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+      element.dispatchEvent(new Event('change', { bubbles: true }))
+      return
+    }
     var proto = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
     var setter = Object.getOwnPropertyDescriptor(proto, 'value')
     if (setter && setter.set) setter.set.call(element, value)
@@ -204,32 +216,44 @@
   function findTitle() {
     return document.querySelector('#title') ||
       document.querySelector('input[id*="title" i]') ||
-      document.querySelector('input[placeholder*="标题" i]')
+      document.querySelector('input[placeholder*="标题" i]') ||
+      document.querySelector('textarea[id*="title" i]') ||
+      document.querySelector('textarea[placeholder*="标题" i]') ||
+      document.querySelector('[data-placeholder*="输入文章标题"]') ||
+      document.querySelector('.title_input input, .title_input textarea') ||
+      document.querySelector('div[contenteditable="true"][id*="title" i]')
   }
 
   function findAuthor() {
     return document.querySelector('#author') ||
       document.querySelector('input[id*="author" i]') ||
-      document.querySelector('input[placeholder*="作者" i]')
+      document.querySelector('input[placeholder*="作者" i]') ||
+      document.querySelector('textarea[id*="author" i]') ||
+      document.querySelector('[data-placeholder*="作者"]') ||
+      document.querySelector('.author_input input, .author_input textarea')
   }
 
   function findSummary() {
     return document.querySelector('#js_summary') ||
       document.querySelector('textarea[id*="summary" i]') ||
       document.querySelector('input[id*="summary" i]') ||
-      document.querySelector('textarea[placeholder*="摘要" i]')
+      document.querySelector('textarea[placeholder*="摘要" i]') ||
+      document.querySelector('input[placeholder*="摘要" i]') ||
+      document.querySelector('[data-placeholder*="摘要"]') ||
+      document.querySelector('.js_description')
   }
 
   function findEditor() {
     // 1. Direct modern ProseMirror or contenteditable editors
     var direct = document.querySelector('.ProseMirror') ||
-      document.querySelector('[data-placeholder*="从这里开始写正文"]') ||
-      document.querySelector('[placeholder*="从这里开始写正文"]') ||
-      document.querySelector('.rich_media_content') ||
+      document.querySelector('[contenteditable="true"][data-placeholder*="从这里开始写正文"]') ||
+      document.querySelector('[contenteditable="true"][placeholder*="从这里开始写正文"]') ||
       document.querySelector('#js_editor_content') ||
       document.querySelector('.js_editor_content') ||
+      document.querySelector('.rich_media_content') ||
       document.querySelector('.appmsg_editor_content') ||
-      document.querySelector('div[contenteditable="true"]:not(#title):not(#author):not(#js_summary)') ||
+      document.querySelector('[data-testid*="editor"]') ||
+      document.querySelector('div[contenteditable="true"]:not(#title):not(#author):not(#js_summary):not([id*="title"]):not([id*="author"])') ||
       document.querySelector('div[contenteditable="true"]')
     if (direct) return direct
 
@@ -239,8 +263,8 @@
       try {
         var doc = iframes[i].contentDocument || iframes[i].contentWindow.document
         if (doc) {
-          var inFrame = doc.querySelector('body[contenteditable="true"]') ||
-            doc.querySelector('.ProseMirror') ||
+          var inFrame = doc.querySelector('.ProseMirror') ||
+            doc.querySelector('body[contenteditable="true"]') ||
             doc.querySelector('#js_editor_content') ||
             doc.querySelector('body.view') ||
             doc.querySelector('body')
@@ -257,28 +281,51 @@
     var filledNames = []
     var title = findTitle()
     if (title) {
-      setNativeValue(title, article.title || '')
+      setElementValue(title, article.title || '')
       filledNames.push('标题')
     }
     var author = findAuthor()
     if (author) {
-      setNativeValue(author, article.author || '')
+      setElementValue(author, article.author || '')
       filledNames.push('作者')
     }
     var summary = findSummary()
     if (summary) {
-      setNativeValue(summary, article.digest || '')
+      setElementValue(summary, article.digest || '')
       filledNames.push('摘要')
     }
     var editor = findEditor()
+    var html = article.content_html || ''
     if (editor) {
       editor.focus()
-      var html = article.content_html || ''
+      var doc = editor.ownerDocument || document
       var inserted = false
+
+      // 1. Try paste event simulation (preferred by modern ProseMirror / TipTap)
       try {
-        document.execCommand('selectAll', false, null)
-        inserted = document.execCommand('insertHTML', false, html)
+        if (window.ClipboardEvent && window.DataTransfer) {
+          var dt = new DataTransfer()
+          dt.setData('text/html', html)
+          dt.setData('text/plain', article.content || '')
+          var pasteEvt = new ClipboardEvent('paste', {
+            bubbles: true,
+            cancelable: true,
+            clipboardData: dt,
+          })
+          editor.dispatchEvent(pasteEvt)
+          inserted = editor.innerHTML.trim().length > 20 && editor.innerHTML !== '<p><br></p>'
+        }
       } catch (_) {}
+
+      // 2. Try execCommand on editor's document
+      if (!inserted) {
+        try {
+          doc.execCommand('selectAll', false, null)
+          inserted = doc.execCommand('insertHTML', false, html)
+        } catch (_) {}
+      }
+
+      // 3. Fallback to direct innerHTML
       if (!inserted || !editor.innerHTML.trim() || editor.innerHTML === '<p><br></p>') {
         editor.innerHTML = html
       }
@@ -286,12 +333,24 @@
       editor.dispatchEvent(new Event('change', { bubbles: true }))
       filledNames.push('正文')
     }
+
+    // Simultaneously copy rich-text HTML to clipboard so the user can easily Ctrl+V if needed
+    if (html && navigator.clipboard && window.ClipboardItem) {
+      navigator.clipboard.write([
+        new window.ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([article.content || ''], { type: 'text/plain' }),
+        }),
+      ]).catch(function () {})
+    }
+
     var filled = ['标题', '作者', '摘要', '正文'].filter(function (name) {
-      return filledNames.indexOf(name) === -1
+      return filledNames.indexOf(name) !== -1
     })
     var note = filled.length ? '已填入：' + filled.join('、') : '未找到编辑器字段'
+    note += '（富文本已同步复制，亦可按 Ctrl+V 粘贴）'
     if (article.cover_url) {
-      note += '；封面请点“从正文选择”使用首图（' + article.cover_url + '）'
+      note += '；封面请在公众号右侧点“从正文选择”'
     }
     toast(note, 'ok')
   }
@@ -364,7 +423,6 @@
           var topStr = el.style.top
 
           if (centerX > window.innerWidth / 2) {
-            // Anchor to right edge so panel expands inwards leftward without overflowing
             var rightVal = Math.max(12, Math.min(window.innerWidth - 60, window.innerWidth - finalRect.right))
             el.style.right = rightVal + 'px'
             el.style.left = 'auto'
@@ -374,7 +432,6 @@
               anchor: 'right',
             }))
           } else {
-            // Anchor to left edge
             var leftVal = Math.max(12, finalRect.left)
             el.style.left = leftVal + 'px'
             el.style.right = 'auto'
@@ -495,7 +552,33 @@
   function onEditorPage() {
     var path = location.pathname || ''
     var search = location.search || ''
-    return path.indexOf('/cgi-bin/appmsg') !== -1 && search.indexOf('t=media/appmsg_edit') !== -1
+    if (
+      (path.indexOf('/cgi-bin/appmsg') !== -1 && (search.indexOf('appmsg_edit') !== -1 || search.indexOf('action=edit') !== -1)) ||
+      path.indexOf('/cgi-bin/newappmsg') !== -1 ||
+      search.indexOf('t=media/appmsg_edit') !== -1 ||
+      search.indexOf('appmsg_edit') !== -1
+    ) {
+      return true
+    }
+    return Boolean(
+      document.querySelector('#title') ||
+      document.querySelector('input[placeholder*="标题" i]') ||
+      document.querySelector('.ProseMirror') ||
+      document.querySelector('#js_editor_content')
+    )
+  }
+
+  function checkAndMount() {
+    if (onEditorPage()) {
+      if (!panel) {
+        buildPanel()
+        loadArticles()
+      } else if (panel.style.display === 'none') {
+        panel.style.display = 'flex'
+      }
+    } else if (panel) {
+      panel.style.display = 'none'
+    }
   }
 
   function boot() {
@@ -538,12 +621,19 @@
       toast('地址已保存：' + base, 'ok')
     })
 
-    GM_registerMenuCommand('设置访问令牌', function () {
-      var next = prompt('粘贴 Notify-Hub 管理员访问令牌（后台登录后从浏览器存储中复制，或调用登录接口获取）', token)
+    GM_registerMenuCommand('设置访问令牌 (Token / Key)', function () {
+      var next = prompt(
+        '请输入 Notify-Hub 访问令牌：\n' +
+        '1. 长期有效（推荐）：后台「API 客户端」创建的 API Key（nfy_...）\n' +
+        '2. 长期有效（环境变量）：服务端配置的 NOTIFY_HUB_MP_ARTICLE_TOKEN 或 NOTIFY_HUB_ADMIN_API_KEY\n' +
+        '3. 临时有效：后台登录获取的 Bearer Token（15分钟过期）',
+        token
+      )
       if (next === null) return
       token = String(next).trim()
       setConfig(STORE_TOKEN, token)
       toast('令牌已保存', 'ok')
+      loadArticles()
     })
 
     GM_registerMenuCommand('刷新文章列表', loadArticles)
@@ -558,9 +648,26 @@
       toast('面板位置已重置为默认（右侧贴边）', 'ok')
     })
 
-    if (!onEditorPage()) return
-    buildPanel()
-    loadArticles()
+    checkAndMount()
+
+    window.addEventListener('popstate', checkAndMount)
+    var origPushState = history.pushState
+    if (origPushState) {
+      history.pushState = function () {
+        var ret = origPushState.apply(this, arguments)
+        setTimeout(checkAndMount, 300)
+        return ret
+      }
+    }
+    var origReplaceState = history.replaceState
+    if (origReplaceState) {
+      history.replaceState = function () {
+        var ret = origReplaceState.apply(this, arguments)
+        setTimeout(checkAndMount, 300)
+        return ret
+      }
+    }
+    setInterval(checkAndMount, 2000)
   }
 
   if (document.readyState === 'loading') {
