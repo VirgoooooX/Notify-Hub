@@ -29,7 +29,7 @@
 
 ## twscrape 冷备
 
-仓库保留 twscrape 适配器和自动依赖检查工作流，便于 RSSHub 故障时人工切换验证。它不是插件页面的可选项，也不会自动故障转移；切换需显式设置 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape`、提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 并重新部署。切回 RSSHub 也必须显式部署变更。
+仓库保留 twscrape 适配器，便于 RSSHub 故障时人工切换验证。它不是插件页面的可选项，也不会自动故障转移；切换需显式设置 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape`、提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 并重新部署。切回 RSSHub 也必须显式部署变更。
 
 ## 匹配
 

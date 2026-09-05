@@ -217,15 +217,14 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 
 否则停止新版本，恢复迁移前数据库和匹配媒体，再启动旧镜像。回滚后同样要验证 `ready`、Secret 解密、待投递队列、提醒调度和回调幂等。
 
-### 5.4 twscrape 依赖升级
+### 5.4 twscrape 依赖维护
 
-仓库通过 `.github/workflows/twscrape-update.yml` 每日检查上游 `twscrape`，也可以在 GitHub Actions 中手动运行。工作流只更新 `pyproject.toml` 与 `uv.lock`，用锁定环境执行完整 Python 测试、格式检查、Lint 和 mypy，通过后自动创建升级 PR；不会自动合并或直接发布到生产。
+`twscrape` 仅作为冷备依赖，采用手动按需维护策略，不启用自动定时升级工作流。
 
-本地需要立即检查或升级时，在仓库根目录执行：
+当需要手动升级 `twscrape` 时，在仓库根目录执行：
 
 ```bash
-uv run --locked python scripts/update_twscrape.py --check
-uv run --locked python scripts/update_twscrape.py
+uv lock --upgrade-package twscrape
 uv sync --locked --extra dev
 uv run --locked --extra dev pytest
 uv run --locked --extra dev ruff format --check backend plugins
@@ -233,7 +232,7 @@ uv run --locked --extra dev ruff check backend plugins
 uv run --locked --extra dev mypy backend plugins
 ```
 
-当前约束允许自动跟随 `0.x` 版本；进入 `1.x` 前需要单独评估兼容性。升级依赖不会刷新 X Cookie，也不能替代真实账号/代理验证；如果线上仍出现 Cloudflare 或账号错误，应在受控配置中更新 Cookie，再按插件运维流程手动恢复运行。发布前仍需备份数据库、构建固定镜像 tag，并按本节的回滚流程保留旧镜像。
+当前约束允许跟随 `0.x` 版本；进入 `1.x` 前需要单独评估兼容性。升级依赖不会刷新 X Cookie，也不能替代真实账号/代理验证；如果线上仍出现 Cloudflare 或账号错误，应在受控配置中更新 Cookie，再按插件运维流程手动恢复运行。发布前仍需备份数据库、构建固定镜像 tag，并按本节的回滚流程保留旧镜像。
 
 ## 6. Worker 崩溃与租约恢复
 
