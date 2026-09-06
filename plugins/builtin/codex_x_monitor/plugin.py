@@ -48,9 +48,9 @@ def _receipt_status(receipt: Any) -> str | None:
     return str(value).lower() if value is not None else None
 
 
-def format_post_summary(post: XPost, max_length: int = 800) -> str:
-    text = " ".join(post.text.split())
-    if len(text) > max_length:
+def format_post_summary(post: XPost, max_length: int | None = None) -> str:
+    text = post.text.strip()
+    if max_length is not None and len(text) > max_length:
         text = text[: max_length - 1].rstrip() + "…"
     return f"@{post.author_username} 发布了与 Codex 用量重置相关的新消息:\n\n{text}"
 
@@ -180,6 +180,7 @@ class CodexXMonitorPlugin:
                 summary = format_post_summary(post)
                 content = summary
                 article_ai_status = "rules_summary"
+                event_title = "Codex 用量可能已重置"
                 if config.publish_to_official_account and config.article_ai_profile:
                     try:
                         article_content = build_article_content(post, posts)
@@ -188,11 +189,16 @@ class CodexXMonitorPlugin:
                             use_case="codex_usage_reset_article",
                             content=article_content,
                             instruction=ARTICLE_GENERATION_INSTRUCTION,
-                            max_characters=2000,
+                            max_characters=8000,
                             cache_key=f"x:{post.author_username}:{post.id}:article",
                         )
                         content = article_result.summary.strip() or summary
                         article_ai_status = "ai_summarized"
+                        lines = content.strip().splitlines()
+                        if lines and lines[0].startswith("# "):
+                            candidate_title = lines[0].lstrip("# ").strip()
+                            if candidate_title:
+                                event_title = candidate_title[:64]
                     except Exception as exc:
                         article_ai_status = "fallback_summary"
                         context.logger.warning(
@@ -209,7 +215,7 @@ class CodexXMonitorPlugin:
                     EventDraft(
                         event_type="codex.usage_reset",
                         event_key=f"x-post-{post.id}",
-                        title="Codex 用量可能已重置",
+                        title=event_title,
                         content=content,
                         level=config.notification_level,
                         occurred_at=post.published_at,
@@ -236,7 +242,7 @@ class CodexXMonitorPlugin:
                             "article_ai_status": article_ai_status,
                         },
                         article=ArticleDraft(
-                            title="Codex 用量可能已重置",
+                            title=event_title,
                             description=summary,
                             url=post.url,
                             image_url=cover_url,

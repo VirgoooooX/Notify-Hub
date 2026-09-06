@@ -763,3 +763,27 @@ def test_twscrape_temp_dir_deleted(mock_gather: MagicMock, mock_api_cls: MagicMo
 
         # Verify the context manager cleanup was called
         mock_temp_dir.return_value.__exit__.assert_called_once()
+
+
+def test_post_payload_preserves_long_tweet_without_truncation() -> None:
+    from plugins.builtin.codex_x_monitor.decision_prompt import _post_payload
+    from plugins.builtin.codex_x_monitor.plugin import format_post_summary
+
+    long_text = "A" * 2500
+    post = XPost(
+        id="123456",
+        author_username="thsottiaux",
+        author_display_name="Thomas Sottiaux",
+        text=long_text,
+        url="https://x.com/thsottiaux/status/123456",
+        published_at=datetime.fromisoformat("2026-09-05T12:00:00+00:00"),
+    )
+
+    payload = _post_payload(post)
+    assert payload["text"] == long_text
+    assert len(payload["text"]) == 2500
+    assert not payload["text"].endswith("…")
+
+    summary = format_post_summary(post)
+    assert long_text in summary
+    assert not summary.endswith("…")

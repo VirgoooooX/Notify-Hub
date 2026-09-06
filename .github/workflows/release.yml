@@ -23,25 +23,25 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Install locked backend dependencies
-        run: uv sync --locked --extra dev
+        run: uv sync --locked --extra dev --extra mp-browser
       - name: Validate release version and tag
         run: python scripts/check_version.py --tag "${{ github.ref_name }}"
       - name: Check formatting
-        run: uv run --locked --extra dev ruff format --check backend plugins
+        run: uv run --locked --extra dev --extra mp-browser ruff format --check backend plugins
       - name: Lint
-        run: uv run --locked --extra dev ruff check backend plugins
+        run: uv run --locked --extra dev --extra mp-browser ruff check backend plugins
       - name: Type check
         env:
           PYTHONPATH: backend
-        run: uv run --locked --extra dev mypy backend plugins
+        run: uv run --locked --extra dev --extra mp-browser mypy backend plugins
       - name: Test
-        run: uv run --locked --extra dev pytest
+        run: uv run --locked --extra dev --extra mp-browser pytest
       - name: Migrate an empty SQLite database
         env:
           NOTIFY_HUB_DATABASE_URL: sqlite+aiosqlite:////tmp/notify-hub-release.db
-        run: cd backend && uv run --locked --extra dev alembic upgrade head
+        run: cd backend && uv run --locked --extra dev --extra mp-browser alembic upgrade head
       - name: Audit Python dependencies
-        run: uv run --locked --extra dev --with "pip-audit>=2.10,<3" pip-audit --skip-editable
+        run: uv run --locked --extra dev --extra mp-browser --with "pip-audit>=2.10,<3" pip-audit --skip-editable
 
   validate-frontend:
     runs-on: ubuntu-latest
@@ -137,6 +137,27 @@ jobs:
             docker tag notify-hub:release-candidate "$tag"
             docker push "$tag"
           done <<< "$RELEASE_TAGS"
+
+      - name: Extract MP Browser metadata
+        id: meta-browser
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+          flavor: |
+            prefix=mp-browser-,onlatest=true
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+
+      - name: Build and push MP Browser release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.mp-browser
+          push: true
+          tags: ${{ steps.meta-browser.outputs.tags }}
 
   create-github-release:
     runs-on: ubuntu-latest

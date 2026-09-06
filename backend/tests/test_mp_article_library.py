@@ -129,6 +129,16 @@ def test_render_wechat_html_includes_cover_and_source() -> None:
     assert 'href="https://x.com/post/1"' in html
 
 
+def test_render_wechat_html_omits_leading_title_heading() -> None:
+    html = render_wechat_html(
+        content="# 这是一个大标题\n\n正文第一段\n\n## 小标题\n\n正文第二段",
+    )
+    assert "这是一个大标题" not in html
+    assert "正文第一段" in html
+    assert "小标题" in html
+    assert "正文第二段" in html
+
+
 @pytest.mark.asyncio
 async def test_adapter_library_mode_stores_article_without_credentials() -> None:
     library = FakeLibrary()
@@ -416,15 +426,7 @@ async def test_article_admin_api_authenticates_with_api_client_and_static_tokens
     assert pub.status_code == 200
     assert pub.json()["data"]["status"] == "published"
 
-    # 2. Test static mp_article_token
-    app.state.settings.mp_article_token = SecretStr("custom_mp_static_token_123")
-    res = await client.get(
-        "/api/v1/admin/articles",
-        headers={"Authorization": "Bearer custom_mp_static_token_123"},
-    )
-    assert res.status_code == 200
-
-    # 3. Test static admin_api_key
+    # 2. Test static admin_api_key
     app.state.settings.admin_api_key = SecretStr("custom_admin_key_456")
     res = await client.get(
         "/api/v1/admin/articles",
@@ -444,3 +446,80 @@ async def test_article_admin_api_authenticates_with_api_client_and_static_tokens
         "/api/v1/admin/articles", headers={"Authorization": "Bearer invalid_token"}
     )
     assert bad_res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_mp_article_stores_extracted_heading_title(api: tuple[Any, Any]) -> None:
+    _client, app = api
+    library = app.state.mp_article_library
+    msg = ChannelMessage(
+        message_type="article",
+        title="Codex 用量可能已重置",
+        content=(
+            "# 额度给补上了！ChatGPT 付费用户没用上赶紧看\n\n"
+            "> @thsottiaux 原推：\n"
+            "> Full tweet content"
+        ),
+        recipients=[],
+        image_url="https://example.com/cover.png",
+    )
+    article_id = await library.store_from_delivery(
+        delivery_id=None,
+        message=msg,
+        status="ready",
+    )
+    article = await library.get_article(article_id)
+    assert article is not None
+    assert article.title == "额度给补上了！ChatGPT 付费用户没用上赶紧看"
+
+
+@pytest.mark.asyncio
+async def test_mp_article_adapter_browser_mode_without_credentials(
+    tmp_path: Any, api: tuple[Any, Any]
+) -> None:
+    _client, app = api
+    library = app.state.mp_article_library
+    settings = make_settings(publish_mode="browser", credentials=False)
+    adapter = MPArticleAdapter(
+        client=None,
+        settings=settings,
+        library=library,
+    )
+    msg = ChannelMessage(
+        message_type="article",
+        title="Browser Article",
+        content="Test content",
+        recipients=[],
+        image_url="https://example.com/cover.png",
+        payload={"publish_to_mp": True},
+    )
+    res = await adapter.send(msg)
+    assert res.success is True
+    assert res.response_metadata is not None
+    assert res.response_metadata["publish_mode"] == "browser"
+    assert res.response_metadata["manual_publish_required"] is False
+    assert res.response_metadata["browser_publish_queued"] is True
+
+    test_res = await adapter.test("")
+    assert test_res.success is True
+    assert test_res.response_metadata is not None
+    assert test_res.response_metadata["publish_mode"] == "browser"
+    assert test_res.response_metadata["browser_publish_queued"] is True
+
+
+@pytest.mark.asyncio
+async def test_mp_article_config_effective_mode_browser(api: tuple[Any, Any]) -> None:
+    client, app = api
+    app.state.settings.mp_publish_mode = "browser"
+    initialized = await client.post(
+        "/api/v1/admin/auth/initialize",
+        json={"username": "administrator", "password": "correct-horse-battery-staple"},
+    )
+    assert initialized.status_code == 201
+    token = initialized.json()["data"]["access_token"]
+    admin_headers = {"Authorization": f"Bearer {token}"}
+    res = await client.get("/api/v1/admin/articles/config", headers=admin_headers)
+    assert res.status_code == 200
+    data = res.json()["data"]
+    assert data["publish_mode"] == "browser"
+    assert data["effective_mode"] == "browser"

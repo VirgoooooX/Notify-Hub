@@ -508,7 +508,7 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
 
 在 ADR-027 的官方 API 路径之外，新增 `library` 文章库路径，两条路径并存：
 
-- `mp_publish_mode=library` 或未配置 AppID/Secret 时，`mp_article` 投递不再进入 dead，而是把文章写入 `mp_articles` 文章库（状态 `ready`），通过管理后台「公众号文章」工作台预览、复制公众号富文本格式，或由 Tampermonkey 脚本一键填入公众号后台；**发布按钮不自动点击，最终发布由管理员人工确认**。
+- `mp_publish_mode=library` 或未配置 AppID/Secret 时，`mp_article` 投递不再进入 dead，而是把文章写入 `mp_articles` 文章库（状态 `ready`），通过管理后台「公众号文章」工作台预览、复制公众号富文本格式，或由外部自动化工具（如 Playwright）读取并发布；**最终发布由管理员或自动化任务确认**。
 - 显式配置 `mp_publish_mode=draft|publish` 且凭证完整时，仍走 ADR-027 官方 API 路径（上传永久素材 → 建草稿 → 可选提交发布），文章同时记录到文章库作为历史。
 - 状态机：`draft/ready → published | ignored`，`ignored/published → ready`（restore）。`published` 与 `ignored` 之间不允许直接转换。
 - 文章库只存储平台生成、内容已转义的 HTML；前端预览按只读处理，禁止回填到插件或渠道。
@@ -523,5 +523,29 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
 
 - 新增 `MpArticle` 模型与迁移 `0014_add_mp_articles`、管理 API `/api/v1/admin/articles*` 和前端文章工作台；
 - `ChannelMessage` 增加 `delivery_id`，文章库按 delivery 幂等落库；
-- 新增 `scripts/wechat-mp-import/notify-hub-mp-import.user.js` 浏览器导入脚本；
+- 废弃油猴导入脚本，转向基于 Playwright 的自动化发布方案与文章库管理 API；
 - ADR-027 中“未配置公众号凭证即进入 dead”的行为仅对显式 `draft|publish` 模式保留，未配置凭证默认走 `library`。
+
+---
+
+## ADR-029：基于 Playwright 独立容器的个人公众号全自动发布（browser 模式）
+
+**状态：已接受**
+
+### 决策
+
+在 `library` 模式与官方 API 模式之外，引入全自动 `browser` 发布模式：
+
+1. **队列与状态**：不新增独立 Browser 任务表，复用 `MpArticle` 队列；扩展状态为 `ready -> publishing -> published | failed`。
+2. **容器解耦与通信**：Playwright 发布器作为独立容器（`mp-browser-publisher`），只通过带有 `allow_mp_browser` 权限的 `nfy_` 标准 API 密钥与 Notify Hub REST API 通信，严禁直连 SQLite。
+3. **防重复群发绝对防线**：
+   - 文章发布流程引入双阶段 checkpoint：`draft_saved` 与 `publish_clicked`。
+   - 一旦进入 `publish_clicked`，任何超时重试或任务恢复严禁再次点击发表，只能进入只读 `reconcile`（查重）流程；若重试仍无法确认，转为 `failed` 且禁止管理后台直接 restore，避免重复群发。
+4. **会话心跳与二维码告警**：
+   - 浏览器容器维护 30s 心跳；服务端超过 45s 无心跳自动标记为 `offline`。
+   - 登录态过期时，容器捕获登录二维码并上报；核心服务通过内部事件机制将二维码告警投递给企业微信指定运维人员（`NOTIFY_HUB_MP_BROWSER_ALERT_RECIPIENT_IDS`），基于 `incident_id` 自动去重。
+5. **排版保真与兼容**：
+   - 保留 Twitter 全文展示与无截断内容；
+   - 提取 Markdown `# 标题` 作为公众号文章标题，正文 HTML 自动剔除首个重复 H1，防止微信正文双重标题；
+   - 自动选取正文首张图片作为封面图。
+

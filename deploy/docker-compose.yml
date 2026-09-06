@@ -74,3 +74,30 @@ services:
     cap_drop:
       - ALL
     init: true
+
+  mp-browser-publisher:
+    image: ${NOTIFY_HUB_MP_BROWSER_IMAGE:-ghcr.io/virgooooox/notify-hub:mp-browser-latest}
+    container_name: notify-hub-mp-browser
+    profiles: ["mp-browser"]
+    restart: unless-stopped
+    depends_on:
+      notify-hub:
+        condition: service_healthy
+    environment:
+      NOTIFY_HUB_MP_BROWSER_API_BASE_URL: http://notify-hub:8000/api/v1/admin/mp-browser
+      NOTIFY_HUB_MP_BROWSER_API_KEY: "${NOTIFY_HUB_MP_BROWSER_API_KEY:?set publisher API key}"
+      NOTIFY_HUB_MP_BROWSER_PROFILE_DIR: /app/browser-data/profile
+      NOTIFY_HUB_MP_BROWSER_ARTIFACTS_DIR: /app/browser-data/artifacts
+      NOTIFY_HUB_MP_BROWSER_HEADLESS: "true"
+    volumes:
+      - mp-browser-data:/app/browser-data
+    shm_size: "1gb"
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  mp-browser-data:
+

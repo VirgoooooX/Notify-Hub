@@ -50,7 +50,8 @@ class UnconfiguredChannel:
     def __init__(self, channel_name: str = "WeCom channel") -> None:
         self._channel_name = channel_name
 
-    async def send(self, _message: ChannelMessage) -> ChannelResult:
+    async def send(self, message: ChannelMessage) -> ChannelResult:
+        del message
         return ChannelResult(
             success=False,
             retryable=False,
@@ -58,5 +59,6 @@ class UnconfiguredChannel:
             error_message=f"{self._channel_name} is not configured",
         )
 
-    async def test(self, _recipient: str) -> ChannelResult:
+    async def test(self, recipient: str) -> ChannelResult:
+        del recipient
         return await self.send(ChannelMessage("text", "", "", []))

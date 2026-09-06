@@ -46,7 +46,6 @@ class Settings(BaseSettings):
     access_token_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_days: int = Field(default=30, ge=1, le=365)
     admin_api_key: SecretStr | None = None
-    mp_article_token: SecretStr | None = None
     login_max_attempts: int = Field(default=5, ge=1, le=100)
     login_window_seconds: int = Field(default=300, ge=1)
     api_rate_limit_per_minute: int = Field(default=60, ge=1)
@@ -83,8 +82,11 @@ class Settings(BaseSettings):
     mp_api_base_url: str = "https://api.weixin.qq.com"
     mp_request_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     mp_token_refresh_skew_seconds: int = Field(default=120, ge=0)
-    mp_publish_mode: Literal["library", "draft", "publish"] = "publish"
+    mp_publish_mode: Literal["library", "draft", "publish", "browser"] = "publish"
     mp_author: str = "Notify Hub"
+    mp_browser_alert_recipient_ids: list[str] = Field(default_factory=list, max_length=20)
+    mp_browser_claim_timeout_seconds: int = Field(default=1200, ge=300, le=3600)
+    mp_browser_max_attempts: int = Field(default=3, ge=1, le=10)
     media_root: Path = Path("./data/media")
     media_image_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
     media_source_image_max_bytes: int = Field(default=16_777_216, ge=2_097_152, le=20_971_520)
@@ -139,6 +141,12 @@ class Settings(BaseSettings):
     @field_validator("x_health_alert_recipient_ids")
     @classmethod
     def normalize_x_health_recipients(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value if item.strip()]
+        return list(dict.fromkeys(cleaned))
+
+    @field_validator("mp_browser_alert_recipient_ids")
+    @classmethod
+    def normalize_mp_browser_recipients(cls, value: list[str]) -> list[str]:
         cleaned = [item.strip() for item in value if item.strip()]
         return list(dict.fromkeys(cleaned))
 
@@ -227,7 +235,11 @@ class Settings(BaseSettings):
             bool(self.mp_app_id and self.mp_app_id.strip()),
             bool(self.mp_app_secret and self.mp_app_secret.get_secret_value()),
         )
-        if self.mp_publish_mode != "library" and any(outbound_mp) and not all(outbound_mp):
+        if (
+            self.mp_publish_mode in {"draft", "publish"}
+            and any(outbound_mp)
+            and not all(outbound_mp)
+        ):
             raise ValueError("MP App ID and Secret must be configured together")
         return self
 

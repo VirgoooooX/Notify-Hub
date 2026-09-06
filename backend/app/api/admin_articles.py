@@ -10,10 +10,11 @@ from fastapi import APIRouter, Depends, Query, Request
 
 router = APIRouter(tags=["admin-articles"])
 
-VALID_STATUSES = {"draft", "ready", "published", "ignored"}
+VALID_STATUSES = {"draft", "ready", "publishing", "published", "failed", "ignored"}
 
 
-def _serialize(article: MpArticle) -> dict[str, Any]:
+def serialize_article(article: MpArticle) -> dict[str, Any]:
+    bp = (article.payload or {}).get("browser_publish") or {}
     return {
         "id": article.id,
         "status": article.status,
@@ -38,7 +39,15 @@ def _serialize(article: MpArticle) -> dict[str, Any]:
         "created_at": article.created_at.isoformat() if article.created_at else None,
         "updated_at": article.updated_at.isoformat() if article.updated_at else None,
         "payload": article.payload,
+        "browser_phase": bp.get("phase"),
+        "browser_attempt_count": bp.get("attempt_count", 0),
+        "browser_last_error_code": bp.get("last_error_code"),
+        "browser_last_error_message": bp.get("last_error_message"),
+        "published_url": bp.get("published_url"),
     }
+
+
+_serialize = serialize_article
 
 
 @router.get("/articles")
@@ -74,11 +83,12 @@ async def article_config(
 ) -> dict[str, object]:
     settings = request.app.state.settings
     configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
-    effective_mode = (
-        "library"
-        if settings.mp_publish_mode == "library" or not configured
-        else settings.mp_publish_mode
-    )
+    if settings.mp_publish_mode == "browser":
+        effective_mode = "browser"
+    elif settings.mp_publish_mode == "library" or not configured:
+        effective_mode = "library"
+    else:
+        effective_mode = settings.mp_publish_mode
     return {
         "data": {
             "configured": configured,

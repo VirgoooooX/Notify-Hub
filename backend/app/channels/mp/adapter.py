@@ -77,19 +77,23 @@ class MPArticleAdapter:
                 "PAYLOAD_INVALID",
                 "MP article requires a cover image",
             )
-        if self._library_mode():
+        if self._workspace_mode():
             return await self._send_to_library(message)
         return await self._send_via_api(message)
 
     async def test(self, recipient: str) -> ChannelResult:
         del recipient
-        if self._library_mode():
+        if self._workspace_mode():
+            mode = "browser" if self._settings.mp_publish_mode == "browser" else "library"
+            metadata: dict[str, object] = {
+                "publish_mode": mode,
+                "manual_publish_required": mode == "library",
+            }
+            if mode == "browser":
+                metadata["browser_publish_queued"] = True
             return ChannelResult(
                 True,
-                response_metadata={
-                    "publish_mode": "library",
-                    "manual_publish_required": True,
-                },
+                response_metadata=metadata,
             )
         try:
             if self._client is None:
@@ -136,14 +140,18 @@ class MPArticleAdapter:
                 "LIBRARY_STORE_FAILED",
                 "MP article library store failed",
             )
+        mode = "browser" if self._settings.mp_publish_mode == "browser" else "library"
+        metadata: dict[str, object] = {
+            "article_id": article_id,
+            "publish_mode": mode,
+            "manual_publish_required": mode == "library",
+        }
+        if mode == "browser":
+            metadata["browser_publish_queued"] = True
         return ChannelResult(
             True,
             provider_message_id=article_id,
-            response_metadata={
-                "article_id": article_id,
-                "publish_mode": "library",
-                "manual_publish_required": True,
-            },
+            response_metadata=metadata,
         )
 
     async def _send_via_api(self, message: ChannelMessage) -> ChannelResult:
@@ -261,8 +269,8 @@ class MPArticleAdapter:
     def _library_metadata(self, message: ChannelMessage) -> dict[str, object]:
         return {"article_recorded": self._library is not None}
 
-    def _library_mode(self) -> bool:
-        if self._settings.mp_publish_mode == "library":
+    def _workspace_mode(self) -> bool:
+        if self._settings.mp_publish_mode in {"library", "browser"}:
             return True
         return not (bool(self._settings.mp_app_id) and self._settings.mp_app_secret is not None)
 

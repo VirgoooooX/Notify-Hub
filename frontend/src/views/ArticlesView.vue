@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { Copy, ExternalLink, Eye, Newspaper, RotateCcw, Undo2 } from 'lucide-vue-next'
 import { api, query } from '@/lib/api'
-import type { MpArticle, MpArticleConfig, Page } from '@/types'
+import type { MpArticle, MpArticleConfig, MpBrowserSession, Page } from '@/types'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import PaginationBar from '@/components/PaginationBar.vue'
@@ -26,16 +26,20 @@ const page = ref(1)
 const status = ref('')
 const loading = ref(false)
 const config = ref<MpArticleConfig | null>(null)
+const session = ref<MpBrowserSession | null>(null)
 const result = ref<Page<MpArticle>>({ items: [], page: 1, page_size: 20, total: 0 })
 const selected = ref<MpArticle | null>(null)
 const detailLoading = ref(false)
 const detailOpen = ref(false)
 const acting = ref(false)
+let sessionTimer: number | undefined
 
 const statusLabel: Record<string, string> = {
   draft: '草稿',
   ready: '待发布',
+  publishing: '正在发布',
   published: '已发布',
+  failed: '发布失败',
   ignored: '已忽略',
 }
 
@@ -51,10 +55,16 @@ function aiLabel(value: string | null): string {
 
 function modeBanner(): { tone: 'info' | 'success'; text: string } | null {
   if (!config.value) return null
+  if (config.value.effective_mode === 'browser') {
+    return {
+      tone: 'success',
+      text: '当前为浏览器自动发布模式：独立 Playwright 容器自动排队领取文章并发表到公众号。',
+    }
+  }
   if (config.value.effective_mode === 'library') {
     return {
       tone: 'info',
-      text: '当前为文章库模式：文章已由 Notify-Hub 生成并排版。复制公众号格式或使用浏览器导入脚本填入后台，最终发布由你确认。',
+      text: '当前为文章库模式：文章已由 Notify-Hub 生成并排版，支持在后台复制公众号富文本格式或由自动化脚本发布。',
     }
   }
   if (config.value.effective_mode === 'draft') {
@@ -86,6 +96,15 @@ async function loadConfig() {
     config.value = await api.get<MpArticleConfig>('/admin/articles/config')
   } catch {
     config.value = null
+  }
+}
+
+async function loadSession() {
+  if (config.value?.effective_mode !== 'browser') return
+  try {
+    session.value = await api.get<MpBrowserSession>('/admin/mp-browser/session')
+  } catch {
+    // Suppress background poll errors
   }
 }
 
@@ -187,12 +206,28 @@ function openMpEditor() {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
 
+function openPublishedUrl(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 const time = (v: string) => formatInstant(v, settings.timezone)
 
 onMounted(() => {
   void settings.load()
-  void loadConfig()
+  void loadConfig().then(() => {
+    if (config.value?.effective_mode === 'browser') {
+      void loadSession()
+      sessionTimer = window.setInterval(loadSession, 10000)
+    }
+  })
   void load()
+})
+
+onUnmounted(() => {
+  if (sessionTimer !== undefined) {
+    window.clearInterval(sessionTimer)
+    sessionTimer = undefined
+  }
 })
 </script>
 
@@ -210,6 +245,31 @@ onMounted(() => {
     {{ modeBanner()!.text }}
   </AppAlert>
 
+  <div v-if="config?.effective_mode === 'browser' && session" class="browser-session-bar">
+    <div v-if="session.state === 'auth_required'" class="auth-required-card">
+      <div class="auth-card-header">
+        <strong>微信公众号登录会话已过期</strong>
+        <p>请扫码恢复登录：使用微信扫描下方二维码后发布队列将自动恢复。</p>
+      </div>
+      <div v-if="session.qr_data_url" class="qr-box">
+        <img :src="session.qr_data_url" alt="微信扫码登录" class="qr-img">
+      </div>
+    </div>
+    <AppAlert
+      v-else-if="session.state === 'offline'"
+      variant="warning"
+      class="session-status-alert"
+    >
+      Publisher 处于离线状态 (offline)，请确认 Playwright 浏览器容器是否正常运行。
+    </AppAlert>
+    <div v-else-if="session.state === 'ready'" class="session-pill session-ready">
+      <span class="status-dot dot-ready" /> Publisher 在线就绪
+    </div>
+    <div v-else-if="session.state === 'publishing'" class="session-pill session-publishing">
+      <span class="status-dot dot-publishing" /> Publisher 正在发布文章中...
+    </div>
+  </div>
+
   <AppCard padding="md">
     <TableToolbar>
       <template #left>
@@ -220,11 +280,17 @@ onMounted(() => {
           <option value="ready">
             待发布
           </option>
-          <option value="draft">
-            草稿
+          <option value="publishing">
+            正在发布
           </option>
           <option value="published">
             已发布
+          </option>
+          <option value="failed">
+            发布失败
+          </option>
+          <option value="draft">
+            草稿
           </option>
           <option value="ignored">
             已忽略
@@ -273,7 +339,25 @@ onMounted(() => {
             </div>
           </td>
           <td>
-            <AppStatus :status="item.status" :label="statusLabel[item.status] ?? item.status" />
+            <div class="status-cell">
+              <AppStatus :status="item.status" :label="statusLabel[item.status] ?? item.status" />
+              <span v-if="item.status === 'publishing' && item.browser_phase" class="phase-badge">
+                {{ item.browser_phase }}
+              </span>
+              <span v-else-if="item.status === 'failed' && item.browser_last_error_code" class="error-badge">
+                {{ item.browser_last_error_code }}
+              </span>
+              <a
+                v-else-if="item.status === 'published' && item.published_url"
+                :href="item.published_url"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="published-link"
+              >
+                <ExternalLink :size="12" />
+                链接
+              </a>
+            </div>
           </td>
           <td>
             <span class="muted">{{ aiLabel(item.ai_status) }}</span>
@@ -324,6 +408,27 @@ onMounted(() => {
       <p class="detail-author">
         作者：{{ selected.author }}
       </p>
+      <div v-if="selected.status === 'failed'" class="failed-details-box">
+        <div class="failed-header">
+          <strong>发布失败详情</strong>
+          <span v-if="selected.browser_attempt_count" class="meta-chip">
+            尝试次数：{{ selected.browser_attempt_count }}
+          </span>
+        </div>
+        <p v-if="selected.browser_last_error_code" class="failed-row">
+          错误代码：<code>{{ selected.browser_last_error_code }}</code>
+        </p>
+        <p v-if="selected.browser_last_error_message" class="failed-row failed-msg">
+          {{ selected.browser_last_error_message }}
+        </p>
+        <AppAlert
+          v-if="selected.browser_last_error_code === 'PUBLISH_RESULT_UNKNOWN'"
+          variant="warning"
+          class="unknown-alert"
+        >
+          实际结果未知，请先检查公众号后台确认是否已发表。若已发表请点击“确认已发布”，若未发表可在公众号后台操作或选择“忽略”。
+        </AppAlert>
+      </div>
       <!-- eslint-disable-next-line vue/no-v-html -- content_html is generated by the server from escaped content -->
       <div class="html-preview" v-html="selected.content_html" />
     </div>
@@ -334,7 +439,15 @@ onMounted(() => {
           复制公众号格式
         </AppButton>
         <AppButton
-          v-if="selected.status === 'draft' || selected.status === 'ready'"
+          v-if="selected.published_url"
+          variant="secondary"
+          @click="openPublishedUrl(selected.published_url)"
+        >
+          <ExternalLink :size="14" />
+          打开文章链接
+        </AppButton>
+        <AppButton
+          v-if="(selected.status === 'draft' || selected.status === 'ready') && config?.effective_mode !== 'browser'"
           variant="primary"
           :disabled="acting"
           @click="act('publish')"
@@ -342,12 +455,29 @@ onMounted(() => {
           标记已发布
         </AppButton>
         <AppButton
-          v-if="selected.status === 'draft' || selected.status === 'ready'"
+          v-if="selected.status === 'failed'"
+          variant="primary"
+          :disabled="acting"
+          @click="act('publish')"
+        >
+          确认已发布
+        </AppButton>
+        <AppButton
+          v-if="selected.status === 'draft' || selected.status === 'ready' || selected.status === 'failed'"
           variant="danger"
           :disabled="acting"
           @click="act('ignore')"
         >
           忽略
+        </AppButton>
+        <AppButton
+          v-if="selected.status === 'failed' && selected.browser_last_error_code !== 'PUBLISH_RESULT_UNKNOWN' && selected.browser_phase !== 'publish_clicked'"
+          variant="secondary"
+          :disabled="acting"
+          @click="act('restore')"
+        >
+          <RotateCcw :size="14" />
+          重新排队
         </AppButton>
         <AppButton
           v-else-if="selected.status === 'ignored'"
@@ -359,7 +489,7 @@ onMounted(() => {
           恢复
         </AppButton>
         <AppButton
-          v-else-if="selected.status === 'published'"
+          v-else-if="selected.status === 'published' && config?.effective_mode !== 'browser'"
           variant="secondary"
           :disabled="acting"
           @click="act('restore')"
@@ -375,6 +505,148 @@ onMounted(() => {
 <style scoped>
 .mode-banner {
   margin-bottom: var(--space-4);
+}
+
+.browser-session-bar {
+  margin-bottom: var(--space-4);
+}
+
+.auth-required-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background-color: var(--color-warning-subtle, #fffbe6);
+  border: 1px solid var(--color-warning-border, #ffe58f);
+  border-radius: var(--radius-md);
+}
+
+.qr-box {
+  display: flex;
+  justify-content: center;
+  padding: var(--space-2);
+}
+
+.qr-img {
+  width: 180px;
+  height: 180px;
+  object-fit: contain;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-default);
+  background: #fff;
+}
+
+.session-status-alert {
+  margin-bottom: 0;
+}
+
+.session-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.session-ready {
+  background-color: var(--color-success-subtle, #e6f7ff);
+  color: var(--color-success-text, #0050b3);
+}
+
+.session-publishing {
+  background-color: var(--color-info-subtle, #f0f5ff);
+  color: var(--color-info-text, #1d39c4);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dot-ready {
+  background-color: #52c41a;
+}
+
+.dot-publishing {
+  background-color: #1890ff;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.phase-badge {
+  font-size: 10px;
+  color: var(--color-info-text, #1890ff);
+  background: var(--color-info-subtle, #e6f7ff);
+  padding: 1px 4px;
+  border-radius: 3px;
+  width: fit-content;
+}
+
+.error-badge {
+  font-size: 10px;
+  color: var(--color-danger-text, #cf1322);
+  background: var(--color-danger-subtle, #fff1f0);
+  padding: 1px 4px;
+  border-radius: 3px;
+  width: fit-content;
+}
+
+.published-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--action-primary);
+  text-decoration: none;
+}
+
+.published-link:hover {
+  text-decoration: underline;
+}
+
+.failed-details-box {
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  background-color: var(--color-danger-subtle, #fff1f0);
+  border: 1px solid var(--color-danger-border, #ffa39e);
+  border-radius: var(--radius-sm);
+}
+
+.failed-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+  color: var(--color-danger-text, #cf1322);
+}
+
+.failed-row {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.failed-msg {
+  color: var(--text-secondary);
+  word-break: break-word;
+}
+
+.unknown-alert {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
 }
 
 .status-select {

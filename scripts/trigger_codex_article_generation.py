@@ -136,7 +136,7 @@ async def main() -> None:
         use_case="codex_usage_reset_article",
         content=article_content,
         instruction=ARTICLE_GENERATION_INSTRUCTION,
-        max_characters=2000,
+        max_characters=8000,
     )
     generated_text = summary_result.summary.strip()
     print("\n[AI Generated WeChat Article Text]:\n" + "=" * 50)

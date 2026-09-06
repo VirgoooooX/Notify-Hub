@@ -10,7 +10,7 @@ export interface Notification{id:string;title:string;content:string;message_type
 export interface Delivery{id:string;recipient_name?:string;recipient_id?:string;status:Status;attempts_count?:number;next_attempt_at?:UtcInstant;last_error_code?:string;last_error_message?:string;attempts?:Attempt[]}
 export interface Attempt{id:string;attempt_no:number;status:Status;started_at:UtcInstant;finished_at?:UtcInstant;error_code?:string;error_message?:string;queue_latency_ms?:number;send_latency_ms?:number;total_latency_ms?:number}
 export interface Person{id:string;name:string;is_default?:boolean;enabled?:boolean;wecom_identities?:Array<{id:string;user_id:string;active?:boolean;verified?:boolean}>}
-export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allowed_recipient_ids?:string[];allow_broadcast?:boolean;allow_media?:boolean;allow_reminders?:boolean;allow_recurring?:boolean;allow_cron?:boolean;allow_interactive?:boolean;max_active_reminders?:number;rate_limit_per_minute?:number;last_used_at?:UtcInstant}
+export interface ApiClient{id:string;name:string;key_prefix:string;status:Status;allowed_event_types?:string[];allowed_recipient_ids?:string[];allow_broadcast?:boolean;allow_media?:boolean;allow_reminders?:boolean;allow_recurring?:boolean;allow_cron?:boolean;allow_interactive?:boolean;allow_mp_browser?:boolean;max_active_reminders?:number;rate_limit_per_minute?:number;last_used_at?:UtcInstant}
 export type PluginSchedule =
   | { type: 'interval'; seconds: number }
   | { type: 'cron'; expression: string; timezone: string }
@@ -66,7 +66,13 @@ export interface PluginSecret {
   updated_at?: UtcInstant
 }
 
-export type MpArticleStatus = 'draft' | 'ready' | 'published' | 'ignored'
+export type MpArticleStatus =
+  | 'draft'
+  | 'ready'
+  | 'publishing'
+  | 'published'
+  | 'failed'
+  | 'ignored'
 export interface MpArticle {
   id: string
   status: MpArticleStatus
@@ -91,11 +97,25 @@ export interface MpArticle {
   created_at: UtcInstant
   updated_at: UtcInstant
   payload: Record<string, unknown>
+  browser_phase: string | null
+  browser_attempt_count: number
+  browser_last_error_code: string | null
+  browser_last_error_message: string | null
+  published_url: string | null
 }
 export interface MpArticleConfig {
   configured: boolean
-  publish_mode: 'library' | 'draft' | 'publish'
-  effective_mode: 'library' | 'draft' | 'publish'
+  publish_mode: 'library' | 'draft' | 'publish' | 'browser'
+  effective_mode: 'library' | 'draft' | 'publish' | 'browser'
   author: string
   mp_editor_url: string
+}
+export interface MpBrowserSession {
+  state: 'offline' | 'starting' | 'ready' | 'publishing' | 'auth_required' | 'error'
+  last_seen_at: UtcInstant | null
+  current_article_id: string | null
+  incident_id: string | null
+  last_error_code: string | null
+  last_error_message: string | null
+  qr_data_url: string | null
 }

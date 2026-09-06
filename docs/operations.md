@@ -510,27 +510,42 @@ npm run build
 
 | 变量 | 说明 |
 | --- | --- |
-| `NOTIFY_HUB_MP_APP_ID` | 公众号 AppID，与 Secret 成对配置；个人订阅号可留空走文章库模式 |
+| `NOTIFY_HUB_MP_APP_ID` | 公众号 AppID，与 Secret 成对配置；个人订阅号可留空走文章库或 browser 模式 |
 | `NOTIFY_HUB_MP_APP_SECRET` | 公众号 AppSecret |
-| `NOTIFY_HUB_MP_PUBLISH_MODE` | `library` 文章库（人工发布，默认兜底）；`draft` 官方 API 只保存草稿；`publish` 建草稿并提交发布 |
+| `NOTIFY_HUB_MP_PUBLISH_MODE` | `browser` 独立 Playwright 全自动发布；`library` 文章库人工发布（默认兜底）；`draft` 官方 API 保存草稿；`publish` 官方 API 提交发布 |
 | `NOTIFY_HUB_MP_AUTHOR` | 文章作者名，默认 `Notify Hub` |
+| `NOTIFY_HUB_MP_BROWSER_ALERT_RECIPIENT_IDS` | 浏览器容器会话失效或登录二维码企业微信接收人 Person ID 列表（逗号分隔） |
+| `NOTIFY_HUB_MP_BROWSER_CLAIM_TIMEOUT_SECONDS` | 浏览器认领超时时间（秒，默认 300） |
+| `NOTIFY_HUB_MP_BROWSER_MAX_ATTEMPTS` | 单篇文章最大发布重试次数（默认 3） |
 
 ### 双路径行为
 
-- **文章库模式（library）**：未配置 AppID/Secret 或显式设置为 `library` 时，`mp_article` 投递把文章写入文章库（`ready`），后台「公众号文章」可预览、复制公众号富文本格式，或使用 `scripts/wechat-mp-import/notify-hub-mp-import.user.js` 一键填入公众号后台；发布按钮不自动点击，最终由管理员人工确认发布后再标记状态。
+- **文章库模式（library）**：未配置 AppID/Secret 或显式设置为 `library` 时，`mp_article` 投递把文章写入文章库（`ready`），后台「公众号文章」可预览、复制公众号富文本格式；发布按钮由人工确认发布后再标记状态。
 - **官方 API 模式（draft/publish）**：平台下载并校验封面、上传永久素材、建草稿，再按模式保存草稿或提交发布；文章同时记录到文章库作为历史。
 - 显式配置 `draft`/`publish` 但凭证不完整时，投递以不可重试错误进入 dead，可查询、可审计，不隐式降级为文本通知。
 - Access Token 缓存并发安全，Token 失效只强制刷新重试一次；永久参数错误不反复重试；
 - 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；
 - AI 只负责文章翻译/摘要，是否发布由插件确定性规则与置信度阈值决定。
 
-### 浏览器导入脚本
+### Playwright 全自动发布与文章库运维
 
-- 安装 Tampermonkey 后导入 `scripts/wechat-mp-import/notify-hub-mp-import.user.js`；
-- 在脚本菜单设置 Notify-Hub 地址与访问令牌（保存在 Tampermonkey 自身本地存储）；
-- **长期固定通信 Key 支持**：
-  - **方式一（后台生成，免改配置）**：在 Notify Hub 管理后台「API 客户端」新建客户端（如命名为“公众号助手”），复制生成的 `nfy_...` 长期 Key，填入脚本菜单即可永久有效；
-  - **方式二（环境变量静态 Key）**：服务端支持配置 `NOTIFY_HUB_MP_ARTICLE_TOKEN`（或 `NOTIFY_HUB_ADMIN_API_KEY`），脚本填入该固定密钥亦永久有效；
-  - 同时兼容后台 Web 登录获取的临时 Bearer Token。
-- 公众号后台「新建图文」页面右侧面板自动浮现（支持 SPA 无刷新路由检测），列出 `ready` 文章，点「填入编辑器」自动填入标题/作者/摘要/正文，并自动将富文本同步至剪贴板；封面在公众号右侧点“从正文选择”；
-- 发布按钮始终由人工点击确认；如微信改版拦截富文本输入，可直接在正文区按 `Ctrl+V` 粘贴兜底。
+- **发布模式配置**：设置 `NOTIFY_HUB_MP_PUBLISH_MODE=browser`，此时插件触发的 `publish_to_mp` 会自动落库进入待发布队列（状态 `ready`）；
+- **启动独立发布容器**：
+  ```bash
+  docker compose --profile mp-browser up -d mp-browser-publisher
+  ```
+- **发布器通信与权限**：
+  - 容器通过 `NOTIFY_HUB_MP_BROWSER_API_KEY` 与 Notify Hub 核心通信；
+  - 该密钥必须来自后台「API 客户端」中开启了 `allow_mp_browser` 授权的专用客户端；
+- **登录态与二维码运维**：
+  - 浏览器容器每 30 秒发送一次心跳；服务端若超过 45 秒未收到心跳则自动标记为 `offline`；
+  - 首次启动或登录态过期时，容器捕获微信扫码登录二维码并上报；
+  - 核心服务通过内部事件投递企业微信通知指定接收人（`NOTIFY_HUB_MP_BROWSER_ALERT_RECIPIENT_IDS`），并在后台「公众号文章」页面右上角同步展示扫码弹窗；
+  - 浏览器 User Data 挂载在数据卷 `mp_browser_profile`，扫码登录成功后会话自动持久化；
+- **防重复群发防线**：
+  - 自动化流程保存草稿后记录 `draft_saved`，点击群发后记录 `publish_clicked`；
+  - 进入 `publish_clicked` 阶段后，任何超时或重试仅以 `reconcile` 模式只读查询已发布列表，严禁再次点击发表按钮；
+  - 若多次核对仍无法获取发布链接，状态置为 `failed` 且后台禁止直接 restore，避免重复群发；
+- **错误排查与截图清理**：
+  - 发生异常时，容器自动对当前页面进行截图保存于 `artifacts` 目录；
+  - 内部自动维护至多保留最新的 20 张截图，避免存储泄漏。

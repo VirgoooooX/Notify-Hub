@@ -38,6 +38,9 @@ dependencies = [
 # ASR/TTS providers are adapters. The built-in HTTP adapters use httpx from the
 # core dependencies; provider SDKs or local model runtimes belong in deployments.
 speech = []
+mp-browser = [
+  "playwright==1.62.0",
+]
 dev = [
   "mypy>=1.16,<2",
   "pytest>=9.0.3,<10",

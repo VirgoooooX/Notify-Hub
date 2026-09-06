@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 
 import httpx
@@ -22,6 +22,7 @@ from app.application.media_service import MediaService
 from app.application.mobile_identity_service import MobileIdentityService
 from app.application.mobile_reminder_query_service import MobileReminderQueryService
 from app.application.mp_article_service import MPArticleLibraryService
+from app.application.mp_browser_service import MPBrowserService
 from app.application.notification_service import NotificationService
 from app.application.plugin_service import PluginService
 from app.application.reminder_access import ReminderAccessService
@@ -43,7 +44,7 @@ from app.application.wecom_media_service import (
 from app.application.wecom_menu_service import WeComMenuService
 from app.application.x_health_service import XHealthService
 from app.application.x_source_service import XSourceService
-from app.channels.base import UnconfiguredChannel
+from app.channels.base import NotificationChannel, UnconfiguredChannel
 from app.channels.mp.adapter import MPArticleAdapter
 from app.channels.mp.client import MPClient
 from app.channels.wecom.adapter import WeComAdapter
@@ -184,6 +185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     mp_client = MPClient(settings, clock)
     mp_library = MPArticleLibraryService(factory, clock, settings)
+    mp_browser_service = MPBrowserService(mp_library, event_service, settings, clock)
     mp_credentials = bool(settings.mp_app_id) and settings.mp_app_secret is not None
     mp_channel = MPArticleAdapter(
         mp_client if mp_credentials else None,
@@ -191,7 +193,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         downloader=media_service.downloader,
         library=mp_library,
     )
-    channels = {"wecom": channel, "mp_article": mp_channel}
+    channels: dict[str, NotificationChannel] = {"wecom": channel, "mp_article": mp_channel}
 
     async def prepare_tts(text: str) -> str:
         if tts_media_service is None:
@@ -257,7 +259,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await asyncio.wait_for(worker_stop.wait(), timeout=3600.0)
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await ai_control_service.bootstrap_if_empty(
             enabled=settings.ai_enabled,
             preset=settings.ai_bootstrap_preset,
@@ -361,6 +363,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.x_health_service = x_health_service
     app.state.x_health_worker = x_health_worker
     app.state.mp_article_library = mp_library
+    app.state.mp_browser_service = mp_browser_service
     app.state.plugin_worker = plugin_worker
     app.state.secret_store = secret_store
     if (
@@ -394,6 +397,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_auth import router as auth_router
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
+    from app.api.admin_mp_browser import router as mp_browser_router
     from app.api.ai import router as ai_router
     from app.api.client_reminders import router as client_reminders_router
     from app.api.events import router as events_router
@@ -409,6 +413,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(ai_router, prefix="/api/v1/admin")
     app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(articles_router, prefix="/api/v1/admin")
+    app.include_router(mp_browser_router, prefix="/api/v1/admin")
     app.include_router(management_router, prefix="/api/v1/admin")
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(client_reminders_router, prefix="/api/v1")

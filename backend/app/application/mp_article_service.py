@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from app.api.errors import AppError
@@ -64,10 +65,16 @@ class MPArticleLibraryService:
                 cover_url=message.image_url,
                 source_url=message.url,
             )
+            title = message.title
+            content_lines = (message.content or "").strip().splitlines()
+            if content_lines and content_lines[0].strip().startswith("# "):
+                extracted_title = content_lines[0].strip().lstrip("# ").strip()
+                if extracted_title:
+                    title = extracted_title[:64]
             article = MpArticle(
                 id=new_id("mpa"),
                 status=status,
-                title=message.title,
+                title=title,
                 author=self._settings.mp_author,
                 digest=digest,
                 content=message.content,
@@ -125,11 +132,257 @@ class MPArticleLibraryService:
                     .limit(page_size)
                 )
             )
-            return items, int(total or 0)
+            return items, total or 0
 
     async def get_article(self, article_id: str) -> MpArticle | None:
         async with self._factory() as session:
             return await session.get(MpArticle, article_id)
+
+    async def claim_for_browser(
+        self,
+    ) -> tuple[MpArticle, int, str, str | None] | None:
+        if self._settings.mp_publish_mode != "browser":
+            raise AppError("browser_mode_disabled", "MP browser publish mode is not active", 409)
+
+        now = self._clock.now()
+        timeout_delta = timedelta(seconds=self._settings.mp_browser_claim_timeout_seconds)
+        max_attempts = self._settings.mp_browser_max_attempts
+
+        async with self._factory() as session, session.begin():
+            candidates = list(
+                await session.scalars(
+                    select(MpArticle)
+                    .where(
+                        MpArticle.status.in_(
+                            [MpArticleStatus.READY.value, MpArticleStatus.PUBLISHING.value]
+                        )
+                    )
+                    .order_by(MpArticle.created_at.asc(), MpArticle.id.asc())
+                )
+            )
+
+            for article in candidates:
+                payload = dict(article.payload or {})
+                bp = dict(payload.get("browser_publish") or {})
+                current_phase = bp.get("phase", "editing")
+                draft_url = bp.get("draft_url")
+
+                if article.status == MpArticleStatus.PUBLISHING.value:
+                    if (now - article.updated_at) < timeout_delta:
+                        continue
+
+                    attempt = int(bp.get("attempt_count") or 1)
+                    if current_phase == "publish_clicked":
+                        resume = "reconcile"
+                    else:
+                        attempt += 1
+                        if attempt > max_attempts:
+                            article.status = MpArticleStatus.FAILED.value
+                            bp["last_error_code"] = "CLAIM_TIMEOUT_EXCEEDED"
+                            bp["last_error_message"] = (
+                                f"Article exceeded maximum claim attempts ({max_attempts})"
+                            )
+                            payload["browser_publish"] = bp
+                            article.payload = payload
+                            article.updated_at = now
+                            continue
+                        if current_phase == "draft_saved" and draft_url:
+                            resume = "resume"
+                        else:
+                            current_phase = "editing"
+                            resume = "new"
+
+                    bp["attempt_count"] = attempt
+                    bp["phase"] = current_phase
+                    bp["claimed_at"] = now.isoformat()
+                    payload["browser_publish"] = bp
+                    article.payload = payload
+                    article.updated_at = now
+                    return article, attempt, resume, draft_url
+
+                if article.status == MpArticleStatus.READY.value:
+                    attempt = int(bp.get("attempt_count") or 0) + 1
+                    if attempt > max_attempts:
+                        article.status = MpArticleStatus.FAILED.value
+                        bp["last_error_code"] = "MAX_ATTEMPTS_EXCEEDED"
+                        bp["last_error_message"] = (
+                            f"Article exceeded maximum claim attempts ({max_attempts})"
+                        )
+                        payload["browser_publish"] = bp
+                        article.payload = payload
+                        article.updated_at = now
+                        continue
+
+                    if current_phase == "draft_saved" and draft_url:
+                        resume = "resume"
+                    else:
+                        current_phase = "editing"
+                        resume = "new"
+
+                    bp["attempt_count"] = attempt
+                    bp["phase"] = current_phase
+                    bp["claimed_at"] = now.isoformat()
+                    payload["browser_publish"] = bp
+                    article.status = MpArticleStatus.PUBLISHING.value
+                    article.payload = payload
+                    article.updated_at = now
+                    return article, attempt, resume, draft_url
+
+            return None
+
+    async def checkpoint_browser(
+        self,
+        article_id: str,
+        *,
+        phase: str,
+        draft_url: str | None = None,
+        provider_draft_id: str | None = None,
+    ) -> MpArticle:
+        if phase not in {"editing", "draft_saved", "publish_clicked"}:
+            raise AppError("invalid_phase", f"Invalid browser phase: {phase}", 422)
+
+        now = self._clock.now()
+        async with self._factory() as session, session.begin():
+            article = await session.get(MpArticle, article_id)
+            if article is None:
+                raise AppError("article_not_found", "Article not found", 404)
+            if article.status != MpArticleStatus.PUBLISHING.value:
+                raise AppError(
+                    "invalid_status_transition",
+                    "Only publishing articles can update browser checkpoint",
+                    409,
+                )
+
+            payload = dict(article.payload or {})
+            bp = dict(payload.get("browser_publish") or {})
+            current_phase = bp.get("phase", "editing")
+            phase_ranks = {"editing": 0, "draft_saved": 1, "publish_clicked": 2}
+            if phase_ranks[phase] < phase_ranks[current_phase]:
+                raise AppError(
+                    "invalid_phase_transition",
+                    f"Cannot regress browser phase from {current_phase} to {phase}",
+                    409,
+                )
+
+            if phase == "draft_saved":
+                if not (draft_url or provider_draft_id):
+                    raise AppError(
+                        "missing_draft_identifier",
+                        "draft_saved requires at least draft_url or provider_draft_id",
+                        422,
+                    )
+                if draft_url:
+                    bp["draft_url"] = draft_url
+                if provider_draft_id:
+                    article.provider_draft_media_id = provider_draft_id
+
+            bp["phase"] = phase
+            payload["browser_publish"] = bp
+            article.payload = payload
+            article.updated_at = now
+            return article
+
+    async def complete_browser_publish(
+        self,
+        article_id: str,
+        *,
+        provider_draft_id: str | None = None,
+        provider_publish_id: str | None = None,
+        published_url: str | None = None,
+    ) -> MpArticle:
+        now = self._clock.now()
+        async with self._factory() as session, session.begin():
+            article = await session.get(MpArticle, article_id)
+            if article is None:
+                raise AppError("article_not_found", "Article not found", 404)
+            if article.status == MpArticleStatus.PUBLISHED.value:
+                return article
+            if article.status != MpArticleStatus.PUBLISHING.value:
+                raise AppError(
+                    "invalid_status_transition",
+                    "Only publishing articles can be marked as completed",
+                    409,
+                )
+
+            article.status = MpArticleStatus.PUBLISHED.value
+            if provider_draft_id:
+                article.provider_draft_media_id = provider_draft_id
+            if provider_publish_id:
+                article.provider_publish_id = provider_publish_id
+            article.published_at = now
+            article.updated_at = now
+
+            payload = dict(article.payload or {})
+            bp = dict(payload.get("browser_publish") or {})
+            if published_url:
+                bp["published_url"] = published_url
+            bp["last_error_code"] = None
+            bp["last_error_message"] = None
+            payload["browser_publish"] = bp
+            article.payload = payload
+            return article
+
+    async def fail_browser_publish(
+        self,
+        article_id: str,
+        *,
+        retryable: bool,
+        error_code: str,
+        error_message: str,
+    ) -> MpArticle:
+        now = self._clock.now()
+        max_attempts = self._settings.mp_browser_max_attempts
+        async with self._factory() as session, session.begin():
+            article = await session.get(MpArticle, article_id)
+            if article is None:
+                raise AppError("article_not_found", "Article not found", 404)
+            if article.status != MpArticleStatus.PUBLISHING.value:
+                raise AppError(
+                    "invalid_status_transition",
+                    "Only publishing articles can fail",
+                    409,
+                )
+
+            payload = dict(article.payload or {})
+            bp = dict(payload.get("browser_publish") or {})
+            bp["last_error_code"] = error_code
+            bp["last_error_message"] = (error_message or "")[:500]
+
+            phase = bp.get("phase", "editing")
+            attempt = int(bp.get("attempt_count") or 1)
+
+            if phase == "publish_clicked":
+                article.status = MpArticleStatus.FAILED.value
+            elif retryable and attempt < max_attempts:
+                article.status = MpArticleStatus.READY.value
+            else:
+                article.status = MpArticleStatus.FAILED.value
+
+            payload["browser_publish"] = bp
+            article.payload = payload
+            article.updated_at = now
+            return article
+
+    async def release_browser_for_auth(
+        self,
+        article_id: str,
+    ) -> MpArticle:
+        now = self._clock.now()
+        async with self._factory() as session, session.begin():
+            article = await session.get(MpArticle, article_id)
+            if article is None:
+                raise AppError("article_not_found", "Article not found", 404)
+            if article.status == MpArticleStatus.PUBLISHING.value:
+                payload = dict(article.payload or {})
+                bp = dict(payload.get("browser_publish") or {})
+                phase = bp.get("phase", "editing")
+                if phase == "publish_clicked":
+                    # Keep publishing so next claim is reconcile only
+                    pass
+                else:
+                    article.status = MpArticleStatus.READY.value
+                article.updated_at = now
+            return article
 
     async def mark_published(self, article_id: str) -> MpArticle:
         now = self._clock.now()
@@ -142,10 +395,11 @@ class MPArticleLibraryService:
             if article.status not in {
                 MpArticleStatus.DRAFT.value,
                 MpArticleStatus.READY.value,
+                MpArticleStatus.FAILED.value,
             }:
                 raise AppError(
                     "invalid_status_transition",
-                    "Only draft or ready articles can be marked as published",
+                    "Only draft, ready, or failed articles can be marked as published",
                     409,
                 )
             article.status = MpArticleStatus.PUBLISHED.value
@@ -161,13 +415,20 @@ class MPArticleLibraryService:
                 raise AppError("article_not_found", "Article not found", 404)
             if article.status == MpArticleStatus.IGNORED.value:
                 return article
+            if article.status == MpArticleStatus.PUBLISHING.value:
+                raise AppError(
+                    "invalid_status_transition",
+                    "Cannot ignore an article that is currently publishing",
+                    409,
+                )
             if article.status not in {
                 MpArticleStatus.DRAFT.value,
                 MpArticleStatus.READY.value,
+                MpArticleStatus.FAILED.value,
             }:
                 raise AppError(
                     "invalid_status_transition",
-                    "Only draft or ready articles can be ignored",
+                    "Only draft, ready, or failed articles can be ignored",
                     409,
                 )
             article.status = MpArticleStatus.IGNORED.value
@@ -182,6 +443,23 @@ class MPArticleLibraryService:
                 raise AppError("article_not_found", "Article not found", 404)
             if article.status == MpArticleStatus.READY.value:
                 return article
+            if article.status == MpArticleStatus.PUBLISHING.value:
+                raise AppError(
+                    "invalid_status_transition",
+                    "Cannot restore an article that is currently publishing",
+                    409,
+                )
+            if article.status == MpArticleStatus.FAILED.value:
+                bp = article.payload.get("browser_publish") or {}
+                if bp.get("phase") == "publish_clicked":
+                    raise AppError(
+                        "cannot_restore_published_click",
+                        (
+                            "Cannot restore article after publish was clicked; "
+                            "please verify in WeChat Official Account first"
+                        ),
+                        409,
+                    )
             article.status = MpArticleStatus.READY.value
             article.updated_at = now
             return article

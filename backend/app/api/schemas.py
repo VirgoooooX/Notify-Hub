@@ -51,6 +51,7 @@ class ApiClientCreate(BaseModel):
     allow_recurring: bool = False
     allow_cron: bool = False
     allow_interactive: bool = False
+    allow_mp_browser: bool = False
     max_active_reminders: int = Field(default=10, ge=1, le=1000)
     rate_limit_per_minute: int = Field(default=60, ge=1, le=10000)
 
@@ -67,6 +68,7 @@ class ApiClientUpdate(BaseModel):
     allow_recurring: bool | None = None
     allow_cron: bool | None = None
     allow_interactive: bool | None = None
+    allow_mp_browser: bool | None = None
     max_active_reminders: int | None = Field(default=None, ge=1, le=1000)
     rate_limit_per_minute: int | None = Field(default=None, ge=1, le=10000)
 

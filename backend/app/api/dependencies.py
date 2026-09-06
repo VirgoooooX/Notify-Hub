@@ -46,10 +46,10 @@ async def require_admin(
         return cast(Admin, admin)
 
 
-async def require_article_actor(
+async def _resolve_article_actor(
     request: Request,
-    authorization: str | None = Header(default=None),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None,
+    x_api_key: str | None,
 ) -> Admin | ApiClient:
     raw_token: str | None = None
     if authorization and authorization.startswith("Bearer "):
@@ -62,13 +62,10 @@ async def require_article_actor(
 
     settings = request.app.state.settings
 
-    matches_article_token = settings.mp_article_token is not None and secrets.compare_digest(
-        raw_token, settings.mp_article_token.get_secret_value()
-    )
     matches_admin_key = settings.admin_api_key is not None and secrets.compare_digest(
         raw_token, settings.admin_api_key.get_secret_value()
     )
-    if matches_article_token or matches_admin_key:
+    if matches_admin_key:
         async with request.app.state.session_factory() as session:
             admin = await session.scalar(
                 select(Admin).where(Admin.active.is_(True), Admin.singleton_key == "primary")
@@ -100,6 +97,29 @@ async def require_article_actor(
             raise AppError("unauthorized", "Administrator account is unavailable", 401)
         request.state.admin_id = admin.id
         return cast(Admin, admin)
+
+
+async def require_article_actor(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> Admin | ApiClient:
+    return await _resolve_article_actor(request, authorization, x_api_key)
+
+
+async def require_mp_browser_actor(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> Admin | ApiClient:
+    actor = await _resolve_article_actor(request, authorization, x_api_key)
+    if isinstance(actor, ApiClient) and not actor.allow_mp_browser:
+        raise AppError(
+            "mp_browser_forbidden",
+            "API client cannot operate the MP browser publisher",
+            403,
+        )
+    return actor
 
 
 async def require_api_client(

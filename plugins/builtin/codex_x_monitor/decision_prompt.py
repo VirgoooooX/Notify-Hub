@@ -46,14 +46,11 @@ RESET_CLASSIFICATION_INSTRUCTION = """
 
 
 def _post_payload(post: XPost) -> dict[str, object]:
-    text = " ".join(post.text.split())
-    if len(text) > 1000:
-        text = text[:999].rstrip() + "…"
     return {
         "id": post.id,
         "published_at": post.published_at.isoformat(),
         "author": f"@{post.author_username}",
-        "text": text,
+        "text": post.text.strip(),
         "is_reply": post.is_reply,
         "is_repost": post.is_repost,
     }
@@ -109,6 +106,7 @@ ARTICLE_GENERATION_INSTRUCTION = """
 
 【写作要点】
 1. 完整原推不翻译：在开头引用块（>）中原汁原味展现推文原文，读者需要看第一手原推。
+   严禁自行截断、缩写或加省略号，必须一字不漏完整保留全部推文原文。
 2. 拒绝死板直译：后续解读必须使用自然生动的大白话中文，
    讲清楚大意、前因后果和重点，绝不做机械死板的逐字直译。
 3. 结合前情提要：结合 nearby_posts 交代博主前后的互动与来龙去脉

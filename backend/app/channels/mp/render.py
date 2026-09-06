@@ -41,38 +41,49 @@ def _render_list(lines: list[str]) -> str:
 
 
 def _render_blockquote(lines: list[str]) -> str:
-    text = "".join(
-        f'<p style="margin:0 0 8px;">{_escape(line.lstrip("> ").strip())}</p>' for line in lines
-    )
-    return f'<blockquote style="{BLOCKQUOTE_STYLE}">{text}</blockquote>'
+    paragraphs = []
+    for line in lines:
+        cleaned = line.lstrip("> ").strip()
+        content = _escape(cleaned) if cleaned else "<br />"
+        paragraphs.append(f'<p style="margin:0 0 8px;">{content}</p>')
+    return f'<blockquote style="{BLOCKQUOTE_STYLE}">{"".join(paragraphs)}</blockquote>'
 
 
-def render_body(content: str) -> str:
+def render_body(content: str, *, strip_first_h1: bool = False) -> str:
     """Convert plain article text into WeChat friendly HTML blocks."""
     parts: list[str] = []
     index = 0
     lines = content.splitlines()
+    first_heading_checked = False
     while index < len(lines):
         line = lines[index].strip()
         if not line:
             index += 1
             continue
         if line.startswith("# "):
+            if strip_first_h1 and not first_heading_checked:
+                first_heading_checked = True
+                index += 1
+                continue
+            first_heading_checked = True
             parts.append(_render_heading(line))
             index += 1
         elif line.startswith("> "):
+            first_heading_checked = True
             block: list[str] = []
             while index < len(lines) and lines[index].strip().startswith("> "):
                 block.append(lines[index])
                 index += 1
             parts.append(_render_blockquote(block))
         elif line.startswith("- "):
+            first_heading_checked = True
             block = []
             while index < len(lines) and lines[index].strip().startswith("- "):
                 block.append(lines[index])
                 index += 1
             parts.append(_render_list(block))
         else:
+            first_heading_checked = True
             parts.append(_render_paragraph(line))
             index += 1
     if not parts:
@@ -85,6 +96,7 @@ def render_wechat_html(
     content: str,
     cover_url: str | None = None,
     source_url: str | None = None,
+    strip_title_heading: bool = True,
 ) -> str:
     """Render a complete article body ready for the WeChat editor clipboard."""
     body_parts: list[str] = []
@@ -95,7 +107,7 @@ def render_wechat_html(
             'style="max-width:100%;border-radius:8px;display:block;margin:0 auto;" />'
             "</p>"
         )
-    body_parts.append(render_body(content))
+    body_parts.append(render_body(content, strip_first_h1=strip_title_heading))
     if source_url:
         body_parts.append(
             '<p style="margin:24px 0 0;padding-top:12px;border-top:1px solid #eee;'

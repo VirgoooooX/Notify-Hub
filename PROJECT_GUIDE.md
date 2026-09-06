@@ -100,9 +100,10 @@ pending -> processing -> succeeded
 
 ### 公众号文章发布
 - 公众号发布是平台渠道能力：插件只通过 `publish_to_mp` 表达发布意图并提供文章内容与封面，不接触公众号 AppID/Secret，也不直接调用微信接口；
-- 双路径并存：
-  - `library`（文章工作台）：文章进入 `mp_articles` 文章库，后台可预览、复制公众号富文本格式，或通过浏览器导入脚本填入公众号后台，最终发布由管理员人工确认；未配置 AppID/Secret 时自动使用该路径；
-  - `draft` / `publish`（官方 API）：核心下载并校验封面 → 上传永久素材 → 建草稿 → 按 `mp_publish_mode` 保存草稿或提交发布；
+- 三种发布模式：
+  - `browser`（全自动）：个人号首选。独立 Playwright 容器（`mp-browser-publisher`）使用带 `allow_mp_browser` 的 API Client 领取文章（FIFO），自动填入微信公众号后台、保存草稿并发表；带心跳监控、二维码扫码企业微信告警及防重复群发防线；
+  - `library`（文章工作台）：半自动。文章进入 `mp_articles` 文章库，后台可预览并复制富文本，最终发布由人工确认；未配置 AppID/Secret 时默认兜底；
+  - `draft` / `publish`（官方 API）：企业/认证号使用。核心上传永久素材、建草稿、按模式保存或提交发布；
 - 发布决策由插件确定性规则与 AI 置信度阈值完成；AI 摘要只生成文章正文，不决定是否发布；
 - 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；
 - 显式配置 `draft`/`publish` 但凭证不完整时，投递按不可重试错误进入 dead，不隐式降级为文本通知。
