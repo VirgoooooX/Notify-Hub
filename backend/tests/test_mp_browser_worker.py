@@ -5,10 +5,12 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from app.mp_browser.config import MPBrowserSettings
-from app.mp_browser.worker import clean_artifacts, parse_error_code
+from app.mp_browser.wechat import WeChatPublisher
+from app.mp_browser.worker import MPBrowserWorker, clean_artifacts, parse_error_code
 from pydantic import SecretStr
 
 
@@ -72,3 +74,132 @@ def test_mp_browser_settings_validation(tmp_path: Path) -> None:
             api_base_url="ftp://hub.example.com",
             api_key=SecretStr("nfy_valid_key"),
         )
+
+
+@pytest.mark.asyncio
+async def test_worker_draft_only_mode(tmp_path: Path) -> None:
+    settings = MPBrowserSettings(
+        api_base_url="https://hub.example.com/api/v1/admin/mp-browser",
+        api_key=SecretStr("nfy_secure_key_1234567890"),
+        profile_dir=tmp_path / "profile",
+        artifacts_dir=tmp_path / "artifacts",
+        draft_only=True,
+    )
+    api_client = AsyncMock()
+    publisher = AsyncMock()
+    editor_page = MagicMock()
+    publisher.open_editor.return_value = editor_page
+    publisher.save_draft.return_value = (
+        "https://mp.weixin.qq.com/cgi-bin/appmsg?id=123",
+        "draft_123",
+    )
+
+    worker = MPBrowserWorker(settings, api_client, publisher)
+    article = {
+        "id": "art_1",
+        "title": "Draft Only Title",
+        "author": "Notify Hub",
+        "digest": "Digest",
+        "content": "Content",
+        "content_html": "<p>Content</p>",
+    }
+
+    dummy_page = MagicMock()
+    await worker._process_article(dummy_page, article, resume="new", draft_url=None)
+
+    publisher.fill_article.assert_awaited_once_with(editor_page, article)
+    publisher.select_cover_from_content.assert_awaited_once_with(editor_page)
+    publisher.save_draft.assert_awaited_once_with(editor_page)
+
+    api_client.checkpoint.assert_awaited_once_with(
+        "art_1",
+        phase="draft_saved",
+        draft_url="https://mp.weixin.qq.com/cgi-bin/appmsg?id=123",
+        provider_draft_id="draft_123",
+    )
+
+    api_client.complete.assert_awaited_once_with(
+        "art_1",
+        status="draft",
+        provider_draft_id="draft_123",
+        published_url="https://mp.weixin.qq.com/cgi-bin/appmsg?id=123",
+    )
+
+    publisher.click_publish_and_confirm.assert_not_called()
+    publisher.verify_published.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_worker_full_publish_mode(tmp_path: Path) -> None:
+    settings = MPBrowserSettings(
+        api_base_url="https://hub.example.com/api/v1/admin/mp-browser",
+        api_key=SecretStr("nfy_secure_key_1234567890"),
+        profile_dir=tmp_path / "profile",
+        artifacts_dir=tmp_path / "artifacts",
+        draft_only=False,
+    )
+    api_client = AsyncMock()
+    publisher = AsyncMock()
+    editor_page = MagicMock()
+    publisher.open_editor.return_value = editor_page
+    publisher.save_draft.return_value = (
+        "https://mp.weixin.qq.com/cgi-bin/appmsg?id=123",
+        "draft_123",
+    )
+    publisher.verify_published.return_value = "https://mp.weixin.qq.com/s/pub_123"
+
+    worker = MPBrowserWorker(settings, api_client, publisher)
+    article = {
+        "id": "art_2",
+        "title": "Full Publish Title",
+        "author": "Notify Hub",
+        "digest": "Digest",
+        "content": "Content",
+        "content_html": "<p>Content</p>",
+    }
+
+    dummy_page = MagicMock()
+    await worker._process_article(dummy_page, article, resume="new", draft_url=None)
+
+    assert api_client.checkpoint.await_count == 3
+    api_client.checkpoint.assert_has_awaits(
+        [
+            call(
+                "art_2",
+                phase="draft_saved",
+                draft_url="https://mp.weixin.qq.com/cgi-bin/appmsg?id=123",
+                provider_draft_id="draft_123",
+            ),
+            call("art_2", phase="publish_intent"),
+            call("art_2", phase="publish_clicked"),
+        ]
+    )
+
+    publisher.click_publish_and_confirm.assert_awaited_once_with(editor_page)
+    publisher.verify_published.assert_awaited_once()
+    api_client.complete.assert_awaited_once_with(
+        "art_2",
+        provider_draft_id="draft_123",
+        published_url="https://mp.weixin.qq.com/s/pub_123",
+    )
+
+
+@pytest.mark.asyncio
+async def test_wechat_open_draft_domain_validation(tmp_path: Path) -> None:
+    settings = MPBrowserSettings(
+        api_base_url="https://hub.example.com/api/v1/admin/mp-browser",
+        api_key=SecretStr("nfy_secure_key_1234567890"),
+        profile_dir=tmp_path / "profile",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    publisher = WeChatPublisher(settings)
+    mock_page = AsyncMock()
+
+    with pytest.raises(ValueError, match="Invalid draft URL domain or scheme"):
+        await publisher.open_draft(mock_page, "http://mp.weixin.qq.com/draft/1")
+
+    with pytest.raises(ValueError, match="Invalid draft URL domain or scheme"):
+        await publisher.open_draft(mock_page, "https://attacker.com/steal")
+
+    await publisher.open_draft(mock_page, "https://mp.weixin.qq.com/cgi-bin/appmsg?id=1")
+    mock_page.goto.assert_awaited_once()

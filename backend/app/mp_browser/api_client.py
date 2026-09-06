@@ -56,14 +56,16 @@ class MPBrowserApiClient:
         self,
         article_id: str,
         *,
+        status: str = "published",
         provider_draft_id: str | None = None,
         provider_publish_id: str | None = None,
         published_url: str | None = None,
     ) -> dict[str, Any]:
-        """Mark article publication as completed."""
+        """Mark article publication as completed (or draft saved)."""
         response = await self._client.post(
             f"{self._base_url}/articles/{article_id}/complete",
             json={
+                "status": status,
                 "provider_draft_id": provider_draft_id,
                 "provider_publish_id": provider_publish_id,
                 "published_url": published_url,

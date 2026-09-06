@@ -157,10 +157,22 @@ async def test_mp_browser_checkpoint_transitions_and_regression_rejection(
         await service.checkpoint_article(art_id, phase="editing")
     assert reg_exc.value.status_code == 409
 
-    # Advance to publish_clicked
-    cp2 = await service.checkpoint_article(art_id, phase="publish_clicked")
+    # Advance to publish_intent
+    cp2 = await service.checkpoint_article(art_id, phase="publish_intent")
     bp2 = cp2.payload.get("browser_publish") or {}
-    assert bp2.get("phase") == "publish_clicked"
+    assert bp2.get("phase") == "publish_intent"
+
+    # Regressing back to draft_saved returns 409
+    with pytest.raises(AppError) as reg_exc2:
+        await service.checkpoint_article(
+            art_id, phase="draft_saved", draft_url="https://mp.weixin.qq.com/draft"
+        )
+    assert reg_exc2.value.status_code == 409
+
+    # Advance to publish_clicked
+    cp3 = await service.checkpoint_article(art_id, phase="publish_clicked")
+    bp3 = cp3.payload.get("browser_publish") or {}
+    assert bp3.get("phase") == "publish_clicked"
 
 
 @pytest.mark.asyncio
@@ -224,12 +236,24 @@ async def test_mp_browser_complete_idempotent_and_fail_rules(api: tuple[Any, Any
         published_url="https://mp.weixin.qq.com/s/pub_1",
     )
     assert completed1.status == MpArticleStatus.PUBLISHED.value
+    assert completed1.published_at is not None
     # Repeated complete
     completed2 = await service.complete_article(
         art_id,
         published_url="https://mp.weixin.qq.com/s/pub_1",
     )
     assert completed2.status == MpArticleStatus.PUBLISHED.value
+
+    # 1b. Complete with status="draft"
+    draft_art_id = await _create_test_article(library, "Draft Complete Article")
+    await service.claim_article()
+    draft_completed = await service.complete_article(
+        draft_art_id,
+        status="draft",
+        published_url="https://mp.weixin.qq.com/cgi-bin/appmsg?id=draft1",
+    )
+    assert draft_completed.status == MpArticleStatus.DRAFT.value
+    assert draft_completed.published_at is None
 
     # 2. Retryable failure returns to ready if below max attempts
     art_id2 = await _create_test_article(library, "Fail Article")

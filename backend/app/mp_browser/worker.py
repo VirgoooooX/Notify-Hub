@@ -218,8 +218,19 @@ class MPBrowserWorker:
                     provider_draft_id=draft_media_id,
                 )
 
-                await self._api.checkpoint(article_id, phase="publish_clicked")
+                if self._settings.draft_only:
+                    logger.info("mp_browser_draft_only_complete", article_id=article_id)
+                    await self._api.complete(
+                        article_id,
+                        status="draft",
+                        provider_draft_id=draft_media_id,
+                        published_url=saved_url,
+                    )
+                    return
+
+                await self._api.checkpoint(article_id, phase="publish_intent")
                 await self._publisher.click_publish_and_confirm(editor_page)
+                await self._api.checkpoint(article_id, phase="publish_clicked")
 
                 published_url = await self._publisher.verify_published(
                     editor_page, title, start_time
@@ -247,11 +258,27 @@ class MPBrowserWorker:
                         logger.debug("editor_page_close_failed", error=str(close_exc))
 
         elif resume == "resume":
+            if self._settings.draft_only:
+                logger.info("mp_browser_draft_only_resume_complete", article_id=article_id)
+                await self._api.complete(
+                    article_id,
+                    status="draft",
+                    published_url=draft_url,
+                )
+                return
+
+            # Quick check if it was already published in a previous attempt
+            quick_pub = await self._publisher.reconcile(page, title, start_time, max_seconds=10)
+            if quick_pub:
+                await self._api.complete(article_id, published_url=quick_pub)
+                return
+
             if not draft_url:
                 raise RuntimeError("DRAFT_SAVE_FAILED: Resume requested but draft_url is missing")
             await self._publisher.open_draft(page, draft_url)
-            await self._api.checkpoint(article_id, phase="publish_clicked")
+            await self._api.checkpoint(article_id, phase="publish_intent")
             await self._publisher.click_publish_and_confirm(page)
+            await self._api.checkpoint(article_id, phase="publish_clicked")
 
             published_url = await self._publisher.verify_published(page, title, start_time)
             if published_url:

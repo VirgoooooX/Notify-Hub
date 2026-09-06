@@ -12,17 +12,21 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "api_clients",
-        sa.Column(
-            "allow_mp_browser",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.false(),
-        ),
-    )
-    op.alter_column("api_clients", "allow_mp_browser", server_default=None)
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    columns = [c["name"] for c in insp.get_columns("api_clients")]
+    if "allow_mp_browser" not in columns:
+        with op.batch_alter_table("api_clients") as batch_op:
+            batch_op.add_column(
+                sa.Column(
+                    "allow_mp_browser",
+                    sa.Boolean(),
+                    nullable=False,
+                    server_default=sa.false(),
+                )
+            )
 
 
 def downgrade() -> None:
-    op.drop_column("api_clients", "allow_mp_browser")
+    with op.batch_alter_table("api_clients") as batch_op:
+        batch_op.drop_column("allow_mp_browser")

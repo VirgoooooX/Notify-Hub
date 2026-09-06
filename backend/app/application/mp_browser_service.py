@@ -191,12 +191,14 @@ class MPBrowserService:
         self,
         article_id: str,
         *,
+        status: str = MpArticleStatus.PUBLISHED.value,
         provider_draft_id: str | None = None,
         provider_publish_id: str | None = None,
         published_url: str | None = None,
     ) -> MpArticle:
         article = await self._library.complete_browser_publish(
             article_id,
+            status=status,
             provider_draft_id=provider_draft_id,
             provider_publish_id=provider_publish_id,
             published_url=published_url,

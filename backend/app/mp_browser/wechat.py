@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import time
 from datetime import datetime
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 import structlog
 
@@ -87,8 +89,12 @@ class WeChatPublisher:
             if "/cgi-bin/" in url and "login" not in url:
                 return True
 
-            account_info = page.locator(".weui-desktop-account__info, .weui-desktop-layout__main")
+            account_info = page.locator(".weui-desktop-account__info")
             if await account_info.count() > 0 and await account_info.first.is_visible():
+                return True
+
+            new_create = page.get_by_text("新的创作", exact=False)
+            if await new_create.count() > 0 and await new_create.first.is_visible():
                 return True
 
             draft_hint = page.get_by_text("近期草稿", exact=False)
@@ -126,19 +132,12 @@ class WeChatPublisher:
             )
 
         # Try clicking the "文章" create button
-        new_article_btn = page.get_by_text("文章", exact=True)
+        new_article_btn = page.locator('.new-creation__menu-item:has-text("文章"), .appmsg_edit')
+        if await new_article_btn.count() == 0:
+            new_article_btn = page.get_by_text("文章", exact=True)
         if await new_article_btn.count() > 0 and await new_article_btn.first.is_visible():
-            async with self._context.expect_page(timeout=10000) as page_info:
+            async with self._context.expect_page(timeout=15000) as page_info:
                 await new_article_btn.first.click()
-            editor_page = await page_info.value
-            await editor_page.wait_for_load_state("domcontentloaded")
-            return editor_page
-
-        # Alternative: click "新的创作" or look for appmsg link
-        create_btn = page.locator('.new-creation__menu-item:has-text("文章"), .appmsg_edit')
-        if await create_btn.count() > 0 and await create_btn.first.is_visible():
-            async with self._context.expect_page(timeout=10000) as page_info:
-                await create_btn.first.click()
             editor_page = await page_info.value
             await editor_page.wait_for_load_state("domcontentloaded")
             return editor_page
@@ -157,33 +156,54 @@ class WeChatPublisher:
         content_html = article.get("content_html", "")
         content_text = article.get("content", "")
 
-        # 1. Title
+        # 1. Title (WeChat MP modern editor uses ProseMirror div with data-placeholder)
         title_filled = False
         title_locators = [
+            page.locator('div.ProseMirror[data-placeholder*="标题"]'),
+            page.locator('.ProseMirror[data-placeholder*="标题"]'),
             page.get_by_role("textbox", name="请在这里输入标题"),
+            page.locator('input[placeholder*="标题"]'),
+            page.locator('textarea[placeholder*="标题"]'),
             page.locator("#title"),
             page.locator("#appmsg_title"),
-            page.locator('input[placeholder*="标题"]'),
         ]
         for loc in title_locators:
-            if await loc.count() > 0 and await loc.first.is_visible():
-                await loc.first.fill(title)
+            try:
+                if await loc.count() > 0 and await loc.first.is_visible():
+                    await loc.first.click()
+                    await loc.first.fill(title)
+                    title_filled = True
+                    break
+            except Exception as exc:
+                logger.debug("title_locator_try_failed", error=str(exc))
+
+        if not title_filled:
+            primary_title = page.locator('div.ProseMirror[data-placeholder*="标题"]')
+            try:
+                await primary_title.first.wait_for(state="visible", timeout=8000)
+                await primary_title.first.click()
+                await primary_title.first.fill(title)
                 title_filled = True
-                break
+            except Exception as exc:
+                logger.debug("primary_title_fill_failed", error=str(exc))
+
         if not title_filled:
             raise RuntimeError("EDITOR_NOT_FOUND: Title input not found")
 
         # 2. Author
         if author:
             author_locators = [
-                page.get_by_role("textbox", name="请输入作者"),
                 page.locator("#author"),
+                page.get_by_role("textbox", name="请输入作者"),
                 page.locator('input[placeholder*="作者"]'),
             ]
             for loc in author_locators:
-                if await loc.count() > 0 and await loc.first.is_visible():
-                    await loc.first.fill(author)
-                    break
+                try:
+                    if await loc.count() > 0 and await loc.first.is_visible():
+                        await loc.first.fill(author)
+                        break
+                except Exception as exc:
+                    logger.debug("author_locator_try_failed", error=str(exc))
 
         # 3. Digest
         if digest:
@@ -193,21 +213,29 @@ class WeChatPublisher:
                 page.locator('textarea[placeholder*="摘要"]'),
             ]
             for loc in digest_locators:
-                if await loc.count() > 0 and await loc.first.is_visible():
-                    await loc.first.fill(digest)
-                    break
+                try:
+                    if await loc.count() > 0 and await loc.first.is_visible():
+                        await loc.first.fill(digest)
+                        break
+                except Exception as exc:
+                    logger.debug("digest_locator_try_failed", error=str(exc))
 
-        # 4. Rich text body (ClipboardItem + Control+V, fallback innerHTML)
+        # 4. Rich text body (target body editor, explicitly distinct from title ProseMirror)
         editor_locators = [
-            page.locator(".ProseMirror"),
+            page.locator("#ueditor_0 .ProseMirror"),
+            page.locator(".rich_media_content .ProseMirror"),
+            page.locator('div.ProseMirror:not([data-placeholder*="标题"])'),
             page.locator("#js_editor_content"),
             page.locator("#js_editor"),
         ]
         editor_target = None
         for loc in editor_locators:
-            if await loc.count() > 0 and await loc.first.is_visible():
-                editor_target = loc.first
-                break
+            try:
+                if await loc.count() > 0 and await loc.first.is_visible():
+                    editor_target = loc.first
+                    break
+            except Exception as exc:
+                logger.debug("editor_locator_try_failed", error=str(exc))
 
         if editor_target is None:
             # Check for iframe editor body
@@ -245,63 +273,104 @@ class WeChatPublisher:
             logger.debug("clipboard_paste_failed", error=str(exc))
 
         if not pasted:
-            # Fallback to direct DOM manipulation
-            await page.evaluate(
-                """([editor, html]) => {
-                    editor.innerHTML = html;
-                    editor.dispatchEvent(new Event("input", { bubbles: true }));
-                    editor.dispatchEvent(new Event("change", { bubbles: true }));
-                }""",
-                [await editor_target.element_handle(), content_html],
-            )
+            # Fallback to direct DOM manipulation or fill
+            try:
+                if content_html:
+                    await page.evaluate(
+                        """([editor, html]) => {
+                            editor.innerHTML = html;
+                            editor.dispatchEvent(new Event("input", { bubbles: true }));
+                            editor.dispatchEvent(new Event("change", { bubbles: true }));
+                        }""",
+                        [await editor_target.element_handle(), content_html],
+                    )
+                else:
+                    await editor_target.fill(content_text)
+            except Exception as dom_exc:
+                logger.debug("body_dom_fallback_failed", error=str(dom_exc))
+                if content_text:
+                    await editor_target.fill(content_text)
             await asyncio.sleep(0.5)
 
     async def select_cover_from_content(self, page: Any) -> None:
         """Select the first body image as article cover via '从正文选择'."""
-        # Wait for at least one image in editor body
-        body_images = page.locator(".ProseMirror img, #js_editor_content img, img.rich_pages")
-        if await body_images.count() == 0:
-            # Look inside frames if present
-            for frame in page.frames:
-                frame_imgs = frame.locator("body img")
-                if await frame_imgs.count() > 0:
-                    body_images = frame_imgs
-                    break
-
-        # Trigger cover selection
+        # 1. Trigger cover selection modal
         cover_btn = page.locator(
-            '.js_cover_btn_area, button:has-text("选择封面"), .select-cover__btn'
-        )
+            ".select-cover__btn, #js_cover_area, .js_cover_btn_area, #js_cover_null"
+        ).first
         if await cover_btn.count() == 0:
-            raise RuntimeError("COVER_FAILED: Cover selection button not found")
-        await cover_btn.first.click()
-        await asyncio.sleep(0.5)
+            logger.warning("cover_selection_button_not_found_skipping")
+            return
+        try:
+            await cover_btn.click()
+            await asyncio.sleep(1.0)
+        except Exception as exc:
+            logger.warning("click_cover_btn_failed", error=str(exc))
+            return
 
-        # Select "从正文选择" tab
-        from_content_tab = page.locator('text="从正文选择", li:has-text("从正文选择")')
-        if await from_content_tab.count() > 0 and await from_content_tab.first.is_visible():
-            await from_content_tab.first.click()
-            await asyncio.sleep(0.5)
+        # 2. Click '从正文选择' option in dropdown
+        from_content_tab = page.locator(':has-text("从正文选择")').last
+        if await from_content_tab.count() == 0 or not await from_content_tab.is_visible():
+            logger.warning("from_content_tab_not_found_skipping")
+            return
+        try:
+            await from_content_tab.click()
+            await asyncio.sleep(1.5)
+        except Exception as exc:
+            logger.warning("click_from_content_tab_failed", error=str(exc))
+            return
 
-        # Pick first candidate image
+        # 3. Pick candidate image in modal
         img_pick = page.locator(
-            ".js_img_item, .weui-desktop-picture-check, .img-picker__item, .img_crop_panel img"
+            ".appmsg_content_img_item, .appmsg_content_img, "
+            ".img_crop_panel .appmsg_content_img, .weui-desktop-picture-check"
+        ).first
+        if await img_pick.count() == 0 or not await img_pick.is_visible():
+            logger.warning("no_candidate_image_found_in_tab_skipping")
+            # Close dialog if open
+            close_btn = page.locator(
+                '.weui-desktop-dialog:has-text("选择图片") button:has-text("取消")'
+            )
+            if await close_btn.count() > 0 and await close_btn.is_visible():
+                await close_btn.first.click()
+            return
+        await img_pick.click()
+        await asyncio.sleep(1.0)
+
+        # 4. Click '下一步' to proceed to crop
+        next_btn = page.locator('button:has-text("下一步"):not(.weui-desktop-btn_disabled)').first
+        if await next_btn.count() == 0 or not await next_btn.is_visible():
+            logger.warning("cover_next_button_not_found_skipping")
+            return
+        await next_btn.click()
+        await asyncio.sleep(2.0)
+
+        # 5. Confirm crop modal with '确认', '完成' or '确定'
+        dialog_confirmed = False
+        for btn_name in ["确认", "完成", "确定"]:
+            confirm_btn = page.locator(
+                f'.weui-desktop-dialog:has-text("编辑封面") button:has-text("{btn_name}"), '
+                f'.weui-desktop-dialog:not([style*="display: none"]) button:has-text("{btn_name}")'
+            ).first
+            if await confirm_btn.count() > 0 and await confirm_btn.is_visible():
+                await confirm_btn.click()
+                dialog_confirmed = True
+                await asyncio.sleep(1.5)
+                break
+
+        if not dialog_confirmed:
+            logger.warning("cover_confirmation_button_not_found")
+            return
+
+        # 6. Verify cover preview appears
+        preview = page.locator(
+            ".js_cover_preview_new, .js_cover_preview, "
+            ".appmsg_cover_preview, .setting-group__cover_primary"
         )
-        if await img_pick.count() > 0:
-            await img_pick.first.click()
-            await asyncio.sleep(0.5)
-
-        # Confirm crop/selection
-        for btn_name in ["下一步", "完成", "确定"]:
-            confirm_btn = page.get_by_role("button", name=btn_name)
-            if await confirm_btn.count() > 0 and await confirm_btn.first.is_visible():
-                await confirm_btn.first.click()
-                await asyncio.sleep(0.5)
-
-        # Verify cover preview appears
-        preview = page.locator(".js_cover_preview, .appmsg_cover_preview, .weui-desktop-cover__img")
-        if await preview.count() == 0 or not await preview.first.is_visible():
-            logger.warning("cover_preview_not_explicitly_visible_continuing")
+        try:
+            await preview.first.wait_for(state="visible", timeout=5000)
+        except Exception as exc:
+            logger.debug("cover_preview_wait_ignored", error=str(exc))
 
     async def save_draft(self, page: Any) -> tuple[str, str | None]:
         """Click '保存为草稿', wait for explicit save signal, and extract draft identity."""
@@ -309,41 +378,59 @@ class WeChatPublisher:
         if await save_btn.count() == 0:
             save_btn = page.locator('button:has-text("保存为草稿")')
         if await save_btn.count() == 0:
+            save_btn = page.get_by_text("保存为草稿", exact=True)
+        if await save_btn.count() == 0:
             raise RuntimeError("DRAFT_SAVE_FAILED: '保存为草稿' button not found")
 
         # Listen for draft save response
         draft_media_id: str | None = None
 
-        def handle_response(res: Any) -> None:
+        async def handle_response(res: Any) -> None:
             nonlocal draft_media_id
             if "appmsg" in res.url and res.request.method == "POST":
                 try:
-                    data = res.json()
-                    mid = data.get("appmsgid") or data.get("appMsgId")
-                    if mid:
-                        draft_media_id = str(mid)
+                    data = await res.json()
+                    if isinstance(data, dict):
+                        mid = data.get("appmsgid") or data.get("appMsgId")
+                        if mid:
+                            draft_media_id = str(mid)
                 except Exception as exc:
                     logger.debug("parse_appmsg_response_failed", error=str(exc))
 
         page.on("response", handle_response)
         try:
             await save_btn.first.click()
-            # Wait for explicit save toast or indicator
-            saved_indicator = page.locator(
-                '.weui-desktop-toast:has-text("已保存"), text="已保存", .js_save_success'
-            )
-            await saved_indicator.first.wait_for(
-                state="visible",
-                timeout=int(self._settings.operation_timeout_seconds * 1000),
-            )
+            # Wait for draft ID in URL, or response, or saved indicator
+            start_wait = time.time()
+            max_wait = float(self._settings.operation_timeout_seconds)
+            while time.time() - start_wait < max_wait:
+                if draft_media_id or "appmsgid=" in page.url:
+                    break
+                saved_indicator = page.locator(
+                    '.weui-desktop-toast, :has-text("已保存"), '
+                    ':has-text("保存成功"), :has-text("手动保存")'
+                )
+                if await saved_indicator.count() > 0 and await saved_indicator.first.is_visible():
+                    break
+                await asyncio.sleep(0.5)
         finally:
             page.remove_listener("response", handle_response)
 
         draft_url = page.url
+        # Fallback: extract appmsgid from URL query parameters
+        if not draft_media_id and "appmsgid=" in draft_url:
+            qs = parse_qs(urlsplit(draft_url).query)
+            appmsgid_vals = qs.get("appmsgid")
+            if appmsgid_vals:
+                draft_media_id = appmsgid_vals[0]
+
         return draft_url, draft_media_id
 
     async def open_draft(self, page: Any, draft_url: str) -> None:
-        """Open previously saved draft by URL."""
+        """Open previously saved draft by URL with domain validation."""
+        parts = urlsplit(draft_url)
+        if parts.scheme != "https" or parts.netloc != "mp.weixin.qq.com":
+            raise ValueError(f"DRAFT_SAVE_FAILED: Invalid draft URL domain or scheme: {draft_url}")
         await page.goto(
             draft_url,
             timeout=int(self._settings.navigation_timeout_seconds * 1000),
@@ -364,7 +451,7 @@ class WeChatPublisher:
         await asyncio.sleep(1.0)
 
         # Check for AI declaration if platform displays one
-        ai_option = page.locator('text="AI 辅助生成", text="AI 生成"')
+        ai_option = page.locator(':has-text("AI 辅助生成"), :has-text("AI 生成")')
         if await ai_option.count() > 0 and await ai_option.first.is_visible():
             await ai_option.first.click()
             await asyncio.sleep(0.5)
@@ -387,28 +474,8 @@ class WeChatPublisher:
 
     async def verify_published(self, page: Any, title: str, start_time: datetime) -> str | None:
         """Verify publication success and extract published article URL."""
-        # Check first level signal
-        success_indicators = [
-            page.locator('text="发表成功"'),
-            page.locator('text="群发成功"'),
-            page.locator('text="发送成功"'),
-            page.locator('text="已发表"'),
-            page.locator('text="已群发"'),
-        ]
-        first_signal = False
-        for ind in success_indicators:
-            if await ind.count() > 0 and await ind.first.is_visible():
-                first_signal = True
-                break
-
-        # Also inspect published list to retrieve public URL
-        published_url = await self.reconcile(page, title, start_time, max_seconds=30)
-        if published_url:
-            return published_url
-
-        if first_signal:
-            return f"https://mp.weixin.qq.com/s/published_{int(start_time.timestamp())}"
-        return None
+        # Inspect published list to retrieve public URL
+        return await self.reconcile(page, title, start_time, max_seconds=30)
 
     async def reconcile(
         self,
@@ -423,7 +490,7 @@ class WeChatPublisher:
         while asyncio.get_event_loop().time() < deadline:
             try:
                 # Look for published tab or navigate to published list
-                published_tab = page.locator('text="已发表", a:has-text("已发表")')
+                published_tab = page.locator('a:has-text("已发表"), :has-text("已发表")')
                 if await published_tab.count() > 0 and await published_tab.first.is_visible():
                     await published_tab.first.click()
                     await asyncio.sleep(1.0)
@@ -439,7 +506,11 @@ class WeChatPublisher:
                     if await link.count() > 0:
                         href = await link.first.get_attribute("href")
                         if href:
-                            return str(href)
+                            full_url = str(href)
+                            if full_url.startswith("/s/"):
+                                full_url = f"https://mp.weixin.qq.com{full_url}"
+                            if full_url.startswith("https://mp.weixin.qq.com/s/"):
+                                return full_url
             except Exception as exc:
                 logger.debug("reconcile_check_error", error=str(exc))
             await asyncio.sleep(5.0)

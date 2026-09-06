@@ -26,6 +26,7 @@ class MPBrowserSettings(BaseSettings):
     navigation_timeout_seconds: float = Field(default=30.0, ge=5.0, le=300.0)
     operation_timeout_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
     headless: bool = True
+    draft_only: bool = False
 
     @field_validator("api_base_url")
     @classmethod

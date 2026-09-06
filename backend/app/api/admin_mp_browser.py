@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/mp-browser", tags=["admin-mp-browser"])
 
-BrowserPhase = Literal["editing", "draft_saved", "publish_clicked"]
+BrowserPhase = Literal["editing", "draft_saved", "publish_intent", "publish_clicked"]
 BrowserSessionState = Literal[
     "offline", "starting", "ready", "publishing", "auth_required", "error"
 ]
@@ -40,6 +40,7 @@ class BrowserCheckpointRequest(BaseModel):
 
 
 class BrowserCompleteRequest(BaseModel):
+    status: Literal["published", "draft"] = "published"
     provider_draft_id: str | None = Field(default=None, max_length=200)
     provider_publish_id: str | None = Field(default=None, max_length=200)
     published_url: str | None = Field(default=None, max_length=2048)
@@ -122,6 +123,7 @@ async def complete_article(
     service = request.app.state.mp_browser_service
     article = await service.complete_article(
         article_id,
+        status=payload.status,
         provider_draft_id=payload.provider_draft_id,
         provider_publish_id=payload.provider_publish_id,
         published_url=payload.published_url,

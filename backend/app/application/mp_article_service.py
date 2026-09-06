@@ -238,7 +238,7 @@ class MPArticleLibraryService:
         draft_url: str | None = None,
         provider_draft_id: str | None = None,
     ) -> MpArticle:
-        if phase not in {"editing", "draft_saved", "publish_clicked"}:
+        if phase not in {"editing", "draft_saved", "publish_intent", "publish_clicked"}:
             raise AppError("invalid_phase", f"Invalid browser phase: {phase}", 422)
 
         now = self._clock.now()
@@ -256,7 +256,12 @@ class MPArticleLibraryService:
             payload = dict(article.payload or {})
             bp = dict(payload.get("browser_publish") or {})
             current_phase = bp.get("phase", "editing")
-            phase_ranks = {"editing": 0, "draft_saved": 1, "publish_clicked": 2}
+            phase_ranks = {
+                "editing": 0,
+                "draft_saved": 1,
+                "publish_intent": 2,
+                "publish_clicked": 3,
+            }
             if phase_ranks[phase] < phase_ranks[current_phase]:
                 raise AppError(
                     "invalid_phase_transition",
@@ -286,6 +291,7 @@ class MPArticleLibraryService:
         self,
         article_id: str,
         *,
+        status: str = MpArticleStatus.PUBLISHED.value,
         provider_draft_id: str | None = None,
         provider_publish_id: str | None = None,
         published_url: str | None = None,
@@ -295,7 +301,10 @@ class MPArticleLibraryService:
             article = await session.get(MpArticle, article_id)
             if article is None:
                 raise AppError("article_not_found", "Article not found", 404)
-            if article.status == MpArticleStatus.PUBLISHED.value:
+            if article.status in {
+                MpArticleStatus.PUBLISHED.value,
+                MpArticleStatus.DRAFT.value,
+            }:
                 return article
             if article.status != MpArticleStatus.PUBLISHING.value:
                 raise AppError(
@@ -304,12 +313,18 @@ class MPArticleLibraryService:
                     409,
                 )
 
-            article.status = MpArticleStatus.PUBLISHED.value
+            final_status = (
+                MpArticleStatus.DRAFT.value
+                if status == MpArticleStatus.DRAFT.value
+                else MpArticleStatus.PUBLISHED.value
+            )
+            article.status = final_status
             if provider_draft_id:
                 article.provider_draft_media_id = provider_draft_id
             if provider_publish_id:
                 article.provider_publish_id = provider_publish_id
-            article.published_at = now
+            if final_status == MpArticleStatus.PUBLISHED.value:
+                article.published_at = now
             article.updated_at = now
 
             payload = dict(article.payload or {})

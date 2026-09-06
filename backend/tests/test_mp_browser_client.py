@@ -68,6 +68,21 @@ async def test_mp_browser_client_checkpoint_and_complete(settings: MPBrowserSett
 
     comp_res = await client.complete("mpa_1", published_url="https://mp.weixin.qq.com/s/pub")
     assert comp_res["status"] == "published"
+    assert (
+        comp_route.calls.last.request.content
+        == b'{"status":"published","provider_draft_id":null,"provider_publish_id":null,"published_url":"https://mp.weixin.qq.com/s/pub"}'
+    )
+
+    draft_comp_route = respx.post(
+        "http://test-server/api/v1/admin/mp-browser/articles/mpa_2/complete"
+    )
+    draft_comp_route.return_value = httpx.Response(
+        200, json={"data": {"id": "mpa_2", "status": "draft"}}
+    )
+    draft_res = await client.complete(
+        "mpa_2", status="draft", published_url="https://mp.weixin.qq.com/cgi-bin/appmsg?id=1"
+    )
+    assert draft_res["status"] == "draft"
 
     await client.close()
 
