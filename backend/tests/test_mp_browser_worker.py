@@ -210,7 +210,9 @@ async def test_worker_risk_control_pause_and_non_retryable(tmp_path: Path) -> No
     worker = MPBrowserWorker(settings, api_client, publisher)
     assert not worker._paused
 
-    exc = RuntimeError("SECURITY_CHECK_TRIGGERED: WeChat MP security verification or captcha detected")
+    exc = RuntimeError(
+        "SECURITY_CHECK_TRIGGERED: WeChat MP security verification or captcha detected"
+    )
     await worker._handle_article_failure(mock_page, "art_risk", exc)
 
     assert worker._paused is True
