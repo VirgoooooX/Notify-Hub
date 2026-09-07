@@ -325,7 +325,9 @@ class WeChatPublisher:
             ".appmsg_content_img_item, .appmsg_content_img, "
             ".img_crop_panel .appmsg_content_img, .weui-desktop-picture-check"
         ).first
-        if await img_pick.count() == 0 or not await img_pick.is_visible():
+        try:
+            await img_pick.wait_for(state="visible", timeout=5000)
+        except Exception:
             logger.warning("no_candidate_image_found_in_tab_skipping")
             # Close dialog if open
             close_btn = page.locator(
@@ -335,7 +337,7 @@ class WeChatPublisher:
                 await close_btn.first.click()
             return
         await img_pick.click()
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
 
         # 4. Click '下一步' to proceed to crop
         next_btn = page.locator('button:has-text("下一步"):not(.weui-desktop-btn_disabled)').first
@@ -343,10 +345,13 @@ class WeChatPublisher:
             logger.warning("cover_next_button_not_found_skipping")
             return
         await next_btn.click()
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(1.0)
 
         # 5. Confirm crop modal with '确认', '完成' or '确定'
         dialog_confirmed = False
+        crop_dialog = page.locator(
+            '.weui-desktop-dialog:has-text("编辑封面"), .weui-desktop-dialog'
+        ).first
         for btn_name in ["确认", "完成", "确定"]:
             confirm_btn = page.locator(
                 f'.weui-desktop-dialog:has-text("编辑封面") button:has-text("{btn_name}"), '
@@ -355,7 +360,10 @@ class WeChatPublisher:
             if await confirm_btn.count() > 0 and await confirm_btn.is_visible():
                 await confirm_btn.click()
                 dialog_confirmed = True
-                await asyncio.sleep(1.5)
+                try:
+                    await crop_dialog.wait_for(state="hidden", timeout=5000)
+                except Exception as exc:
+                    logger.debug("crop_dialog_hide_wait_timeout", error=str(exc))
                 break
 
         if not dialog_confirmed:
@@ -372,6 +380,28 @@ class WeChatPublisher:
         except Exception as exc:
             logger.debug("cover_preview_wait_ignored", error=str(exc))
 
+    async def check_risk_control(self, page: Any) -> None:
+        """Inspect page for explicit security verification or rate limit prompts."""
+        # 1. Rate limit prompts
+        for rate_text in ["操作过于频繁", "操作频繁"]:
+            loc = page.locator(f'.weui-desktop-dialog:has-text("{rate_text}")')
+            if await loc.count() > 0 and await loc.first.is_visible():
+                raise RuntimeError(
+                    f"RATE_LIMIT_TRIGGERED: WeChat MP rate limit detected: '{rate_text}'"
+                )
+
+        # 2. Security verification prompts & captchas
+        sec_locators = [
+            page.locator('.weui-desktop-dialog:has-text("安全验证")'),
+            page.locator('iframe[src*="tcaptcha"]'),
+            page.locator('iframe[src*="captcha"]'),
+        ]
+        for loc in sec_locators:
+            if await loc.count() > 0 and await loc.first.is_visible():
+                raise RuntimeError(
+                    "SECURITY_CHECK_TRIGGERED: WeChat MP security verification or captcha detected"
+                )
+
     async def save_draft(self, page: Any) -> tuple[str, str | None]:
         """Click '保存为草稿', wait for explicit save signal, and extract draft identity."""
         save_btn = page.get_by_role("button", name="保存为草稿")
@@ -384,9 +414,10 @@ class WeChatPublisher:
 
         # Listen for draft save response
         draft_media_id: str | None = None
+        save_confirmed: bool = False
 
         async def handle_response(res: Any) -> None:
-            nonlocal draft_media_id
+            nonlocal draft_media_id, save_confirmed
             if "appmsg" in res.url and res.request.method == "POST":
                 try:
                     data = await res.json()
@@ -394,23 +425,27 @@ class WeChatPublisher:
                         mid = data.get("appmsgid") or data.get("appMsgId")
                         if mid:
                             draft_media_id = str(mid)
+                            save_confirmed = True
+                        base_resp = data.get("base_resp") or {}
+                        if isinstance(base_resp, dict) and base_resp.get("ret") == 0:
+                            save_confirmed = True
                 except Exception as exc:
                     logger.debug("parse_appmsg_response_failed", error=str(exc))
 
         page.on("response", handle_response)
         try:
             await save_btn.first.click()
-            # Wait for draft ID in URL, or response, or saved indicator
             start_wait = time.time()
-            max_wait = float(self._settings.operation_timeout_seconds)
+            max_wait = self._settings.operation_timeout_seconds
             while time.time() - start_wait < max_wait:
-                if draft_media_id or "appmsgid=" in page.url:
+                if draft_media_id or "appmsgid=" in page.url or save_confirmed:
+                    save_confirmed = True
                     break
                 saved_indicator = page.locator(
-                    '.weui-desktop-toast, :has-text("已保存"), '
-                    ':has-text("保存成功"), :has-text("手动保存")'
+                    ':has-text("已保存"), :has-text("保存成功"), :has-text("手动保存")'
                 )
                 if await saved_indicator.count() > 0 and await saved_indicator.first.is_visible():
+                    save_confirmed = True
                     break
                 await asyncio.sleep(0.5)
         finally:
@@ -423,6 +458,12 @@ class WeChatPublisher:
             appmsgid_vals = qs.get("appmsgid")
             if appmsgid_vals:
                 draft_media_id = appmsgid_vals[0]
+                save_confirmed = True
+
+        if not save_confirmed and not draft_media_id and "appmsgid=" not in draft_url:
+            raise RuntimeError(
+                "DRAFT_SAVE_FAILED: Save draft timed out without explicit success confirmation"
+            )
 
         return draft_url, draft_media_id
 
@@ -439,6 +480,8 @@ class WeChatPublisher:
 
     async def click_publish_and_confirm(self, page: Any) -> None:
         """Click 'button.mass_send' and confirm publication dialog."""
+        await self.check_risk_control(page)
+
         mass_send_btn = page.locator("button.mass_send")
         if await mass_send_btn.count() == 0:
             mass_send_btn = page.get_by_role("button", name="发表")

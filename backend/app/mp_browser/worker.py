@@ -43,6 +43,8 @@ def clean_artifacts(artifacts_dir: Path) -> None:
 def parse_error_code(exc: Exception) -> str:
     msg = f"{type(exc).__name__} {exc}".upper()
     known = [
+        "SECURITY_CHECK_TRIGGERED",
+        "RATE_LIMIT_TRIGGERED",
         "AUTH_REQUIRED",
         "EDITOR_NOT_FOUND",
         "EDITOR_TIMEOUT",
@@ -78,6 +80,8 @@ class MPBrowserWorker:
         self._api = api_client
         self._publisher = publisher
         self._running = False
+        self._paused = False
+        self._paused_reason: str | None = None
         self._current_article_id: str | None = None
         self._incident_id: str | None = None
         self._last_error_code: str | None = None
@@ -113,7 +117,9 @@ class MPBrowserWorker:
             try:
                 await asyncio.sleep(self._settings.heartbeat_seconds)
                 state = "ready"
-                if self._incident_id:
+                if self._paused:
+                    state = "error"
+                elif self._incident_id:
                     state = "auth_required"
                 elif self._current_article_id:
                     state = "publishing"
@@ -123,7 +129,7 @@ class MPBrowserWorker:
                     current_article_id=self._current_article_id,
                     incident_id=self._incident_id,
                     last_error_code=self._last_error_code,
-                    last_error_message=self._last_error_message,
+                    last_error_message=self._last_error_message or self._paused_reason,
                 )
             except asyncio.CancelledError:
                 break
@@ -134,6 +140,11 @@ class MPBrowserWorker:
         page = await self._publisher.get_page()
 
         while self._running:
+            # 0. If paused due to risk control, skip claiming and wait for operator restart
+            if self._paused:
+                await asyncio.sleep(self._settings.poll_seconds)
+                continue
+
             # 1. Verify authentication
             logged_in = await self._publisher.check_login(page)
             if not logged_in:
@@ -229,6 +240,7 @@ class MPBrowserWorker:
                     return
 
                 await self._api.checkpoint(article_id, phase="publish_intent")
+                await self._publisher.check_risk_control(editor_page)
                 await self._publisher.click_publish_and_confirm(editor_page)
                 await self._api.checkpoint(article_id, phase="publish_clicked")
 
@@ -277,6 +289,7 @@ class MPBrowserWorker:
                 raise RuntimeError("DRAFT_SAVE_FAILED: Resume requested but draft_url is missing")
             await self._publisher.open_draft(page, draft_url)
             await self._api.checkpoint(article_id, phase="publish_intent")
+            await self._publisher.check_risk_control(page)
             await self._publisher.click_publish_and_confirm(page)
             await self._api.checkpoint(article_id, phase="publish_clicked")
 
@@ -324,6 +337,21 @@ class MPBrowserWorker:
         except Exception as ss_exc:
             logger.debug("failure_screenshot_failed", error=str(ss_exc))
 
+        # If security check or rate limit was triggered, pause worker immediately
+        if err_code in {"SECURITY_CHECK_TRIGGERED", "RATE_LIMIT_TRIGGERED"}:
+            self._paused = True
+            self._paused_reason = f"{err_code}: {err_msg}"
+            logger.error("mp_browser_paused_due_to_risk", code=err_code, message=err_msg)
+            try:
+                await self._api.update_session(
+                    state="error",
+                    incident_id=self._incident_id,
+                    last_error_code=err_code,
+                    last_error_message=err_msg,
+                )
+            except Exception as sess_exc:
+                logger.debug("session_risk_error_update_failed", error=str(sess_exc))
+
         # If auth expired during execution, release without attempt penalty
         if err_code == "AUTH_REQUIRED":
             try:
@@ -332,8 +360,14 @@ class MPBrowserWorker:
                 logger.debug("release_for_auth_failed", error=str(rel_exc))
             return
 
-        # Fail article with retryable=True unless it was a permanent issue or UI change
-        retryable = err_code not in {"CONTENT_REJECTED", "PUBLISH_QUOTA_EXHAUSTED"}
+        # Fail article with retryable=True unless it was a permanent issue, quota, or risk controls
+        non_retryable_codes = {
+            "CONTENT_REJECTED",
+            "PUBLISH_QUOTA_EXHAUSTED",
+            "SECURITY_CHECK_TRIGGERED",
+            "RATE_LIMIT_TRIGGERED",
+        }
+        retryable = err_code not in non_retryable_codes
         try:
             await self._api.fail(
                 article_id,
