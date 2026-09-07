@@ -481,7 +481,7 @@ wheels = [
 
 [[package]]
 name = "notify-hub"
-version = "0.9.9"
+version = "0.9.10"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
