@@ -19,6 +19,16 @@ QUOTA_SIGNAL_PATTERNS = (
     r"\bbanked\s+reset\b",
     r"\bbrand\s+new\s+usage\b",
 )
+BANKED_RESET_PATTERNS = (
+    r"\bbanked\s+reset\b",
+    r"\breset\s+card\b",
+)
+BANKED_RESET_COMMITMENT_PATTERNS = (
+    r"\b(?:will|we(?:'ll|\s+will)?|give|giving|provide|providing|grant|granted|send|sent|credited|credit)\b",
+    r"\bgot\s+you\s+covered\b",
+    r"\blands?\b",
+    r"\bfor\s+every\s+day\b",
+)
 DECLARATIVE_CHANGE_PATTERNS = (
     r"\b(?:has|have|had|was|were|is|are)\s+(?:\w+\s+){0,4}"
     r"(?:reset|refreshed|restored|replenished|increased|removed)\b",
@@ -40,6 +50,7 @@ class MatchResult:
     confidence: float
     matched_rules: tuple[str, ...] = ()
     excluded_by: tuple[str, ...] = ()
+    reset_kind: str | None = None
 
 
 def normalize_for_matching(text: str) -> str:
@@ -50,6 +61,19 @@ def normalize_for_matching(text: str) -> str:
 
 def _matching_patterns(patterns: Iterable[str], text: str) -> tuple[str, ...]:
     return tuple(pattern for pattern in patterns if re.search(pattern, text, flags=re.IGNORECASE))
+
+
+def detect_reset_kind(text: str) -> str | None:
+    normalized = normalize_for_matching(text)
+    if _matching_patterns(BANKED_RESET_PATTERNS, normalized):
+        return "banked"
+    if re.search(
+        r"\b(?:reset|refreshed|restored|replenished|brand\s+new\s+usage)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return "direct"
+    return None
 
 
 def match_post(post: XPost, config: CodexXMonitorConfig) -> MatchResult:
@@ -66,15 +90,33 @@ def match_post(post: XPost, config: CodexXMonitorConfig) -> MatchResult:
         return MatchResult(matched=False, confidence=0.99, excluded_by=excluded)
 
     contexts = _matching_patterns(config.required_context_patterns, text)
-    if not contexts:
-        return MatchResult(matched=False, confidence=0.99)
-
     positives = _matching_patterns(config.positive_patterns, text)
+    quota_signals = _matching_patterns(QUOTA_SIGNAL_PATTERNS, text)
+    declarative_changes = _matching_patterns(DECLARATIVE_CHANGE_PATTERNS, text)
+    banked_reset = _matching_patterns(BANKED_RESET_PATTERNS, text)
+    commitment = _matching_patterns(BANKED_RESET_COMMITMENT_PATTERNS, text)
+
+    # "banked reset" and "reset card" are both reset mechanisms. They are
+    # intentionally accepted without a Codex keyword when the post also says
+    # that the account owner will provide, send, or land them.
+    if banked_reset and commitment:
+        return MatchResult(
+            matched=True,
+            confidence=0.95,
+            matched_rules=tuple(dict.fromkeys((*contexts, *positives, *banked_reset))),
+            reset_kind="banked",
+        )
+
+    if not contexts:
+        return MatchResult(
+            matched=False,
+            confidence=0.6 if (positives or quota_signals) else 0.99,
+            matched_rules=tuple(dict.fromkeys((*positives, *quota_signals))),
+        )
+
     if not positives:
         return MatchResult(matched=False, confidence=0.6, matched_rules=contexts)
 
-    quota_signals = _matching_patterns(QUOTA_SIGNAL_PATTERNS, text)
-    declarative_changes = _matching_patterns(DECLARATIVE_CHANGE_PATTERNS, text)
     confidence = 0.55
     if quota_signals:
         confidence += 0.15
@@ -86,4 +128,5 @@ def match_post(post: XPost, config: CodexXMonitorConfig) -> MatchResult:
         matched=True,
         confidence=min(confidence, 0.99),
         matched_rules=contexts + positives,
+        reset_kind="banked" if banked_reset else "direct",
     )

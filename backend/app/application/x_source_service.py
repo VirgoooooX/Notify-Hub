@@ -19,10 +19,14 @@ from app.config import Settings
 from app.domain.x_source import (
     XPostRecord,
     XSourceAccountError,
+    XSourceCookieInvalid,
     XSourceError,
     XSourceParseError,
     XSourceRateLimited,
+    XSourcesUnavailable,
     XSourceUnavailable,
+    XTwscrapeIncompatible,
+    XTwscrapeUnavailable,
 )
 from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
@@ -48,6 +52,15 @@ class XHealthTarget:
     include_replies: bool = False
     silence_enabled: bool = False
     silence_seconds: int = 86_400
+
+
+@dataclass(frozen=True, slots=True)
+class XSourceFetchResult:
+    """A timeline plus the source actually used to obtain it."""
+
+    records: list[XPostRecord]
+    provider_used: str
+    degraded_error: XSourceError | None = None
 
 
 class _MediaParser(HTMLParser):
@@ -261,7 +274,7 @@ class RssHubProvider:
 
 
 class TwscrapeProvider:
-    """Cold standby provider. It is never selected unless platform config opts in."""
+    """Primary-capable provider; RSSHub fallback is owned by ``XSourceService``."""
 
     def __init__(self, cookie: str | None) -> None:
         self._cookie = cookie
@@ -269,12 +282,13 @@ class TwscrapeProvider:
     async def fetch(self, username: str, *, limit: int, include_replies: bool) -> list[XPostRecord]:
         cookie = (self._cookie or "").strip()
         if not cookie:
-            raise XSourceUnavailable("twscrape cold standby credentials are not configured")
+            raise XSourceCookieInvalid("twscrape Cookie is not configured")
         cookie_lower = cookie.casefold()
         if "auth_token=" not in cookie_lower or "ct0=" not in cookie_lower:
-            raise XSourceUnavailable("twscrape cold standby credentials are invalid")
+            raise XSourceCookieInvalid("twscrape Cookie is missing auth_token or ct0")
         from twscrape import API, gather
         from twscrape.accounts_pool import NoAccountError
+        from twscrape.xclid import XClIdAccountError, XClIdParseError
 
         os.environ.setdefault("TWS_TELEMETRY", "0")
         os.environ.setdefault("TWS_LOG_LEVEL", "WARNING")
@@ -294,12 +308,26 @@ class TwscrapeProvider:
                 tweets = await gather(iterator)
         except NoAccountError as exc:
             raise XSourceRateLimited("twscrape has no usable account") from exc
+        except XClIdAccountError as exc:
+            raise XSourceCookieInvalid("twscrape Cookie was rejected by X") from exc
+        except XClIdParseError as exc:
+            raise XTwscrapeIncompatible(
+                "twscrape could not find a compatible X signing script"
+            ) from exc
         except XSourceError:
             raise
         except Exception as exc:
-            raise XSourceUnavailable(f"twscrape request failed: {type(exc).__name__}") from exc
+            error_name = type(exc).__name__
+            error_text = str(exc).casefold()
+            if "signing script" in error_text or "x web scripts" in error_text:
+                raise XTwscrapeIncompatible(
+                    "twscrape could not find a compatible X signing script"
+                ) from exc
+            if "logged-out x web app" in error_text or "authenticate" in error_text:
+                raise XSourceCookieInvalid("twscrape Cookie was rejected by X") from exc
+            raise XTwscrapeUnavailable(f"twscrape request failed: {error_name}") from exc
 
-        posts: list[XPostRecord] = []
+        posts_by_id: dict[str, XPostRecord] = {}
         for tweet in tweets:
             if tweet.user.username.casefold() != username.casefold():
                 continue
@@ -321,23 +349,25 @@ class TwscrapeProvider:
             quoted_photos.extend(
                 p.url for p in getattr(quoted_media, "photos", []) or [] if getattr(p, "url", None)
             )
-            posts.append(
-                XPostRecord(
-                    id=tweet.id_str,
-                    author_username=tweet.user.username,
-                    author_display_name=tweet.user.displayname,
-                    text=tweet.rawContent,
-                    url=tweet.url,
-                    published_at=tweet.date,
-                    is_repost=tweet.retweetedTweet is not None,
-                    is_reply=tweet.inReplyToTweetId is not None,
-                    photo_urls=photos,
-                    video_thumbnail_urls=videos,
-                    animated_thumbnail_urls=animated,
-                    quoted_photo_urls=quoted_photos,
-                )
+            record = XPostRecord(
+                id=tweet.id_str,
+                author_username=tweet.user.username,
+                author_display_name=tweet.user.displayname,
+                text=tweet.rawContent,
+                url=tweet.url,
+                published_at=tweet.date,
+                is_repost=tweet.retweetedTweet is not None,
+                is_reply=tweet.inReplyToTweetId is not None,
+                photo_urls=photos,
+                video_thumbnail_urls=videos,
+                animated_thumbnail_urls=animated,
+                quoted_photo_urls=quoted_photos,
             )
-        return posts
+            if not include_replies and record.is_reply:
+                continue
+            posts_by_id.setdefault(record.id, record)
+        posts = sorted(posts_by_id.values(), key=lambda post: (post.published_at, int(post.id)))
+        return posts[-max(1, min(limit, 100)) :]
 
     async def close(self) -> None:
         return None
@@ -367,12 +397,53 @@ class XSourceService:
     async def fetch_records(
         self, username: str, *, limit: int = 40, include_replies: bool = False
     ) -> list[XPostRecord]:
-        provider = self._rsshub if self.provider_name == "rsshub" else self._twscrape
-        return await provider.fetch(
-            username,
-            limit=max(1, min(limit, 100)),
-            include_replies=include_replies,
+        result = await self.fetch_with_status(
+            username, limit=limit, include_replies=include_replies
         )
+        return result.records
+
+    async def fetch_with_status(
+        self, username: str, *, limit: int = 40, include_replies: bool = False
+    ) -> XSourceFetchResult:
+        provider = self._rsshub if self.provider_name == "rsshub" else self._twscrape
+        bounded_limit = max(1, min(limit, 100))
+        if self.provider_name != "twscrape":
+            return XSourceFetchResult(
+                records=await provider.fetch(
+                    username,
+                    limit=bounded_limit,
+                    include_replies=include_replies,
+                ),
+                provider_used=self.provider_name,
+            )
+
+        try:
+            return XSourceFetchResult(
+                records=await self._twscrape.fetch(
+                    username,
+                    limit=bounded_limit,
+                    include_replies=include_replies,
+                ),
+                provider_used="twscrape",
+            )
+        except XSourceAccountError:
+            # A missing X user is not a provider outage and should not be
+            # hidden by a fallback route.
+            raise
+        except XSourceError as primary_error:
+            try:
+                fallback_records = await self._rsshub.fetch(
+                    username,
+                    limit=bounded_limit,
+                    include_replies=include_replies,
+                )
+            except XSourceError as fallback_error:
+                raise XSourcesUnavailable(primary_error, fallback_error) from fallback_error
+            return XSourceFetchResult(
+                records=fallback_records,
+                provider_used="rsshub",
+                degraded_error=primary_error,
+            )
 
     async def timeline(
         self, username: str, *, limit: int = 40, include_replies: bool = False

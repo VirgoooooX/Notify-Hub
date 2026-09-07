@@ -9,12 +9,16 @@ import pytest
 from app.application.x_source_service import (
     RssHubProvider,
     TwscrapeProvider,
+    XSourceFetchResult,
+    XSourceService,
     parse_rsshub_feed,
 )
 from app.config import Settings
 from app.domain.x_source import (
     XSourceAccountError,
+    XSourceCookieInvalid,
     XSourceParseError,
+    XSourcesUnavailable,
     XSourceUnavailable,
 )
 
@@ -130,6 +134,128 @@ async def test_platform_twscrape_provider_uses_platform_cookie_without_logging_i
     provider = TwscrapeProvider(cookie)
     assert await provider.fetch("thsottiaux", limit=10, include_replies=False) == []
     api.pool.add_account_cookies.assert_awaited_once_with("notify-hub", cookie)
+
+
+@pytest.mark.asyncio
+async def test_twscrape_provider_deduplicates_filters_replies_and_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    user = SimpleNamespace(username="thsottiaux", displayname="Thsottiaux")
+
+    def tweet(post_id: str, *, seconds: int, reply: bool = False) -> SimpleNamespace:
+        return SimpleNamespace(
+            id_str=post_id,
+            user=user,
+            rawContent=f"post {post_id}",
+            url=f"https://x.com/thsottiaux/status/{post_id}",
+            date=datetime(2026, 8, 25, 8, 0, seconds, tzinfo=UTC),
+            retweetedTweet=None,
+            inReplyToTweetId="reply" if reply else None,
+            media=None,
+            quotedTweet=None,
+        )
+
+    api = MagicMock()
+    api.pool.add_account_cookies = AsyncMock()
+    api.user_by_login = AsyncMock(return_value=SimpleNamespace(id="123"))
+    api.user_tweets = MagicMock()
+    monkeypatch.setattr("twscrape.API", MagicMock(return_value=api))
+    monkeypatch.setattr(
+        "twscrape.gather",
+        AsyncMock(
+            return_value=[
+                tweet("3", seconds=3),
+                tweet("1", seconds=1),
+                tweet("1", seconds=1),
+                tweet("2", seconds=2, reply=True),
+            ]
+        ),
+    )
+
+    posts = await TwscrapeProvider("auth_token=test; ct0=test").fetch(
+        "thsottiaux", limit=2, include_replies=False
+    )
+
+    assert [post.id for post in posts] == ["1", "3"]
+    api.user_tweets.assert_called_once_with("123", limit=2)
+
+
+@pytest.mark.asyncio
+async def test_twscrape_primary_falls_back_to_rsshub_once() -> None:
+    class FakeProvider:
+        def __init__(self, value: object) -> None:
+            self.value = value
+            self.calls = 0
+
+        async def fetch(self, *_args: object, **_kwargs: object) -> list[object]:
+            self.calls += 1
+            if isinstance(self.value, Exception):
+                raise self.value
+            return self.value  # type: ignore[return-value]
+
+        async def close(self) -> None:
+            return None
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        jwt_secret="test-secret-that-is-long-enough-for-jwt",
+        x_source_provider="twscrape",
+        x_twscrape_cookie="auth_token=test; ct0=test",
+    )
+    service = XSourceService(settings)
+    primary = FakeProvider(XSourceCookieInvalid("Cookie rejected"))
+    fallback = FakeProvider([])
+    service._twscrape = primary  # type: ignore[assignment]
+    service._rsshub = fallback  # type: ignore[assignment]
+    try:
+        result = await service.fetch_with_status("thsottiaux", limit=40)
+    finally:
+        await service.close()
+
+    assert isinstance(result, XSourceFetchResult)
+    assert result.provider_used == "rsshub"
+    assert result.degraded_error is not None
+    assert result.degraded_error.code == "x_source_cookie_invalid"
+    assert primary.calls == 1
+    assert fallback.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_twscrape_and_rsshub_failure_is_typed() -> None:
+    class FailingProvider:
+        def __init__(self, error: Exception) -> None:
+            self.error = error
+
+        async def fetch(self, *_args: object, **_kwargs: object) -> list[object]:
+            raise self.error
+
+        async def close(self) -> None:
+            return None
+
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        jwt_secret="test-secret-that-is-long-enough-for-jwt",
+        x_source_provider="twscrape",
+        x_twscrape_cookie="auth_token=test; ct0=test",
+    )
+    service = XSourceService(settings)
+    service._twscrape = FailingProvider(XSourceCookieInvalid("Cookie rejected"))  # type: ignore[assignment]
+    service._rsshub = FailingProvider(XSourceUnavailable("RSSHub down"))  # type: ignore[assignment]
+    try:
+        with pytest.raises(XSourcesUnavailable) as caught:
+            await service.fetch_with_status("thsottiaux")
+    finally:
+        await service.close()
+
+    assert caught.value.code == "x_sources_unavailable"
+    assert caught.value.primary_code == "x_source_cookie_invalid"
+    assert caught.value.fallback_code == "x_source_unavailable"
 
 
 @pytest.mark.asyncio

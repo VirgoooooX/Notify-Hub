@@ -43,6 +43,41 @@ class XSourceUnavailable(XSourceError):
     code = "x_source_unavailable"
 
 
+class XSourceCookieInvalid(XSourceError):
+    """The configured X Cookie was rejected or is not usable."""
+
+    code = "x_source_cookie_invalid"
+    retryable = False
+    alert_immediately = True
+
+
+class XTwscrapeIncompatible(XSourceError):
+    """The installed twscrape version no longer matches X's web client."""
+
+    code = "x_twscrape_incompatible"
+    alert_immediately = True
+
+
+class XTwscrapeUnavailable(XSourceUnavailable):
+    """twscrape could not complete a request for a transient reason."""
+
+    code = "x_twscrape_unavailable"
+
+
+class XSourcesUnavailable(XSourceUnavailable):
+    """Both the configured primary source and the RSSHub fallback failed."""
+
+    code = "x_sources_unavailable"
+    alert_immediately = True
+
+    def __init__(self, primary: XSourceError, fallback: XSourceError) -> None:
+        self.primary_code = primary.code
+        self.fallback_code = fallback.code
+        super().__init__(
+            f"primary X source failed ({primary.code}); RSSHub fallback failed ({fallback.code})"
+        )
+
+
 class XSourceRateLimited(XSourceError):
     code = "x_source_rate_limited"
 

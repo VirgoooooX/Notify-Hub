@@ -12,7 +12,7 @@ from .decision_prompt import (
     build_article_content,
     build_classification_content,
 )
-from .matcher import match_post
+from .matcher import detect_reset_kind, match_post
 from .schemas import (
     PLUGIN_API_VERSION,
     PLUGIN_ID,
@@ -98,7 +98,7 @@ class CodexXMonitorPlugin:
         source = self._sources[config.source]
         posts = sorted(await source.fetch(context, config), key=_post_sort_key)
         raw_state = await context.get_state(STATE_KEY, None)
-        state = MonitorState.model_validate(raw_state or {})
+        state = MonitorState.from_raw(raw_state, posts, max_recent_ids=MAX_RECENT_PROCESSED_IDS)
 
         if state.last_seen_post_id is None and config.first_run_mode == "baseline":
             if posts:
@@ -180,7 +180,10 @@ class CodexXMonitorPlugin:
                 summary = format_post_summary(post)
                 content = summary
                 article_ai_status = "rules_summary"
-                event_title = "Codex 用量可能已重置"
+                reset_kind = result.reset_kind or detect_reset_kind(post.text) or "direct"
+                event_title = (
+                    "Codex 可储存重置额度更新" if reset_kind == "banked" else "Codex 用量重置更新"
+                )
                 if config.publish_to_official_account and config.article_ai_profile:
                     try:
                         article_content = build_article_content(post, posts)
@@ -230,6 +233,7 @@ class CodexXMonitorPlugin:
                             "rule_confidence": result.confidence,
                             "rule_ai_threshold": config.rule_ai_threshold,
                             "source": config.source,
+                            "reset_kind": reset_kind,
                             "decision_mode": config.decision_mode,
                             "ai_label": getattr(ai_decision, "label", None),
                             "ai_confidence": getattr(ai_decision, "confidence", None),
@@ -275,10 +279,12 @@ class CodexXMonitorPlugin:
     @staticmethod
     def _new_candidates(posts: list[XPost], state: MonitorState) -> list[XPost]:
         recent = set(state.recent_processed_ids)
-        if state.last_seen_post_id is None:
-            return [post for post in posts if post.id not in recent]
-        cursor = int(state.last_seen_post_id)
-        return [post for post in posts if post.id not in recent and int(post.id) > cursor]
+        return [
+            post
+            for post in posts
+            if post.id not in recent
+            and (state.migration_cutoff_at is None or post.published_at > state.migration_cutoff_at)
+        ]
 
     async def _checkpoint(
         self,
@@ -287,8 +293,10 @@ class CodexXMonitorPlugin:
         post: XPost,
         source: str,
     ) -> None:
-        state.last_seen_post_id = post.id
-        state.last_seen_published_at = post.published_at
+        if state.last_seen_post_id is None or int(post.id) > int(state.last_seen_post_id):
+            state.last_seen_post_id = post.id
+        if state.last_seen_published_at is None or post.published_at > state.last_seen_published_at:
+            state.last_seen_published_at = post.published_at
         state.last_source = source  # type: ignore[assignment]
         state.recent_processed_ids = (
             [item for item in state.recent_processed_ids if item != post.id] + [post.id]

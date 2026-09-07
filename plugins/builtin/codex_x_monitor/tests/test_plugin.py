@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -262,7 +262,7 @@ def test_publish_to_official_account_emits_publish_event_with_ai_summary() -> No
     summarize_call = context.ai.calls[-1]
     assert summarize_call["profile"] == "article_summarizer"
     assert "target_post" in summarize_call["content"]
-    assert "你是一位在前沿一线冲浪的科技博主" in summarize_call["instruction"]
+    assert "正常、克制、口语化" in summarize_call["instruction"]
 
 
 def test_publish_ai_summary_failure_falls_back_to_deterministic_summary() -> None:
@@ -424,7 +424,7 @@ def test_matcher_confidently_filters_reset_questions_without_ai() -> None:
     assert result.matched is False
     assert result.confidence == 0.99
     assert result.excluded_by == (
-        r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+reset\b",
+        r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+(?:\w+\s+){0,4}reset\b",
     )
 
 
@@ -447,6 +447,74 @@ def test_matcher_recognizes_historical_reseted_brand_new_usage_signal() -> None:
 
     assert result.matched is True
     assert result.confidence >= config.rule_ai_threshold
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_kind"),
+    [
+        ("Got you covered with a banked reset. Lands by end of day.", "banked"),
+        ("We will send a reset card to paid users today.", "banked"),
+    ],
+)
+def test_matcher_accepts_explicit_banked_reset_mechanisms_without_codex_context(
+    text: str, expected_kind: str
+) -> None:
+    config = CodexXMonitorConfig.model_validate(BASE_CONFIG)
+    post = XPost.model_validate(
+        {
+            "id": "2096000000000000000",
+            "author_username": "thsottiaux",
+            "text": text,
+            "url": "https://x.com/thsottiaux/status/2096000000000000000",
+            "published_at": "2026-08-27T12:00:00Z",
+        }
+    )
+
+    result = match_post(post, config)
+
+    assert result.matched is True
+    assert result.reset_kind == expected_kind
+    assert result.confidence >= config.rule_ai_threshold
+
+
+def test_v1_state_migration_does_not_replay_old_posts_or_lower_high_water_mark() -> None:
+    old = _post(1).model_copy(
+        update={
+            "id": "98",
+            "published_at": datetime(2026, 8, 25, 7, 59, tzinfo=UTC),
+        }
+    )
+    cursor = _post(1).model_copy(
+        update={
+            "id": "100",
+            "published_at": datetime(2026, 8, 25, 8, 0, tzinfo=UTC),
+        }
+    )
+    late_new = _post(1).model_copy(
+        update={
+            "id": "99",
+            "published_at": datetime(2026, 8, 25, 8, 1, tzinfo=UTC),
+        }
+    )
+    context = FakeContext(
+        BASE_CONFIG,
+        [],
+        state={
+            "schema_version": 1,
+            "last_seen_post_id": "100",
+            "last_seen_published_at": "2026-08-25T08:00:00Z",
+            "recent_processed_ids": ["100"],
+        },
+    )
+
+    source = FakePostSource([old, cursor, late_new])
+    result = asyncio.run(CodexXMonitorPlugin({"rss": source}).run(context))
+
+    assert result.new_posts == 1
+    assert [event.event_key for event in context.events] == ["x-post-99"]
+    assert context.states[STATE_KEY]["schema_version"] == 2
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "100"
+    assert context.states[STATE_KEY]["migration_cutoff_at"] == "2026-08-25T08:00:00Z"
 
 
 def test_matcher_excludes_explicit_but_no_retraction() -> None:
@@ -521,8 +589,9 @@ def test_ai_prompt_contains_account_history_and_neighboring_posts() -> None:
     assert ai.calls
     call = ai.calls[0]
     assert call["instruction"] == RESET_CLASSIFICATION_INSTRUCTION
-    assert "最近约 150 条历史帖" in call["instruction"]
-    assert "brand new usage" in call["instruction"]
+    assert "不要因为账号过去经常发布类似内容就自动通知" in call["instruction"]
+    assert "banked reset" in call["instruction"]
+    assert "reset card" in call["instruction"]
     item_payload = json.loads(call["items"][0].content)
     assert item_payload["target_post"]["id"] == "2"
     assert [post["id"] for post in item_payload["nearby_posts"]] == ["1", "3"]

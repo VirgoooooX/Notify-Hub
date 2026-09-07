@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any, Literal, Protocol, runtime_checkable
 
@@ -12,7 +12,7 @@ from plugins.shared.x_monitor.models import XPost as XPost
 
 PLUGIN_ID = "codex_x_monitor"
 PLUGIN_API_VERSION = "1"
-PLUGIN_VERSION = "0.6.0"
+PLUGIN_VERSION = "0.6.1"
 STATE_KEY = "monitor_state"
 
 DEFAULT_CONTEXT_PATTERNS = [
@@ -37,8 +37,9 @@ DEFAULT_POSITIVE_PATTERNS = [
     r"\bone\s+button\s+press\b",
 ]
 BUILTIN_QUESTION_PATTERNS = [
-    r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+reset\b",
+    r"\b(?:should|could|would|can|shall|do)\s+(?:we|i|you|they)\s+(?:\w+\s+){0,4}reset\b",
     r"\b(?:considering|debating|discussing|thinking\s+about)\s+(?:a\s+)?reset\b",
+    r"\b(?:is|was|are)\s+(?:this|that|it)\s+(?:a\s+)?reset\s+card\b",
 ]
 DEFAULT_NEGATIVE_PATTERNS = [
     r"\bnot\s+(?:been\s+)?reset\b",
@@ -175,12 +176,54 @@ class EventDraft(BaseModel):
 
 
 class MonitorState(BaseModel):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     last_seen_post_id: str | None = None
     last_seen_published_at: datetime | None = None
     recent_processed_ids: list[str] = Field(default_factory=list)
     last_success_at: datetime | None = None
     last_source: Literal["rsshub", "rss", "x_api", "twscrape"] | None = None
+    migration_cutoff_at: datetime | None = None
+
+    @classmethod
+    def from_raw(
+        cls,
+        raw: Any,
+        posts: Sequence[XPost],
+        *,
+        max_recent_ids: int = 200,
+    ) -> MonitorState:
+        """Load v1 state and mark the already-scanned time window as seen.
+
+        v1 used a numeric high-water mark as the only eligibility test. During
+        a source switch, a post can arrive late with a lower ID, so v2 keeps a
+        bounded set of processed IDs instead. Existing posts at or before the
+        old timestamp are migration history, not new notifications.
+        """
+
+        if not isinstance(raw, Mapping):
+            return cls()
+        raw_version = raw.get("schema_version", 1)
+        normalized = dict(raw)
+        normalized["schema_version"] = 2
+        state = cls.model_validate(normalized)
+        if raw_version == 1:
+            if state.last_seen_published_at is not None:
+                state.migration_cutoff_at = state.last_seen_published_at
+                migrated_ids = [
+                    post.id for post in posts if post.published_at <= state.last_seen_published_at
+                ]
+            elif state.last_seen_post_id is not None:
+                # Very old rows may not have persisted the timestamp. In that
+                # case retain the old numeric-cursor behavior for this one
+                # migration instead of replaying the current feed.
+                cursor = int(state.last_seen_post_id)
+                migrated_ids = [post.id for post in posts if int(post.id) <= cursor]
+            else:
+                migrated_ids = []
+            state.recent_processed_ids = list(
+                dict.fromkeys([*state.recent_processed_ids, *migrated_ids])
+            )[-max_recent_ids:]
+        return state
 
 
 class PluginRunResult(BaseModel):

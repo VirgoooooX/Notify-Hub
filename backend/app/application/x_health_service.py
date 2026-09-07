@@ -5,7 +5,11 @@ from datetime import datetime
 from typing import Protocol
 
 from app.application.event_service import EventService
-from app.application.x_source_service import XHealthTarget, XSourceService
+from app.application.x_source_service import (
+    XHealthTarget,
+    XSourceFetchResult,
+    XSourceService,
+)
 from app.config import Settings
 from app.domain.clock import Clock
 from app.domain.x_source import XPostRecord, XSourceAccountError, XSourceError
@@ -23,6 +27,8 @@ class _FetchResult:
     target: XHealthTarget
     posts: list[XPostRecord]
     error: XSourceError | None = None
+    degraded_error: XSourceError | None = None
+    provider_used: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +42,7 @@ class _Decision:
     error_message: str | None = None
     latest_post_at: datetime | None = None
     consecutive_failures: int = 0
+    provider_used: str | None = None
 
 
 class XHealthService:
@@ -68,11 +75,13 @@ class XHealthService:
             for result in results
             if result.error is not None and not isinstance(result.error, XSourceAccountError)
         ]
+        degraded_results = [result for result in results if result.degraded_error is not None]
         # A single account-level 404 must not page the whole provider. If every
         # target failed, however, any provider-level failure in the batch is
         # evidence that the shared source is unhealthy, even when another target
         # independently returned an account-level error.
         source_failed = all_failed and bool(source_errors)
+        source_degraded = bool(degraded_results) and not source_failed
         decisions: list[_Decision] = []
         for result in results:
             decisions.append(await self._record_account(result, suppress_alert=source_failed))
@@ -81,6 +90,11 @@ class XHealthService:
             first_error = source_errors[0]
             assert first_error is not None
             source_decision = await self._record_source_failure(first_error)
+            decisions.append(source_decision)
+        elif source_degraded:
+            degraded_error = degraded_results[0].degraded_error
+            assert degraded_error is not None
+            source_decision = await self._record_source_degraded(degraded_error)
             decisions.append(source_decision)
         else:
             source_decision = await self._record_source_success()
@@ -115,13 +129,28 @@ class XHealthService:
                 content = "X 数据源已连续成功获取，监控已恢复正常。"
                 event_type = "system.x_source_recovered"
                 level = "info"
-            elif decision.scope_type == "provider":
-                title = f"X 数据源 {self._source.provider_name} 获取失败"
+            elif decision.kind == "degraded" and decision.scope_type == "provider":
+                title = "X 主数据源异常，已自动切换 RSSHub"
                 content = (
-                    f"{self._source.provider_name} 连续获取失败 "
-                    f"{decision.consecutive_failures} 次，"
-                    "X 监控账号可能无法及时获取新推文。"
+                    f"twscrape {self._error_summary(decision.error_code)}，"
+                    "当前暂由 RSSHub 获取推文；请尽快检查 Cookie 或版本。"
                 )
+                event_type = "system.x_source_degraded"
+                level = "warning"
+            elif decision.scope_type == "provider":
+                if decision.error_code == "x_sources_unavailable":
+                    title = "X 数据源全部不可用"
+                    content = (
+                        "twscrape 和 RSSHub 都无法获取推文，X 监控暂时无法继续；"
+                        "请检查网络、Cookie 和 RSSHub。"
+                    )
+                else:
+                    title = f"X 数据源 {self._source.provider_name} 获取失败"
+                    content = (
+                        f"{self._source.provider_name} 连续获取失败 "
+                        f"{decision.consecutive_failures} 次，"
+                        "X 监控账号可能无法及时获取新推文。"
+                    )
                 event_type = "system.x_source_unavailable"
                 level = "critical"
             elif decision.kind == "recovered":
@@ -158,6 +187,7 @@ class XHealthService:
                     "error_message": decision.error_message,
                     "consecutive_failures": decision.consecutive_failures,
                     "incident_id": decision.incident_id,
+                    "provider_used": decision.provider_used,
                 },
             )
             await self._mark_alert(decision, self._clock.now())
@@ -167,12 +197,29 @@ class XHealthService:
 
     async def _fetch(self, target: XHealthTarget) -> _FetchResult:
         try:
-            posts = await self._source.fetch_records(
+            fetch_with_status = getattr(self._source, "fetch_with_status", None)
+            if fetch_with_status is None:
+                posts = await self._source.fetch_records(
+                    target.username,
+                    limit=target.fetch_limit,
+                    include_replies=target.include_replies,
+                )
+                return _FetchResult(
+                    target=target,
+                    posts=posts,
+                    provider_used=self._source.provider_name,
+                )
+            result: XSourceFetchResult = await fetch_with_status(
                 target.username,
                 limit=target.fetch_limit,
                 include_replies=target.include_replies,
             )
-            return _FetchResult(target=target, posts=posts)
+            return _FetchResult(
+                target=target,
+                posts=result.records,
+                degraded_error=result.degraded_error,
+                provider_used=result.provider_used,
+            )
         except XSourceError as exc:
             return _FetchResult(target=target, posts=[], error=exc)
         except Exception as exc:
@@ -182,6 +229,53 @@ class XHealthService:
                 target=target,
                 posts=[],
                 error=XSourceError(f"unexpected X source error: {type(exc).__name__}"),
+            )
+
+    async def _record_source_degraded(self, error: XSourceError) -> _Decision:
+        key = self._provider_key()
+        async with self._factory() as session, session.begin():
+            row = await self._get_or_create(session, key, scope_type="provider", username=None)
+            now = self._clock.now()
+            row.updated_at = now
+            row.consecutive_failures += 1
+            row.consecutive_successes = 0
+            row.last_failure_at = now
+            row.last_error_code = error.code
+            row.last_error_message = str(error)[:500]
+            if row.first_failure_at is None:
+                row.first_failure_at = now
+            if row.status != "incident":
+                row.status = "incident"
+                row.incident_id = new_id("xinc")
+                row.incident_started_at = now
+            if (
+                row.last_alert_at is None
+                or (now - row.last_alert_at).total_seconds()
+                >= self._settings.x_health_repeat_interval_seconds
+            ):
+                return _Decision(
+                    key,
+                    "provider",
+                    "degraded",
+                    row.incident_id,
+                    None,
+                    error.code,
+                    str(error)[:500],
+                    None,
+                    row.consecutive_failures,
+                    "rsshub",
+                )
+            return _Decision(
+                key,
+                "provider",
+                "none",
+                row.incident_id,
+                None,
+                error.code,
+                str(error)[:500],
+                None,
+                row.consecutive_failures,
+                "rsshub",
             )
 
     async def _record_account(self, result: _FetchResult, *, suppress_alert: bool) -> _Decision:
@@ -346,9 +440,9 @@ class XHealthService:
             row.last_error_message = str(error)[:500]
             if row.first_failure_at is None:
                 row.first_failure_at = now
-            if (
-                row.status != "incident"
-                and row.consecutive_failures >= self._settings.x_health_failure_threshold
+            immediate = bool(getattr(error, "alert_immediately", False))
+            if row.status != "incident" and (
+                immediate or row.consecutive_failures >= self._settings.x_health_failure_threshold
             ):
                 row.status = "incident"
                 row.incident_id = new_id("xinc")
@@ -453,7 +547,7 @@ class XHealthService:
             row.updated_at = now
             if decision.kind == "content_stale":
                 row.stale_last_alert_at = now
-            elif decision.kind in {"failure", "recovered"}:
+            elif decision.kind in {"degraded", "failure", "recovered"}:
                 row.last_alert_at = now
 
     def _event_key(self, decision: _Decision) -> str:
@@ -471,13 +565,23 @@ class XHealthService:
             )
             return f"x-health:{decision.scope_key}:content-stale:{bucket}"
         suffix = decision.incident_id or "pending"
-        if decision.kind == "failure":
+        if decision.kind in {"degraded", "failure"}:
             bucket = (
                 int(self._clock.now().timestamp())
                 // self._settings.x_health_repeat_interval_seconds
             )
-            return f"x-health:{decision.scope_key}:incident:{suffix}:{bucket}"
+            return f"x-health:{decision.scope_key}:{decision.kind}:{suffix}:{bucket}"
         return f"x-health:{decision.scope_key}:incident:{suffix}"
+
+    @staticmethod
+    def _error_summary(error_code: str | None) -> str:
+        return {
+            "x_source_cookie_invalid": "Cookie 无效或已失效",
+            "x_twscrape_incompatible": "版本与当前 X 页面不兼容",
+            "x_twscrape_unavailable": "暂时不可用",
+            "x_source_rate_limited": "触发了限流",
+            "x_source_unavailable": "暂时不可用",
+        }.get(error_code or "", "出现异常")
 
     def _account_key(self, username: str) -> str:
         return f"{self._source.provider_name}:account:{username.casefold()}"

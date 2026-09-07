@@ -9,9 +9,15 @@ from typing import Any
 import pytest
 from app.application.event_service import EventService
 from app.application.x_health_service import XHealthService
-from app.application.x_source_service import XHealthTarget
+from app.application.x_source_service import XHealthTarget, XSourceFetchResult
 from app.config import Settings
-from app.domain.x_source import XPostRecord, XSourceAccountError, XSourceUnavailable
+from app.domain.x_source import (
+    XPostRecord,
+    XSourceAccountError,
+    XSourceCookieInvalid,
+    XSourcesUnavailable,
+    XSourceUnavailable,
+)
 from app.infrastructure.database import Base
 from app.infrastructure.database.models import Delivery, Event, Notification, XSourceHealth
 from app.infrastructure.database.session import create_session_factory
@@ -37,6 +43,17 @@ class FakeSource:
     async def fetch_records(
         self, _username: str, *, limit: int, include_replies: bool
     ) -> list[Any]:
+        del limit, include_replies
+        value = self.values.pop(0)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+
+class FakeStatusSource(FakeSource):
+    async def fetch_with_status(
+        self, _username: str, *, limit: int, include_replies: bool
+    ) -> XSourceFetchResult:
         del limit, include_replies
         value = self.values.pop(0)
         if isinstance(value, Exception):
@@ -143,6 +160,80 @@ async def test_account_error_does_not_create_provider_incident(tmp_path: Path) -
     assert {row.scope_type for row in rows} == {"account", "provider"}
     assert next(row for row in rows if row.scope_type == "provider").status == "healthy"
     assert next(row for row in rows if row.scope_type == "account").status == "incident"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_primary_degradation_alerts_and_records_rsshub_fallback(tmp_path: Path) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'degraded.db').as_posix()}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        jwt_secret="test-secret-that-is-long-enough-for-jwt",
+        x_source_provider="twscrape",
+        x_twscrape_cookie="auth_token=test; ct0=test",
+        x_health_alert_recipient_ids=["person_admin"],
+        x_health_recovery_success_threshold=1,
+    )
+    events = FakeEvents()
+    source = FakeStatusSource(
+        [
+            XSourceFetchResult(
+                records=[post()],
+                provider_used="rsshub",
+                degraded_error=XSourceCookieInvalid("Cookie rejected"),
+            ),
+            XSourceFetchResult(records=[post()], provider_used="twscrape"),
+        ]
+    )
+
+    async def targets() -> list[XHealthTarget]:
+        return [XHealthTarget(plugin_id="codex_x_monitor", username="thsottiaux")]
+
+    service = XHealthService(factory, FakeClock(), events, source, targets, settings)  # type: ignore[arg-type]
+
+    assert await service.run_once() == 1
+    assert events.events[0]["event_type"] == "system.x_source_degraded"
+    assert events.events[0]["payload"]["error_code"] == "x_source_cookie_invalid"
+    assert events.events[0]["payload"]["provider_used"] == "rsshub"
+    assert await service.run_once() == 1
+    assert events.events[1]["event_type"] == "system.x_source_recovered"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_both_sources_unavailable_alerts_without_waiting_for_threshold(
+    tmp_path: Path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{(tmp_path / 'both-down.db').as_posix()}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    settings = Settings(
+        _env_file=None,
+        environment="test",
+        database_url="sqlite+aiosqlite:///:memory:",
+        jwt_secret="test-secret-that-is-long-enough-for-jwt",
+        x_health_failure_threshold=3,
+        x_health_alert_recipient_ids=["person_admin"],
+    )
+    events = FakeEvents()
+    source = FakeSource(
+        [XSourcesUnavailable(XSourceCookieInvalid("bad"), XSourceUnavailable("down"))]
+    )
+
+    async def targets() -> list[XHealthTarget]:
+        return [XHealthTarget(plugin_id="codex_x_monitor", username="thsottiaux")]
+
+    service = XHealthService(factory, FakeClock(), events, source, targets, settings)  # type: ignore[arg-type]
+
+    assert await service.run_once() == 1
+    assert events.events[0]["event_type"] == "system.x_source_unavailable"
+    assert events.events[0]["payload"]["error_code"] == "x_sources_unavailable"
     await engine.dispose()
 
 

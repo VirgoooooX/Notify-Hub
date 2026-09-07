@@ -28,13 +28,14 @@ services:
       NOTIFY_HUB_WECOM_CALLBACK_TOKEN: "${NOTIFY_HUB_WECOM_CALLBACK_TOKEN:-}"
       NOTIFY_HUB_WECOM_CALLBACK_AES_KEY: "${NOTIFY_HUB_WECOM_CALLBACK_AES_KEY:-}"
 
-      # 4. X source integration. RSSHub owns the X Cookie/auth_token.
+      # 4. X source integration. Production may use twscrape as primary;
+      # the application falls back to RSSHub once and emits a health alert.
       NOTIFY_HUB_X_SOURCE_PROVIDER: "${NOTIFY_HUB_X_SOURCE_PROVIDER:-rsshub}"
       NOTIFY_HUB_RSSHUB_BASE_URL: "${NOTIFY_HUB_RSSHUB_BASE_URL:-http://rsshub:1200}"
       NOTIFY_HUB_RSSHUB_ACCESS_KEY: "${NOTIFY_HUB_RSSHUB_ACCESS_KEY:-}"
       NOTIFY_HUB_X_HEALTH_ALERT_ENABLED: "${NOTIFY_HUB_X_HEALTH_ALERT_ENABLED:-true}"
       NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS: "${NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS:-[]}"
-      # Optional cold standby. Leave empty while RSSHub is healthy.
+      # Required when NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape.
       NOTIFY_HUB_X_TWSCRAPE_COOKIE: "${NOTIFY_HUB_X_TWSCRAPE_COOKIE:-}"
       # Bounded source-image download limit; output remains capped at 2 MiB.
       NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES: "${NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES:-16777216}"
@@ -110,4 +111,3 @@ services:
 
 volumes:
   mp-browser-data:
-

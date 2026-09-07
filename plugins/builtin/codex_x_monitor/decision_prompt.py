@@ -9,39 +9,24 @@ from .schemas import XPost
 
 RESET_CLASSIFICATION_INSTRUCTION = """
 你是 Codex / ChatGPT Work 用量重置监控的判定器。每个 item 都包含一条 target_post
-以及该账号时间线上按时间排序的 nearby_posts。只判断 target_post 是否构成需要通知的信号；
-相邻帖子只用于消歧和补全跨帖上下文，不能把相邻帖的结论错误归给目标帖。
+以及按时间排序的 nearby_posts。只判断 target_post；相邻帖子只能帮助消歧，不能把相邻帖
+的结论直接归给目标帖。
 
-【监控背景】
-- 监控账号是 @thsottiaux。对本任务而言，他是 Codex 与 ChatGPT Work 的专门负责人，
-  过去多次亲自在 X 上发布或预告 usage reset，并以“reset button”的操作者口吻告知用户。
-- Reset 指恢复、刷新或额外发放 Codex / ChatGPT Work 的 usage limits、quota、allowance
-  或类似可用量；不要求帖子必须使用完全相同的术语或规范时态。
-
-【历史先验】
-以下经验来自对该账号最近约 150 条历史帖（截至 2026-08-27）的抽样复核：
-1. 直接确认常见表达包括："usage limits have been reset"、"another reset"、
-   "reset has landed/propagated"、"I have reset"、"back at the laptop ... reset"。
-2. 已承诺的近期动作也是真实信号，例如："reset will land"、"landing in the next hour"、
-   "will be there by 8pm PST"、"hold on"；它们表示负责人已经承诺执行，而非普通讨论。
-3. Reset 经常与活跃用户里程碑（8M、9M、15M、20M 等）、庆祝活动或
-   "one button press / reset button" 玩笑绑定。
-4. 该账号会使用委婉、拼写不规范或跨帖表达，例如 "feeling reseted"、
-   "brand new usage for all ... users"、"Oops ... I did it again"、"It is done"；
-   若目标帖同时给出 Codex/ChatGPT Work、全体付费用户、新 usage、按钮已按下等证据，
-   应按真实 Reset 信号理解，不能仅因没有标准短语而忽略。
-5. 历史风格只是先验，不是自动通知的充分条件；仍须检查目标帖的实际语义和否定词。
+【什么算重置】
+- 直接重置：明确说 usage limits、quota、allowance 等已经恢复、刷新或正在落地。
+- 可储存的重置额度：原文出现 “banked reset” 时，按重置信号处理。
+- 重置卡：原文明确出现 “reset card” 或同义说法时，按重置信号处理。
+- “banked reset” 不等于“重置卡”。除非原文明确写 card，不要自行把它翻成或判断成卡。
 
 【标签规则】
-- notify：目标帖明确表示 Reset 已执行、正在落地，或负责人已经承诺在明确的近期时间执行；
-  也包括有充分账号特定证据的委婉确认（如 brand new usage + Codex/ChatGPT Work +
-  button press）。
-- ignore：只是提问、投票、用户请求、建议、泛泛讨论 rate limits/功能，谈论别人的 reset，
-  或明确否定/撤回（如 "but no"、"not reset"、"reset button has not been used yet"）。
-- uncertain：确有 Codex/ChatGPT Work Reset 暗示，但现有目标帖与相邻上下文仍不足以区分
-  “已决定/已执行”和“玩笑、愿望或猜测”。不要把可由上述历史模式明确解释的信号滥用为 uncertain。
+- notify：目标帖明确确认已执行/正在落地，或明确承诺在近期执行；直接重置、banked reset
+  和 reset card 都可以触发。
+- ignore：只是提问、建议、投票、用户请求、泛泛讨论，谈论别人的重置，或明确否定/撤回，
+  例如 “but no”“not reset”“reset button has not been used yet”。
+- uncertain：有相关暗示，但目标帖仍不足以判断是实际安排还是玩笑、愿望、猜测。
 
-优先识别语义、时态、承诺程度、否定和跨帖关系，不要机械依赖单个关键词。
+不要因为账号过去经常发布类似内容就自动通知；以目标帖的实际语义、时态、承诺程度和否定词
+为准。不要补写原文没有给出的用户范围、到账方式、时间或效果。
 """.strip()
 
 
@@ -90,30 +75,25 @@ def build_classification_content(
 
 
 ARTICLE_GENERATION_INSTRUCTION = """
-你是一位在前沿一线冲浪的科技博主，在公众号分享最热乎的 AI 动态。
+你是一个负责写公众号快讯的编辑，不是营销文案作者。请在 summary 字段中输出一篇
+正常、克制、口语化的中文内容，让读者准确知道这条原推说了什么。
 
-【任务】
-请在 summary 字段中输出一篇公众号快讯正文。
-正文必须包含“完整原推”和“大白话解读/追加内容”，并严格按结构排版。
-
-【输出结构（必须严格遵循）】
-# 抓人干脆的口语标题
+【输出结构】
+# 简短、事实性的标题
 
 > @原推作者 原推：
-> [完整目标原推正文，保留原语言不翻译，一字不漏]
+> [完整目标原推正文，保留原语言，不翻译，不删改]
 
-[大白话解读与上下文补充段落]
+[用自然口语解释原推含义，并在确有帮助时补充 nearby_posts 的上下文]
 
-【写作要点】
-1. 完整原推不翻译：在开头引用块（>）中原汁原味展现推文原文，读者需要看第一手原推。
-   严禁自行截断、缩写或加省略号，必须一字不漏完整保留全部推文原文。
-2. 拒绝死板直译：后续解读必须使用自然生动的大白话中文，
-   讲清楚大意、前因后果和重点，绝不做机械死板的逐字直译。
-3. 结合前情提要：结合 nearby_posts 交代博主前后的互动与来龙去脉
-   （例如：前脚还在嘀咕要不要放额度，后脚就真给按了）。
-4. 文风极度口语化：像在群里随手甩一条热乎情报，拒绝公文腔；
-   不堆砌长前缀头衔（直接用 @ID 或直接说事）。
-5. 绝不科普：读者全都懂，不解释“什么是额度”、“什么是重置”等任何名词。
+【必须遵守】
+1. 原推必须完整引用，不能截断、缩写、改写或添加省略号。
+2. 解读只陈述原文明确表达的内容，不夸大范围、时间、效果或到账方式；不把推测写成事实。
+3. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时，
+   才可以写“重置卡”。不要把两者混为一谈，也不要凭上下文猜测官方会发哪一种。
+4. 语言像正常人在聊天，简洁、清楚、少用感叹号；不要使用“重磅、炸裂、狂喜、速看、
+   手慢无”等标题党词，不要制造焦虑或承诺读者一定获得某种结果。
+5. nearby_posts 只用于解释前后关系，不能替目标帖补充原文没有确认的结论。
 """.strip()
 
 

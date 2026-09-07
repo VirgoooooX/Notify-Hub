@@ -40,31 +40,32 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 
 ### 2.3 X 数据源与健康告警
 
-Notify Hub 的 X 时间线是平台能力，不是插件私有网络配置。生产默认使用 RSSHub：
+Notify Hub 的 X 时间线是平台能力，不是插件私有网络配置。通用默认值仍是 RSSHub；当前 iStoreOS 部署使用 twscrape 主抓，失败时由平台单次降级到 RSSHub：
 
 ```dotenv
-NOTIFY_HUB_X_SOURCE_PROVIDER=rsshub
+NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape
 NOTIFY_HUB_RSSHUB_BASE_URL=http://rsshub:1200
+NOTIFY_HUB_X_TWSCRAPE_COOKIE=<受控配置中的 Cookie>
 NOTIFY_HUB_RSSHUB_ACCESS_KEY=
 NOTIFY_HUB_X_HEALTH_ALERT_ENABLED=true
 NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS=["person_admin"]
 ```
 
-- RSSHub 自己维护 X Cookie/auth_token；Notify Hub 只请求 RSSHub 的规范化用户时间线，不在插件配置或普通日志中保存 X Cookie。
+- twscrape 使用平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE`；Cookie 不进入插件配置、事件 payload 或普通日志。twscrape 失败后只请求一次 RSSHub，不运行双轮正常轮询。
 - `NOTIFY_HUB_X_HEALTH_ALERT_RECIPIENT_IDS` 是 Notify Hub 内部 Person ID 的 JSON 数组，不是企业微信 `@all`。为空时仍会记录健康状态，但不会创建告警投递；不会隐式广播。
-- 健康 Worker 独立于插件调度和插件熔断运行，默认每 300 秒检查所有启用且声明 `x_source` 权限的 X 插件账号。连续 3 次失败后告警；故障期间按重复间隔提醒；连续 2 次成功后发送恢复通知。状态落在 `x_source_health`，重启可恢复。
+- 健康 Worker 独立于插件调度运行，默认每 300 秒检查所有启用且声明 `x_source` 权限的 X 插件账号。主源降级成功时首次就告警；两边都失败时立即告警；重复告警按重复间隔控制；连续 2 次直接成功后发送恢复通知。状态落在 `x_source_health`，重启可恢复。
 - 账号不存在、账号级 HTTP 错误只产生账号告警，不误报 RSSHub 整体故障；RSSHub 超时、5xx、限流或解析失败才会进入数据源级状态。
 - 可选的内容静默检查只表示“请求成功但长时间没有新推文”，不等价于数据源故障。默认关闭，可用平台默认值或插件字段开启。
 - 外部插件图片默认最多下载 16 MiB，随后会在落盘前缩放/压缩到企业微信 2 MiB 媒体上限；`NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES` 只能在有界范围内调整，不能改成无限制下载。
-- twscrape 仍保留为冷备，但不自动切换。只有显式部署 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape` 并提供平台级 `NOTIFY_HUB_X_TWSCRAPE_COOKIE` 才会启用；验证完成后要显式切回 RSSHub。
+- Cookie 无效、twscrape 与 X 页面不兼容、twscrape 暂时不可用和两边都不可用分别使用稳定错误码；告警内容会说明应更新 Cookie、检查版本/网络，还是同时检查 RSSHub。
 - 仓库中的 X 诊断脚本也通过平台级 Provider 运行；`scripts/set_plugin_secret.py` 仅显示当前平台源状态，不再写入插件级 Cookie Secret。
 
 排查顺序：
 
-1. 先检查 RSSHub 自身路由是否能返回 200 和有效条目；不要先更新 Notify Hub 的 Cookie：`curl --fail --silent http://127.0.0.1:1200/twitter/user/<username>`。
-2. 检查 Notify Hub 的 `ready`、`x_source_health` 记录、健康 Worker 日志和最近的 `system.x_source_*` / `system.x_account_*` Event。
+1. 先检查 Notify Hub 的 `ready`、`x_source_health` 记录、健康 Worker 日志和最近的 `system.x_source_*` / `system.x_account_*` Event。
+2. 若告警是降级或两边不可用，再检查 RSSHub 路由是否能返回 200 和有效条目：`curl --fail --silent http://127.0.0.1:1200/twitter/user/<username>`；只有错误码指向 Cookie 时才更新 Cookie。
 3. 检查 Event 是否已进入 Notification/Delivery，以及 Delivery 是否因企业微信接收人或渠道配置进入 `dead`；数据源故障和投递故障是两条独立链路。
-4. 需要切换冷备时先备份数据库、记录当前镜像和配置，停止自动化变更，完成一次手工抓取验证后再恢复插件；不要在生产上同时运行两套 Provider。
+4. 需要临时改变主源时先备份数据库、记录当前镜像和配置，完成一次手工抓取验证后再恢复；不要在生产上同时运行两套正常轮询。
 
 插件执行状态也必须单独检查。`plugin_runs.status=running` 不代表抓取仍在进行：Worker 异常退出时会立即尝试把该运行重新排队；如果当时数据库仍不可写，调度循环会在 Manifest `timeout_seconds` 加 30 秒宽限期后回收过期运行租约。新鲜运行不会被回收，重试仍使用原 `run_id`，外部事件继续依赖稳定 `event_key` 幂等。若同一运行长期超过该期限仍停在 `running`，应按 SQLite 写入故障排查，而不是先归因于 RSSHub。
 
@@ -219,7 +220,7 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 
 ### 5.4 twscrape 依赖维护
 
-`twscrape` 仅作为冷备依赖，采用手动按需维护策略，不启用自动定时升级工作流。
+`twscrape` 是当前 iStoreOS 部署的主数据源，锁定版本 `0.20.1`；仍采用手动按需维护策略，不启用自动定时升级工作流。
 
 当需要手动升级 `twscrape` 时，在仓库根目录执行：
 
@@ -232,7 +233,7 @@ uv run --locked --extra dev ruff check backend plugins
 uv run --locked --extra dev mypy backend plugins
 ```
 
-当前约束允许跟随 `0.x` 版本；进入 `1.x` 前需要单独评估兼容性。升级依赖不会刷新 X Cookie，也不能替代真实账号/代理验证；如果线上仍出现 Cloudflare 或账号错误，应在受控配置中更新 Cookie，再按插件运维流程手动恢复运行。发布前仍需备份数据库、构建固定镜像 tag，并按本节的回滚流程保留旧镜像。
+当前约束允许跟随 `0.x` 版本；进入 `1.x` 前需要单独评估兼容性。升级依赖不会刷新 X Cookie，也不能替代真实账号/代理验证；如果线上出现 Cookie 无效告警，应在受控配置中更新 Cookie；如果出现兼容性告警，应先确认锁定版本和 TRACE 日志。发布前仍需备份数据库、构建固定镜像 tag，并按本节的回滚流程保留旧镜像。
 
 ## 6. Worker 崩溃与租约恢复
 

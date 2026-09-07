@@ -549,3 +549,24 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
    - 提取 Markdown `# 标题` 作为公众号文章标题，正文 HTML 自动剔除首个重复 H1，防止微信正文双重标题；
    - 自动选取正文首张图片作为封面图。
 
+## ADR-030：twscrape 主源与 RSSHub 单次降级
+
+**状态：已接受**
+
+### 决策
+
+平台 X 数据源允许由部署将 twscrape 设为主源。一次抓取中 twscrape 失败时只请求一次 RSSHub；RSSHub 成功则返回结果并通过现有 X 健康 Event/Notification/Delivery 链路发送降级告警，两边都失败则发送数据源不可用告警。Cookie 无效、twscrape 不兼容、twscrape 暂时不可用和两边不可用使用稳定错误码。插件继续只使用 `PluginContext.x`，不感知渠道或 ORM。
+
+插件状态从 v1 迁移到 v2：以已见帖子 ID 集合判断候选，`last_seen_post_id` 只作单调高水位；迁移只把旧时间点以前当前已抓到的帖子标为已见，不回放历史事件。规则明确支持 `banked reset` 和原文明确写出的 `reset card`，文章生成只做克制的事实性口语化表达。
+
+### 原因
+
+- RSSHub 漏抓时给 twscrape 一个直接补位机会，但不引入双轮询、熔断器或新基础设施；
+- 故障原因通过现有投递链路告知用户，避免“没有消息”和“抓取失效”混淆；
+- ID 集合与单调高水位能覆盖源切换和晚到帖子，同时保留事件键幂等。
+
+### 后果
+
+- 需要通过 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape` 和平台级 Cookie 显式启用主源；
+- 不新增数据库表或迁移；插件状态 JSON 会在下一次成功运行时写成 v2；
+- 发生降级时可能出现 RSSHub 返回的旧帖子，但迁移截止时间和稳定事件键会阻止无界历史回放。

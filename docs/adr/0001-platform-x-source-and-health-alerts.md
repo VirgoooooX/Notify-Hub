@@ -2,6 +2,8 @@
 
 **状态：accepted**
 
+> 关于 twscrape 作为主源、RSSHub 单次降级和状态对账的后续变更，见 [ADR-003](0003-x-source-fallback-and-reconciliation.md)。本 ADR 中关于平台边界、健康 Worker 和 Event/Notification/Delivery 链路的约束仍然有效。
+
 Notify Hub 将 X 时间线定义为平台级能力：生产默认通过 RSSHub 读取，RSSHub 自己管理 X Cookie/auth_token；twscrape 仅作为显式开启的冷备 Provider，不自动切换。两个内置 X 插件只通过 `PluginContext.x` 获取规范化内容，数据源不可用、账号级失败、恢复和可选内容静默均由持久化健康 Worker 记录状态，并通过 Event/Notification/Delivery 投递企业微信；这样既不把渠道或凭证泄漏到插件，也避免 RSSHub 短暂故障时静默丢失监控结果。
 
 ## Consequences

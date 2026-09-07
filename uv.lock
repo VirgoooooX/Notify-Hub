@@ -481,7 +481,7 @@ wheels = [
 
 [[package]]
 name = "notify-hub"
-version = "0.9.8"
+version = "0.9.9"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -544,7 +544,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.41,<3" },
     { name = "structlog", specifier = ">=25.4,<26" },
-    { name = "twscrape", extras = ["curl"], specifier = ">=0.20,<1" },
+    { name = "twscrape", extras = ["curl"], specifier = ">=0.20.1,<1" },
     { name = "types-defusedxml", marker = "extra == 'dev'", specifier = ">=0.7.0,<1" },
     { name = "tzdata", specifier = ">=2026.1,<2027" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.35,<1" },
@@ -948,7 +948,7 @@ wheels = [
 
 [[package]]
 name = "twscrape"
-version = "0.20.0"
+version = "0.20.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
@@ -959,9 +959,9 @@ dependencies = [
     { name = "py-machineid" },
     { name = "pyotp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/29/4b9590390a566a1dd7cfbc211a3e3d11fb597903867edac2b5aef3acc430/twscrape-0.20.0.tar.gz", hash = "sha256:ebe0b661f4ccd962f9104885b7158d918cba78ab561b7efb924f080cf847b56d", size = 995434, upload-time = "2026-08-07T00:29:40.13Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/66/8b/30cb0f511c50681c164a75ecd94e390a8c1b113404108ebaf65f16a7bd39/twscrape-0.20.1.tar.gz", hash = "sha256:09b3b768e701fb71a6f785dba9744f60c96d03308c76abfa66cbf2cdb360eb63", size = 1000312, upload-time = "2026-08-25T16:21:21.008Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/11/c7/7af2b0aba979d9e501277079fc14e22a8d3c24584397ac51fd468950a192/twscrape-0.20.0-py3-none-any.whl", hash = "sha256:437e5205daa983aa209add9dfe70f832eb75039840a77be1fef3a8ee11665134", size = 51948, upload-time = "2026-08-07T00:29:38.474Z" },
+    { url = "https://files.pythonhosted.org/packages/68/39/e3ea377d785dbe6b74e6371e118b942d2598e551aa7179f09fbc40d30d45/twscrape-0.20.1-py3-none-any.whl", hash = "sha256:bfad943020361fc882b09ac49685e11d65b88743723de419b3d7873fe09d56e3", size = 52288, upload-time = "2026-08-25T16:21:19.81Z" },
 ]
 
 [package.optional-dependencies]
