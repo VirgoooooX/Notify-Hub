@@ -530,7 +530,7 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
 
 ## ADR-029：基于 Playwright 独立容器的个人公众号全自动发布（browser 模式）
 
-**状态：已接受**
+**状态：已由 ADR-031 取代**
 
 ### 决策
 
@@ -570,3 +570,48 @@ Provider、API Key、模型 Profile、缓存、预算、结构化校验和调用
 - 需要通过 `NOTIFY_HUB_X_SOURCE_PROVIDER=twscrape` 和平台级 Cookie 显式启用主源；
 - 不新增数据库表或迁移；插件状态 JSON 会在下一次成功运行时写成 v2；
 - 发生降级时可能出现 RSSHub 返回的旧帖子，但迁移截止时间和稳定事件键会阻止无界历史回放。
+
+---
+
+## ADR-031：独立 Browser Publisher 发布服务与跨平台浏览器发布解耦
+
+**状态：已接受（取代 ADR-029）**
+
+### 背景与问题
+
+ADR-029 在 Notify Hub 内嵌了微信公众号 Playwright 发布器，但随着小红书等新平台的加入，内嵌模式面临严峻挑战：
+1. 依赖冲突与资源膨胀：Playwright 及 Chromium 二进制体积巨大，与轻量核心 Notify Hub 绑定加剧了部署与恢复成本；
+2. 浏览器持久化目录锁冲突：多个适配器若分别调用 `launch_persistent_context` 访问共享 Profile，会导致 Chromium `SingletonLock` 文件锁互斥失败；
+3. 风控风险控制与隔离：网页端存在二维码失效、风控滑块、频率限制（小红书需 1800 秒防风控冷却），若直接混在 Notify Hub 投递进程内，极易阻塞常规企业微信通知。
+
+### 决策
+
+1. **独立服务与架构解耦**：
+   - 将网页自动化能力完整抽取为独立工程 `browser-publisher` (v0.1.0)，由独立进程与 SQLite（开启 WAL、busy timeout 30s）管理，提供 HTTP API、服务端渲染控制台与 `publisher-cli`。
+   - Browser Publisher 可脱离 Notify Hub 独立启动运行与排查调试。
+2. **统一持久化上下文与单串行 Worker**：
+   - 微信公众号与小红书共用同一个持久化 Chromium Profile 目录（`/app/data/profile`）。
+   - 由单例 `BrowserManager` 统一管理浏览器生命周期，单个后台串行 Worker 依次执行任务，彻底杜绝 Chromium 实例抢占 Profile 锁冲突。
+3. **HTTP Push 单向通道与 202 异步**：
+   - Notify Hub 通过标准 HTTP 客户端请求 Browser Publisher 的 `POST /v1/jobs` 接口，Browser Publisher 验证并持久化落库后立即返回 HTTP 202 及 `job_id`。
+   - 投递失败（网络超时/500/429）由 Notify Hub 的 `DeliveryWorker` 进行标准指数退避重试，不阻塞其他渠道。
+4. **反爬与风控控制铁律**：
+   - 严禁任何伪造浏览器指纹、对抗风控、打码平台破解或自动代理轮换。
+   - 遇到验证码、滑块或登录失效时，自动置平台状态为 `paused` 并上报风控告警，必须由人工在控制台扫码/排查后手动点恢复（Resume）。
+   - 小红书任务强制实行 1800 秒（30分钟）冷却期隔离，图文笔记严格限制 1~18 张图片且标题严格限制 <= 20 字符。
+5. **领域模型与状态规范**：
+   - `Publish Job`：独立任务记录，状态包括 `pending -> running -> succeeded | failed | paused`。
+   - `Publish Mode`：支持 `draft`（仅草稿）与 `publish`（最终发布），默认保底为草稿。
+   - `Platform Session`：持久化平台会话、登录态、二维码与风控暂停标志。
+   - `Publish Phase`：两阶段检查点防重复群发，一旦点击发布进入只读 reconcile 流程。
+6. **多平台变体与 Delivery 隔离**：
+   - `EventDraft` 扩展 `publish_variants`（含 `wechat_mp` 与 `xiaohongshu`）。
+   - `EventService` 对多变体分别生成独立的 `Delivery`（`mp_article` 和 `xhs_article`），任何一个平台的发布异常完全隔离，绝不影响企业微信通知或其他平台投递。
+
+### 后果
+
+- Notify Hub 新增 `NOTIFY_HUB_BROWSER_PUBLISHER_API_URL` 与 `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN` 配置；
+- Notify Hub 的 `MPArticleAdapter` 在 `browser` 模式下直接推送到 Browser Publisher 服务，同时保留本地 `mp_articles` 审计副本；
+- 新增 `XhsArticleAdapter`（渠道名 `xhs_article`），由 Delivery Worker 进行任务消费与投递；
+- Codex X Monitor 插件支持独立配置 `publish_to_wechat_mp` 和 `publish_to_xiaohongshu` 开关与独立 AI Profile。
+

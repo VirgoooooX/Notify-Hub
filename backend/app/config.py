@@ -87,6 +87,8 @@ class Settings(BaseSettings):
     mp_browser_alert_recipient_ids: list[str] = Field(default_factory=list, max_length=20)
     mp_browser_claim_timeout_seconds: int = Field(default=1200, ge=300, le=3600)
     mp_browser_max_attempts: int = Field(default=3, ge=1, le=10)
+    browser_publisher_api_url: str = "http://192.168.31.100:8790"
+    browser_publisher_access_token: SecretStr | None = None
     media_root: Path = Path("./data/media")
     media_image_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
     media_source_image_max_bytes: int = Field(default=16_777_216, ge=2_097_152, le=20_971_520)

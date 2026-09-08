@@ -918,3 +918,75 @@ def test_post_payload_includes_beijing_time_and_inference() -> None:
     assert "timing_inference" in payload
     assert "北京时间" in ARTICLE_GENERATION_INSTRUCTION
     assert "24小时制" in ARTICLE_GENERATION_INSTRUCTION
+
+
+def test_extract_xhs_title_bounded_to_20_chars() -> None:
+    from plugins.builtin.codex_x_monitor.decision_prompt import extract_xhs_title
+
+    # Short title within 20 chars
+    t1 = extract_xhs_title("# Codex用量已重置", "09月08日 09:15")
+    assert t1 == "Codex用量已重置"
+    assert len(t1) <= 20
+
+    # Very long AI candidate title gets trimmed or formatted safely to <= 20 chars
+    long_title = "OpenAI Codex 震撼宣布全面重置全球所有用户的周额度与限制"
+    t2 = extract_xhs_title(long_title, "09月08日 09:15")
+    assert len(t2) <= 20
+    assert 1 <= len(t2) <= 20
+
+    # Empty candidate title falls back to <= 20 chars
+    t3 = extract_xhs_title("", "09月08日 09:15")
+    assert len(t3) <= 20
+    assert "Codex" in t3
+
+
+@pytest.mark.asyncio
+async def test_plugin_generates_dual_publish_variants() -> None:
+    from plugins.builtin.codex_x_monitor.tests.test_plugin import (
+        FakeAI,
+        FakeContext,
+        FakePostSource,
+    )
+
+    post = XPost(
+        id="888",
+        author_username="thsottiaux",
+        author_display_name="Thomas Sottiaux",
+        text="Hit the reset button for all ChatGPT Work and Codex users.",
+        url="https://x.com/thsottiaux/status/888",
+        published_at=datetime(2026, 9, 8, 1, 15, 0, tzinfo=UTC),
+    )
+    source = FakePostSource([post])
+    plugin = CodexXMonitorPlugin({"rsshub": source})
+
+    ctx = FakeContext(
+        config={
+            "source": "rsshub",
+            "enabled": True,
+            "first_run_mode": "scan_recent",
+            "publish_to_wechat_mp": True,
+            "publish_to_xiaohongshu": True,
+            "article_ai_profile": "article_fast",
+            "xhs_article_ai_profile": "xhs_fast",
+        },
+        responses=[],
+        ai=FakeAI(summary="# Codex用量重置\n\n正文在此。#OpenAI #Codex"),
+    )
+
+    res = await plugin.run(ctx)
+    assert res.status == "success"
+    assert len(ctx.events) == 1
+    draft = ctx.events[0]
+    assert draft.publish_to_mp is True
+    assert len(draft.publish_variants) == 2
+
+    mp_variant = next(v for v in draft.publish_variants if v.platform == "wechat_mp")
+    xhs_variant = next(v for v in draft.publish_variants if v.platform == "xiaohongshu")
+
+    assert mp_variant.title
+    assert mp_variant.image_urls
+    assert xhs_variant.title
+    assert len(xhs_variant.title) <= 20
+    assert len(xhs_variant.image_urls) >= 1
+    assert xhs_variant.topics
+

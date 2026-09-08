@@ -45,10 +45,12 @@ from app.application.wecom_menu_service import WeComMenuService
 from app.application.x_health_service import XHealthService
 from app.application.x_source_service import XSourceService
 from app.channels.base import NotificationChannel, UnconfiguredChannel
+from app.channels.browser_publisher.client import BrowserPublisherClient
 from app.channels.mp.adapter import MPArticleAdapter
 from app.channels.mp.client import MPClient
 from app.channels.wecom.adapter import WeComAdapter
 from app.channels.wecom.client import WeComClient
+from app.channels.xhs.adapter import XhsArticleAdapter
 from app.channels.wecom.crypto import WeComCrypto
 from app.channels.wecom.media_adapter import WeComTemporaryMediaAdapter
 from app.config import Settings, get_settings
@@ -183,6 +185,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.wecom_corp_id
         else UnconfiguredChannel()
     )
+    browser_publisher_token = (
+        settings.browser_publisher_access_token.get_secret_value()
+        if settings.browser_publisher_access_token
+        else None
+    )
+    browser_publisher_client = BrowserPublisherClient(
+        base_url=settings.browser_publisher_api_url,
+        access_token=browser_publisher_token,
+    )
+    xhs_channel = XhsArticleAdapter(browser_publisher_client)
     mp_client = MPClient(settings, clock)
     mp_library = MPArticleLibraryService(factory, clock, settings)
     mp_browser_service = MPBrowserService(mp_library, event_service, settings, clock)
@@ -192,8 +204,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         settings,
         downloader=media_service.downloader,
         library=mp_library,
+        browser_publisher_client=browser_publisher_client,
     )
-    channels: dict[str, NotificationChannel] = {"wecom": channel, "mp_article": mp_channel}
+    channels: dict[str, NotificationChannel] = {
+        "wecom": channel,
+        "mp_article": mp_channel,
+        "xhs_article": xhs_channel,
+    }
 
     async def prepare_tts(text: str) -> str:
         if tts_media_service is None:

@@ -176,9 +176,25 @@ class EventService:
         media_asset_id: str | None = None,
         payload: dict[str, Any] | None = None,
         publish_to_mp: bool = False,
+        publish_variants: list[dict[str, Any]] | None = None,
     ) -> AcceptResult:
         """Accept a trusted platform event through the same durable queue boundary."""
-        if publish_to_mp:
+        has_mp = publish_to_mp
+        has_xhs = False
+        if publish_variants:
+            for variant in publish_variants:
+                plat = (
+                    variant.get("platform")
+                    if isinstance(variant, dict)
+                    else getattr(variant, "platform", None)
+                )
+                if plat == "wechat_mp":
+                    has_mp = True
+                elif plat == "xiaohongshu":
+                    has_xhs = True
+
+        has_publish = has_mp or has_xhs
+        if has_publish:
             if broadcast:
                 raise AppError(
                     "invalid_publish",
@@ -230,8 +246,10 @@ class EventService:
                 ignore_reason=None,
             )
             merged_payload = dict(payload or {})
-            if publish_to_mp:
+            if has_mp:
                 merged_payload["publish_to_mp"] = True
+            if publish_variants:
+                merged_payload["publish_variants"] = publish_variants
             notification = Notification(
                 id=new_id("ntf"),
                 event=event,
@@ -251,12 +269,34 @@ class EventService:
                 expires_at=None,
             )
             session.add_all([event, notification])
-            if publish_to_mp:
+            if has_mp:
                 session.add(
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
                         channel="mp_article",
+                        recipient_type=RecipientType.PUBLISH.value,
+                        recipient_id=None,
+                        status=DeliveryStatus.PENDING.value,
+                        attempt_count=0,
+                        max_attempts=5,
+                        next_attempt_at=now,
+                        claimed_by=None,
+                        claim_expires_at=None,
+                        last_error_code=None,
+                        last_error_message=None,
+                        provider_message_id=None,
+                        sent_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            if has_xhs:
+                session.add(
+                    Delivery(
+                        id=new_id("dlv"),
+                        notification=notification,
+                        channel="xhs_article",
                         recipient_type=RecipientType.PUBLISH.value,
                         recipient_id=None,
                         status=DeliveryStatus.PENDING.value,

@@ -30,6 +30,16 @@ class ArticleDraft(BaseModel):
     image_url: AnyHttpUrl | None = None
 
 
+class PublishVariant(BaseModel):
+    platform: Literal["wechat_mp", "xiaohongshu"]
+    mode: Literal["draft", "publish"] | None = None
+    title: str = Field(min_length=1, max_length=200)
+    body_text: str = Field(default="", max_length=100000)
+    body_html: str | None = Field(default=None, max_length=500000)
+    image_urls: list[AnyHttpUrl] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+
+
 class EventDraft(BaseModel):
     event_type: str = Field(min_length=1, max_length=100, pattern=r"^[a-z0-9_]+(?:\.[a-z0-9_]+)+$")
     event_key: str = Field(min_length=1, max_length=200)
@@ -42,6 +52,7 @@ class EventDraft(BaseModel):
     message_type: Literal["text", "article"] = "text"
     article: ArticleDraft | None = None
     publish_to_mp: bool = False
+    publish_variants: list[PublishVariant] = Field(default_factory=list)
     recipients: list[str] | None = None
     require_ack: bool = False
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -61,7 +72,30 @@ class EventDraft(BaseModel):
         return list(dict.fromkeys(value))
 
     @model_validator(mode="after")
-    def limit_payload(self) -> EventDraft:
+    def sync_legacy_publish_to_mp(self) -> EventDraft:
+        # Legacy compatibility: if publish_to_mp is True and wechat_mp variant is missing, auto-create it
+        has_mp_variant = any(v.platform == "wechat_mp" for v in self.publish_variants)
+        if self.publish_to_mp and not has_mp_variant:
+            img_list: list[AnyHttpUrl] = []
+            if self.article and self.article.image_url:
+                img_list.append(self.article.image_url)
+            elif self.image_url:
+                img_list.append(self.image_url)
+
+            mp_variant = PublishVariant(
+                platform="wechat_mp",
+                mode=None,
+                title=self.article.title if self.article else self.title,
+                body_text=self.article.description if self.article else self.content,
+                body_html=None,
+                image_urls=img_list,
+            )
+            self.publish_variants.append(mp_variant)
+
+        # Conversely, if wechat_mp variant exists, reflect on legacy flag
+        if any(v.platform == "wechat_mp" for v in self.publish_variants):
+            self.publish_to_mp = True
+
         if len(repr(self.payload).encode()) > 65536:
             raise ValueError("payload is too large")
         return self

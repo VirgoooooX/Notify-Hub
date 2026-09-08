@@ -276,7 +276,7 @@ class DeliveryWorker:
                 await session.commit()
                 return None
             broadcast = delivery.recipient_type == RecipientType.BROADCAST.value
-            if delivery.channel == "mp_article":
+            if delivery.channel in ("mp_article", "xhs_article"):
                 recipients: list[str] = []
             elif broadcast:
                 recipients = []
@@ -297,6 +297,31 @@ class DeliveryWorker:
                 if isinstance(action_id, str) and self._action_token_for_id is not None:
                     payload["task_id"] = action_id
                     payload["action_token"] = self._action_token_for_id(action_id)
+
+            title = notification.title
+            content = notification.content
+            image_url = notification.image_url
+            if delivery.channel in ("mp_article", "xhs_article"):
+                variants = payload.get("publish_variants") or []
+                target_platform = (
+                    "wechat_mp" if delivery.channel == "mp_article" else "xiaohongshu"
+                )
+                for v in variants:
+                    if isinstance(v, dict) and v.get("platform") == target_platform:
+                        title = v.get("title") or title
+                        content = v.get("body_text") or content
+                        if v.get("body_html"):
+                            payload["body_html"] = v.get("body_html")
+                        if v.get("image_urls"):
+                            payload["image_urls"] = [str(u) for u in v["image_urls"]]
+                            if not image_url and payload["image_urls"]:
+                                image_url = payload["image_urls"][0]
+                        if v.get("topics"):
+                            payload["topics"] = list(v["topics"])
+                        if v.get("mode"):
+                            payload["mode"] = v.get("mode")
+                        break
+
             return (
                 delivery.channel,
                 ChannelMessage(
@@ -305,11 +330,11 @@ class DeliveryWorker:
                         if notification.payload.get("voice_text_fallback")
                         else notification.message_type
                     ),
-                    title=notification.title,
-                    content=notification.content,
+                    title=title,
+                    content=content,
                     recipients=recipients,
                     url=notification.url,
-                    image_url=notification.image_url,
+                    image_url=image_url,
                     broadcast=broadcast,
                     payload=payload,
                     media_asset_id=notification.media_asset_id,

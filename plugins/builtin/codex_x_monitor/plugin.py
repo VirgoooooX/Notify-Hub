@@ -10,8 +10,10 @@ from .decision_prompt import (
     ARTICLE_GENERATION_INSTRUCTION,
     BEIJING_TZ,
     RESET_CLASSIFICATION_INSTRUCTION,
+    XHS_NOTE_GENERATION_INSTRUCTION,
     build_article_content,
     build_classification_content,
+    extract_xhs_title,
 )
 from .matcher import detect_reset_kind, match_post
 from .schemas import (
@@ -26,6 +28,7 @@ from .schemas import (
     MonitorState,
     PluginContext,
     PluginRunResult,
+    PublishVariant,
     XPost,
 )
 from .sources import CodexRssHubSource, PostSource, RssAtomSource, TwscrapeSource, XApiSource
@@ -190,7 +193,9 @@ class CodexXMonitorPlugin:
                     if reset_kind == "banked"
                     else f"Codex 用量重置更新 ({bj_display})"
                 )
-                if config.publish_to_official_account and config.article_ai_profile:
+                mp_title = event_title
+                mp_content = content
+                if config.publish_to_wechat_mp and config.article_ai_profile:
                     try:
                         article_content = build_article_content(post, posts)
                         article_result = await context.ai.summarize(
@@ -201,15 +206,17 @@ class CodexXMonitorPlugin:
                             max_characters=8000,
                             cache_key=f"x:{post.author_username}:{post.id}:article",
                         )
-                        content = article_result.summary.strip() or summary
-                        if "\\n" in content and "\n" not in content:
-                            content = content.replace("\\n", "\n")
+                        mp_content = article_result.summary.strip() or summary
+                        if "\\n" in mp_content and "\n" not in mp_content:
+                            mp_content = mp_content.replace("\\n", "\n")
                         article_ai_status = "ai_summarized"
-                        lines = content.strip().splitlines()
+                        lines = mp_content.strip().splitlines()
                         if lines and lines[0].startswith("# "):
                             candidate_title = lines[0].lstrip("# ").strip()
                             if candidate_title:
-                                event_title = candidate_title[:64]
+                                mp_title = candidate_title[:64]
+                                event_title = mp_title
+                        content = mp_content
                     except Exception as exc:
                         article_ai_status = "fallback_summary"
                         context.logger.warning(
@@ -221,6 +228,59 @@ class CodexXMonitorPlugin:
                 )
                 if cover_url is None:
                     cover_url = context.media.public_static_url("codex_wechat_cover.png")
+
+                publish_variants: list[PublishVariant] = []
+                if config.publish_to_wechat_mp:
+                    publish_variants.append(
+                        PublishVariant(
+                            platform="wechat_mp",
+                            title=mp_title,
+                            body_text=mp_content,
+                            image_urls=[cover_url] if cover_url else [],
+                        )
+                    )
+
+                if config.publish_to_xiaohongshu:
+                    xhs_ai_profile = config.xhs_article_ai_profile or config.article_ai_profile
+                    xhs_content = summary
+                    xhs_raw_title = event_title
+                    if xhs_ai_profile:
+                        try:
+                            article_content = build_article_content(post, posts)
+                            xhs_result = await context.ai.summarize(
+                                profile=xhs_ai_profile,
+                                use_case="codex_usage_reset_xhs",
+                                content=article_content,
+                                instruction=XHS_NOTE_GENERATION_INSTRUCTION,
+                                max_characters=2000,
+                                cache_key=f"x:{post.author_username}:{post.id}:xhs",
+                            )
+                            c = xhs_result.summary.strip()
+                            if c:
+                                if "\\n" in c and "\n" not in c:
+                                    c = c.replace("\\n", "\n")
+                                xhs_content = c
+                                lines = xhs_content.splitlines()
+                                if lines and lines[0].startswith("# "):
+                                    xhs_raw_title = lines[0].lstrip("# ").strip()
+                        except Exception as exc:
+                            context.logger.warning(
+                                "xhs_ai_summary_failed", post_id=post.id, error=str(exc)
+                            )
+                    xhs_title = extract_xhs_title(xhs_raw_title, bj_display, reset_kind)
+                    import re
+
+                    tags = [t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5]+)", xhs_content)]
+                    xhs_topics = list(dict.fromkeys(tags)) if tags else ["OpenAI", "Codex", "用量重置"]
+                    publish_variants.append(
+                        PublishVariant(
+                            platform="xiaohongshu",
+                            title=xhs_title,
+                            body_text=xhs_content,
+                            image_urls=[cover_url] if cover_url else [],
+                            topics=xhs_topics,
+                        )
+                    )
 
                 receipt = await context.emit_event(
                     EventDraft(
@@ -248,7 +308,7 @@ class CodexXMonitorPlugin:
                             "ai_reason": getattr(ai_decision, "reason", None),
                             "article_ai_profile": (
                                 config.article_ai_profile
-                                if config.publish_to_official_account
+                                if config.publish_to_wechat_mp
                                 else None
                             ),
                             "article_ai_status": article_ai_status,
@@ -259,7 +319,8 @@ class CodexXMonitorPlugin:
                             url=post.url,
                             image_url=cover_url,
                         ),
-                        publish_to_mp=config.publish_to_official_account,
+                        publish_to_mp=config.publish_to_wechat_mp,
+                        publish_variants=publish_variants,
                     )
                 )
                 status = _receipt_status(receipt)

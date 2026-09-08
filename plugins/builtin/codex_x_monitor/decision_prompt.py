@@ -291,3 +291,43 @@ def build_article_content(
         ensure_ascii=False,
         separators=(",", ":"),
     )
+
+
+XHS_NOTE_GENERATION_INSTRUCTION = """
+你是一个负责写小红书技术快讯笔记的编辑，不是营销博主。请在 summary 字段中输出一篇
+克制、真实、口语化的小红书图文笔记文案，让读者快速了解 Codex / ChatGPT Work 用量重置动态。
+
+【输出结构】
+# 标题（严格限制：必须 <= 20 个字！包含换算后的北京时间）
+
+[简短正文：用自然口语说明核心动态与换算后的北京时间重置节点]
+
+原推作者：@[username]
+原推内容：[完整或核心原推，保留原文]
+
+[补充说明或贴士（如有必要）]
+
+#话题标签1 #话题标签2 #话题标签3
+
+【核心要求】
+1. 【标题严格 <= 20 字】：小红书标题上限极严格，绝对不得超过 20 个字符。建议格式如“Codex用量已重置（9/8 09:15）”或“OpenAI重置用量 北京时间23点”。
+2. 【北京时间换算】：必须根据发推时间（published_at_beijing）与 timing_inference，推断并换算为读者一目了然的【北京时间】（24小时制几点几分）。严禁保留原推未换算的外国时区（PT/ET/UTC）。
+3. 【真实克制】：严禁使用“炸裂、狂喜、速看、手慢无、家人们”等营销口吻与标题党。不夸大范围或效果。
+4. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时才写“重置卡”。
+5. 文末附带 2-4 个精准话题标签（如 #OpenAI #Codex #ChatGPT）。
+""".strip()
+
+
+def extract_xhs_title(raw_title: str, bj_display: str, reset_kind: str = "direct") -> str:
+    """Ensure XHS title is non-empty and strictly <= 20 characters as required by platform."""
+    title = raw_title.lstrip("# ").strip()
+    if 1 <= len(title) <= 20:
+        return title
+    action = "额度更新" if reset_kind == "banked" else "用量重置"
+    fallback = f"Codex{action}({bj_display})"
+    if len(fallback) <= 20:
+        return fallback
+    time_part = bj_display.split()[-1] if " " in bj_display else bj_display
+    fallback = f"Codex{action} {time_part}"
+    return fallback[:20]
+

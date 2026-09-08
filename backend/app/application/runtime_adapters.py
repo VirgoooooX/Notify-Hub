@@ -18,6 +18,11 @@ class PluginEventEmitterAdapter:
         self._events = events
 
     async def emit(self, plugin_id: str, event: EventDraft) -> EventReceipt:
+        variants_payload = (
+            [v.model_dump(mode="json") for v in event.publish_variants]
+            if event.publish_variants
+            else None
+        )
         result = await self._events.accept_internal_event(
             source_type="plugin",
             source_id=plugin_id,
@@ -34,6 +39,7 @@ class PluginEventEmitterAdapter:
             require_ack=event.require_ack,
             payload=event.payload,
             publish_to_mp=event.publish_to_mp,
+            publish_variants=variants_payload,
         )
         return EventReceipt(
             event_id=result.event_id,

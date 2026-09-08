@@ -6,6 +6,11 @@ import httpx
 import structlog
 from app.application.mp_article_service import MPArticleLibraryService
 from app.channels.base import ChannelMessage, ChannelResult
+from app.channels.browser_publisher.client import (
+    BrowserPublisherClient,
+    BrowserPublisherError,
+    BrowserPublisherTemporaryError,
+)
 from app.channels.mp.client import MPApiError, MPClient
 from app.config import Settings
 from app.infrastructure.database.models import MpArticleStatus
@@ -56,11 +61,13 @@ class MPArticleAdapter:
         settings: Settings,
         downloader: SafeMediaDownloader | None = None,
         library: MPArticleLibraryService | None = None,
+        browser_publisher_client: BrowserPublisherClient | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
         self._downloader = downloader
         self._library = library
+        self._browser_publisher_client = browser_publisher_client
 
     async def send(self, message: ChannelMessage) -> ChannelResult:
         if message.message_type != "article" or message.payload.get("publish_to_mp") is not True:
@@ -148,6 +155,31 @@ class MPArticleAdapter:
         }
         if mode == "browser":
             metadata["browser_publish_queued"] = True
+            if self._browser_publisher_client is not None:
+                client_req_id = f"notify-hub:{message.delivery_id or 'adhoc'}:wechat_mp"
+                cover_urls = [str(message.image_url)] if message.image_url else []
+                try:
+                    res = await self._browser_publisher_client.submit_job(
+                        client_request_id=client_req_id,
+                        platform="wechat_mp",
+                        mode="draft",
+                        title=message.title,
+                        body_text=message.content,
+                        body_html=message.payload.get("body_html"),
+                        author=self._settings.mp_author,
+                        digest=self._digest(message),
+                        image_urls=cover_urls,
+                        source_url=message.url,
+                    )
+                    metadata["publisher_job_id"] = res.get("id")
+                    metadata["console_url"] = self._browser_publisher_client.base_url
+                except BrowserPublisherTemporaryError as exc:
+                    return ChannelResult(False, True, "PUBLISHER_TEMPORARY", str(exc))
+                except BrowserPublisherError as exc:
+                    return ChannelResult(False, False, "PUBLISHER_ERROR", str(exc))
+                except Exception as exc:
+                    logger.exception("mp_browser_publisher_submit_failed", error=str(exc))
+                    return ChannelResult(False, True, "UNKNOWN_ERROR", str(exc))
         return ChannelResult(
             True,
             provider_message_id=article_id,

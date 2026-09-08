@@ -76,6 +76,9 @@ class CodexXMonitorConfig(BaseModel):
     ai_min_confidence: float = Field(default=0.8, ge=0, le=1)
     rule_ai_threshold: float = Field(default=0.8, ge=0, le=1)
     publish_to_official_account: bool = False
+    publish_to_wechat_mp: bool = False
+    publish_to_xiaohongshu: bool = False
+    xhs_article_ai_profile: str | None = None
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
@@ -105,6 +108,10 @@ class CodexXMonitorConfig(BaseModel):
         if self.original_posts_only:
             self.include_replies = False
             self.include_reposts = False
+        if self.publish_to_official_account and not self.publish_to_wechat_mp:
+            self.publish_to_wechat_mp = True
+        elif self.publish_to_wechat_mp and not self.publish_to_official_account:
+            self.publish_to_official_account = True
         return self
 
 
@@ -159,6 +166,16 @@ class ArticleDraft(BaseModel):
     image_url: AnyHttpUrl | None = None
 
 
+class PublishVariant(BaseModel):
+    platform: Literal["wechat_mp", "xiaohongshu"]
+    mode: Literal["draft", "publish"] | None = None
+    title: str
+    body_text: str = ""
+    body_html: str | None = None
+    image_urls: list[AnyHttpUrl] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+
+
 class EventDraft(BaseModel):
     event_type: str
     event_key: str
@@ -173,6 +190,7 @@ class EventDraft(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     article: ArticleDraft | None = None
     publish_to_mp: bool = False
+    publish_variants: list[PublishVariant] = Field(default_factory=list)
 
 
 class MonitorState(BaseModel):
