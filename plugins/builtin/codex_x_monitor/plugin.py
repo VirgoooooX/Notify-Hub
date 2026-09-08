@@ -16,6 +16,7 @@ from .decision_prompt import (
     build_classification_content,
     extract_xhs_title,
 )
+from .cover_generator import generate_dynamic_xhs_cover
 from .matcher import detect_reset_kind, match_post
 from .schemas import (
     PLUGIN_API_VERSION,
@@ -281,16 +282,30 @@ class CodexXMonitorPlugin:
                                 "xhs_ai_summary_failed", post_id=post.id, error=str(exc)
                             )
                     xhs_title = extract_xhs_title(xhs_raw_title, bj_display, reset_kind)
-                    tags = [t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5]+)", xhs_content)]
-                    default_topics = ["OpenAI", "Codex", "用量重置"]
-                    xhs_topics = list(dict.fromkeys(tags)) if tags else default_topics
+                    if config.xhs_cover_image_url:
+                        xhs_cover_url = str(config.xhs_cover_image_url)
+                    else:
+                        generated_rel = generate_dynamic_xhs_cover(xhs_title, post.id)
+                        xhs_cover_url = context.media.public_static_url(generated_rel)
+
+                    raw_tags = [t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5\-]+)", xhs_content)]
+                    mandatory_topics = ["codex", "openai"]
+                    extra_topics = [t for t in raw_tags if t.lower() not in mandatory_topics]
+                    xhs_topics = list(dict.fromkeys(mandatory_topics + extra_topics))
+                    # Strip trailing hashtag lines from body_text so they are not duplicated as plain text
+                    clean_lines = [
+                        line for line in xhs_content.splitlines()
+                        if not re.match(r"^(?:#[\w\u4e00-\u9fa5\-]+(?:\s+|$))+$", line.strip())
+                    ]
+                    clean_body = "\n".join(clean_lines).strip()
                     publish_variants.append(
                         PublishVariant(
                             platform="xiaohongshu",
                             mode=config.xiaohongshu_publish_mode,
+                            visibility=config.xiaohongshu_visibility,
                             title=xhs_title,
-                            body_text=xhs_content,
-                            image_urls=[cover_url] if cover_url else [],
+                            body_text=clean_body,
+                            image_urls=[xhs_cover_url] if xhs_cover_url else [],
                             topics=xhs_topics,
                         )
                     )

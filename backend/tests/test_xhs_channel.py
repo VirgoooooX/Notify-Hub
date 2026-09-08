@@ -113,6 +113,7 @@ async def test_xhs_adapter_submits_job_successfully() -> None:
         client_request_id="notify-hub:dlv_abc:xiaohongshu",
         platform="xiaohongshu",
         mode=None,
+        visibility="public",
         title="Codex用量已重置",
         body_text="正文内容",
         image_urls=["https://example.com/cover.jpg"],

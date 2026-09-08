@@ -58,6 +58,7 @@ class XhsArticleAdapter:
                 client_request_id=client_req_id,
                 platform="xiaohongshu",
                 mode=payload.get("mode"),
+                visibility=payload.get("visibility") or "public",
                 title=title,
                 body_text=message.content,
                 image_urls=image_urls,

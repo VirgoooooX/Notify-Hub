@@ -414,7 +414,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.ai import router as ai_router
     from app.api.client_reminders import router as client_reminders_router
     from app.api.events import router as events_router
-    from app.api.media import public_router
+    from app.api.media import client_media_router, public_router
     from app.api.media import router as media_router
     from app.api.plugins import router as plugins_router
     from app.api.reminders import router as reminders_router
@@ -434,6 +434,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(callback_router, prefix="/api/v1")
     app.include_router(wecom_menu_router, prefix="/api/v1/admin")
     app.include_router(mobile_router, prefix="/api/v1")
+    app.include_router(client_media_router)
     app.include_router(media_router)
     app.include_router(public_router)
     install_error_handlers(app)

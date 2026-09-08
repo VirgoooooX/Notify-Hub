@@ -1014,6 +1014,44 @@ async def test_plugin_generates_dual_publish_variants() -> None:
     assert mp_variant.image_urls
     assert xhs_variant.title
     assert xhs_variant.mode == "publish"
+    assert xhs_variant.visibility == "public"
     assert len(xhs_variant.title) <= 20
     assert len(xhs_variant.image_urls) >= 1
-    assert xhs_variant.topics
+    assert "codex" in [t.lower() for t in xhs_variant.topics]
+    assert "openai" in [t.lower() for t in xhs_variant.topics]
+
+
+@pytest.mark.asyncio
+async def test_codex_x_monitor_xhs_private_visibility() -> None:
+    post = XPost(
+        id="999",
+        author_username="thsottiaux",
+        author_display_name="Thomas Sottiaux",
+        text="Hit the reset button for all Codex users.",
+        url="https://x.com/thsottiaux/status/999",
+        published_at=datetime(2026, 9, 8, 2, 0, 0, tzinfo=UTC),
+    )
+    source = FakePostSource([post])
+    plugin = CodexXMonitorPlugin({"rsshub": source})
+
+    ctx = FakeContext(
+        config={
+            "source": "rsshub",
+            "enabled": True,
+            "first_run_mode": "scan_recent",
+            "publish_to_xiaohongshu": True,
+            "xiaohongshu_publish_mode": "publish",
+            "xiaohongshu_visibility": "private",
+        },
+        responses=[],
+    )
+
+    res = await plugin.run(ctx)
+    assert res.status == "success"
+    assert len(ctx.events) == 1
+    draft = ctx.events[0]
+    xhs_variant = next(v for v in draft.publish_variants if v.platform == "xiaohongshu")
+    assert xhs_variant.visibility == "private"
+    assert "codex" in [t.lower() for t in xhs_variant.topics]
+    assert "openai" in [t.lower() for t in xhs_variant.topics]
+

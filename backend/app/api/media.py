@@ -5,10 +5,10 @@ import time
 from datetime import datetime
 from typing import Annotated
 
-from app.api.dependencies import get_session, require_admin
+from app.api.dependencies import get_session, require_admin, require_api_client
 from app.api.errors import AppError
 from app.application.media_service import MediaService
-from app.infrastructure.database.models import Admin
+from app.infrastructure.database.models import Admin, ApiClient
 from app.infrastructure.database.reminder_models import Reminder, ReminderOccurrence
 from app.infrastructure.security.tokens import verify_media_signature
 from app.media.errors import MediaError
@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 router = APIRouter(prefix="/api/v1/admin/media", tags=["admin-media"])
+client_media_router = APIRouter(prefix="/api/v1/media", tags=["client-media"])
 
 
 class MediaAssetResponse(BaseModel):
@@ -76,6 +77,30 @@ async def upload_media(
             source="upload",
             created_by=admin.id,
             persistent=True,
+        )
+    except MediaError as exc:
+        raise _map_error(exc) from exc
+    return MediaAssetResponse.model_validate(asset)
+
+
+@client_media_router.post("", response_model=MediaAssetResponse, status_code=201)
+async def upload_client_media(
+    request: Request,
+    kind: Annotated[MediaKind, Form()],
+    file: Annotated[UploadFile, File()],
+    client: Annotated[ApiClient, Depends(require_api_client)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MediaAssetResponse:
+    service = _service(request)
+    data = await file.read(service.limit_for(kind) + 1)
+    try:
+        asset = await service.create(
+            session,
+            data,
+            kind,
+            source=f"api_client:{client.id}",
+            created_by=client.id,
+            persistent=False,
         )
     except MediaError as exc:
         raise _map_error(exc) from exc

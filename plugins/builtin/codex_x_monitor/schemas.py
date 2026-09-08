@@ -80,7 +80,9 @@ class CodexXMonitorConfig(BaseModel):
     wechat_mp_publish_mode: Literal["draft", "publish"] = "publish"
     publish_to_xiaohongshu: bool = False
     xiaohongshu_publish_mode: Literal["draft", "publish"] = "draft"
+    xiaohongshu_visibility: Literal["public", "private"] = "public"
     xhs_article_ai_profile: str | None = None
+    xhs_cover_image_url: AnyHttpUrl | None = None
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(
         default_factory=lambda: list(DEFAULT_CONTEXT_PATTERNS)
@@ -171,6 +173,7 @@ class ArticleDraft(BaseModel):
 class PublishVariant(BaseModel):
     platform: Literal["wechat_mp", "xiaohongshu"]
     mode: Literal["draft", "publish"] | None = None
+    visibility: Literal["public", "private"] = "public"
     title: str
     body_text: str = ""
     body_html: str | None = None

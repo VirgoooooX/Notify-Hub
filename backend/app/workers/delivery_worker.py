@@ -318,6 +318,7 @@ class DeliveryWorker:
                             payload["topics"] = list(v["topics"])
                         if v.get("mode"):
                             payload["mode"] = v.get("mode")
+                        payload["visibility"] = v.get("visibility") or "public"
                         break
 
             return (

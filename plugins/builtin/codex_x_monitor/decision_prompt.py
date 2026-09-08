@@ -295,28 +295,30 @@ def build_article_content(
 
 XHS_NOTE_GENERATION_INSTRUCTION = """
 你是一个负责写小红书技术快讯笔记的编辑，不是营销博主。请在 summary 字段中输出一篇
-克制、真实、口语化的小红书图文笔记文案，让读者快速了解 Codex / ChatGPT Work 用量重置动态。
+排版精简、参考公众号引用风格、口语化的小红书图文笔记文案，让读者快速了解 Codex / ChatGPT Work 用量重置动态。
 
-【输出结构】
-# 标题（严格限制：必须 <= 20 个字！包含换算后的北京时间）
+【输出结构规范】
+# 🔥Codex用量已重置！快查额度
 
-[简短正文：用自然口语说明核心动态与换算后的北京时间重置节点]
+📢 北京时间 [换算后的具体北京时间，如 9月8日 23:00]，OpenAI 官方执行了最新一轮 Codex 用量重置，额度现已就绪。
 
-原推作者：@[username]
-原推内容：[完整或核心原推，保留原文]
+> @[原推作者]：
+> [完整目标原推正文，保留原语言，不翻译，不删改]
 
-[补充说明或贴士（如有必要）]
+📋 核心要点：
+• 生效时间：北京时间 [具体时间]（24小时制）
+• 额度形式：[直接重置 或 可储存的重置额度]
+• 覆盖范围：全部激活 Codex 权限的用户
 
-#话题标签1 #话题标签2 #话题标签3
+#codex #openai #ChatGPT #AI编程
 
-【核心要求】
-1. 【标题严格 <= 20 字】：小红书标题上限极严格，绝对不得超过 20 个字符。
-   建议格式如“Codex用量已重置（9/8 09:15）”或“OpenAI重置用量 北京时间23点”。
-2. 【北京时间换算】：必须根据发推时间与 timing_inference，换算为
-   读者一目了然的【北京时间】（24小时制）。严禁保留原推未换算的外国时区（PT/ET/UTC）。
-3. 【真实克制】：严禁使用“炸裂、狂喜、速看、手慢无、家人们”等营销口吻与标题党。不夸大范围或效果。
-4. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时才写“重置卡”。
-5. 文末附带 2-4 个精准话题标签（如 #OpenAI #Codex #ChatGPT）。
+【核心规则】
+1. 【标题严格 <= 20 个字】：标题采用第一种短平快风格（如“🔥Codex用量已重置！快查额度”或“Codex额度已刷新(9/8 23点)”）。超过 20 个字符平台会直接拒绝发布！
+2. 【公众号风格原推引用】：推文必须完整引用，前面加上 “> @作者：” 和 “> [原推正文]” 的 blockquote 引用格式，保留原文不改动。
+3. 【精简克制，移除冗长贴士】：只陈述核心事实与换算后的北京时间，严禁添加啰嗦冗长的“使用贴士”、“操作教程”或“家人们快看”等营销口吻。
+4. 【北京时间精准换算】：严禁直接复制外国时区（PT/PST/PDT/ET/UTC），必须换算为国内读者一目了然的【北京时间】（24小时制几月几日几点）。
+5. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时才写“重置卡”。
+6. 【话题标签】：文末必须包含 #codex #openai 标签，可补充 1-2 个相关话题（如 #ChatGPT #AI编程）。
 """.strip()
 
 
@@ -325,10 +327,8 @@ def extract_xhs_title(raw_title: str, bj_display: str, reset_kind: str = "direct
     title = raw_title.lstrip("# ").strip()
     if 1 <= len(title) <= 20:
         return title
-    action = "额度更新" if reset_kind == "banked" else "用量重置"
-    fallback = f"Codex{action}({bj_display})"
-    if len(fallback) <= 20:
-        return fallback
-    time_part = bj_display.split()[-1] if " " in bj_display else bj_display
-    fallback = f"Codex{action} {time_part}"
+    if reset_kind == "banked":
+        fallback = "🔥Codex额度已更新！快查额度"
+    else:
+        fallback = "🔥Codex用量已重置！快查额度"
     return fallback[:20]

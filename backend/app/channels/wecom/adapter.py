@@ -132,9 +132,11 @@ class WeComAdapter:
                     "enable_duplicate_check": 1,
                 }
             )
-            if not media_result.success or not message.payload.get("interactive_reminder"):
+            if not media_result.success:
                 return media_result
             companion = "\n".join(part for part in [message.title, message.content] if part)
+            if not companion:
+                return media_result
             final = media_result
             for chunk in split_utf8(companion):
                 final = await self._client.send(

@@ -33,6 +33,7 @@ class ArticleDraft(BaseModel):
 class PublishVariant(BaseModel):
     platform: Literal["wechat_mp", "xiaohongshu"]
     mode: Literal["draft", "publish"] | None = None
+    visibility: Literal["public", "private"] = "public"
     title: str = Field(min_length=1, max_length=200)
     body_text: str = Field(default="", max_length=100000)
     body_html: str | None = Field(default=None, max_length=500000)
