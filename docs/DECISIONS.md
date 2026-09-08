@@ -612,6 +612,6 @@ ADR-029 在 Notify Hub 内嵌了微信公众号 Playwright 发布器，但随着
 
 - Notify Hub 新增 `NOTIFY_HUB_BROWSER_PUBLISHER_API_URL` 与 `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN` 配置；
 - Notify Hub 的 `MPArticleAdapter` 在 `browser` 模式下直接推送到 Browser Publisher 服务，同时保留本地 `mp_articles` 审计副本；
+- Notify Hub 删除旧 `mp-browser-publisher` 运行时、领取 API、会话心跳页面和 `allow_mp_browser` 运行时权限；历史迁移与已取代 ADR 仅为审计保留；
 - 新增 `XhsArticleAdapter`（渠道名 `xhs_article`），由 Delivery Worker 进行任务消费与投递；
 - Codex X Monitor 插件支持独立配置 `publish_to_wechat_mp` 和 `publish_to_xiaohongshu` 开关与独立 AI Profile。
-

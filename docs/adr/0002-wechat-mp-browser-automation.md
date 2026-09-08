@@ -1,6 +1,9 @@
 # 个人公众号基于 Playwright 独立容器全自动发布 (browser 模式)
 
-**状态：accepted**
+**状态：superseded（由 `docs/DECISIONS.md` 中 ADR-031 取代）**
+
+> 本文仅保留为历史记录。这里描述的 Notify Hub 内置领取接口、`allow_mp_browser`
+> 权限和旧容器均已删除，不得作为现行部署指导。
 
 ## 背景与决策
 

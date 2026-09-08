@@ -84,9 +84,6 @@ class Settings(BaseSettings):
     mp_token_refresh_skew_seconds: int = Field(default=120, ge=0)
     mp_publish_mode: Literal["library", "draft", "publish", "browser"] = "publish"
     mp_author: str = "Notify Hub"
-    mp_browser_alert_recipient_ids: list[str] = Field(default_factory=list, max_length=20)
-    mp_browser_claim_timeout_seconds: int = Field(default=1200, ge=300, le=3600)
-    mp_browser_max_attempts: int = Field(default=3, ge=1, le=10)
     browser_publisher_api_url: str = "http://192.168.31.100:8790"
     browser_publisher_access_token: SecretStr | None = None
     media_root: Path = Path("./data/media")
@@ -143,12 +140,6 @@ class Settings(BaseSettings):
     @field_validator("x_health_alert_recipient_ids")
     @classmethod
     def normalize_x_health_recipients(cls, value: list[str]) -> list[str]:
-        cleaned = [item.strip() for item in value if item.strip()]
-        return list(dict.fromkeys(cleaned))
-
-    @field_validator("mp_browser_alert_recipient_ids")
-    @classmethod
-    def normalize_mp_browser_recipients(cls, value: list[str]) -> list[str]:
         cleaned = [item.strip() for item in value if item.strip()]
         return list(dict.fromkeys(cleaned))
 

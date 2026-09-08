@@ -33,7 +33,6 @@ const form = reactive({
   allow_recurring: false,
   allow_cron: false,
   allow_interactive: false,
-  allow_mp_browser: false,
   max_active_reminders: 10
 })
 
@@ -66,7 +65,6 @@ async function create() {
       allow_recurring: form.allow_recurring,
       allow_cron: form.allow_cron,
       allow_interactive: form.allow_interactive,
-      allow_mp_browser: form.allow_mp_browser,
       max_active_reminders: form.max_active_reminders
     })
     secret.value = data.api_key
@@ -82,7 +80,6 @@ async function create() {
     form.allow_recurring = false
     form.allow_cron = false
     form.allow_interactive = false
-    form.allow_mp_browser = false
     form.max_active_reminders = 10
     ui.toast('Client 已创建，请立即保存 Key', 'success')
     await load()
@@ -177,9 +174,6 @@ onMounted(load)
         <AppCheckbox v-model="form.allow_interactive">
           允许持续催办
         </AppCheckbox>
-        <AppCheckbox v-model="form.allow_mp_browser">
-          允许公众号浏览器自动发布（高危）
-        </AppCheckbox>
       </div>
       <div v-if="form.allow_reminders" class="field">
         <label>活动提醒配额</label>
@@ -221,7 +215,6 @@ onMounted(load)
               {{ item.allowed_event_types?.join(', ') || '未限定' }}
             </span>
             <span v-if="item.allow_broadcast" class="danger-badge"> · 可广播</span>
-            <span v-if="item.allow_mp_browser" class="danger-badge"> · 公众号发布</span>
             <span v-if="item.allow_reminders" class="reminder-badge">
               · 提醒 {{ item.max_active_reminders ?? 10 }} 条
             </span>

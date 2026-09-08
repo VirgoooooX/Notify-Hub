@@ -42,8 +42,13 @@ AI 判定 Prompt 只把账号历史作为辅助上下文，不把过去习惯当
 ## 公众号发布（可选）
 
 - 开启 `publish_to_official_account` 后，命中事件会同时生成 `mp_article` 投递，由平台发布到微信公众号；
-- 平台需要配置公众号 AppID/Secret 与发布模式（`publish` 建草稿并提交发布，`draft` 只保存草稿）；发布逻辑完全位于核心渠道，插件不接触公众号凭证；
+- `wechat_mp_publish_mode` 可选 `publish`（默认，自动发表）或 `draft`（只保存草稿）；发布逻辑完全位于核心渠道，插件不接触公众号凭证；
 - 可选 `article_ai_profile` 只用于把帖子翻译成中文并写成摘要正文；未配置或 AI 失败时回退到确定性摘要；文章提示词要求事实性、正常口语化，不使用标题党表达；
+
+## 小红书发布（可选）
+
+- 开启 `publish_to_xiaohongshu` 后生成小红书图文任务；
+- `xiaohongshu_publish_mode` 可选 `draft`（默认，只保存草稿）或 `publish`（自动发布）。
 - 是否发布仍由规则判定与 `ai_min_confidence` 置信度阈值决定，AI 摘要不参与发布决策。
 
 ## 测试

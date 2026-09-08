@@ -77,7 +77,9 @@ class CodexXMonitorConfig(BaseModel):
     rule_ai_threshold: float = Field(default=0.8, ge=0, le=1)
     publish_to_official_account: bool = False
     publish_to_wechat_mp: bool = False
+    wechat_mp_publish_mode: Literal["draft", "publish"] = "publish"
     publish_to_xiaohongshu: bool = False
+    xiaohongshu_publish_mode: Literal["draft", "publish"] = "draft"
     xhs_article_ai_profile: str | None = None
     positive_patterns: list[str] = Field(default_factory=lambda: list(DEFAULT_POSITIVE_PATTERNS))
     required_context_patterns: list[str] = Field(

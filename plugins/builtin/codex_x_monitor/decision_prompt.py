@@ -310,8 +310,10 @@ XHS_NOTE_GENERATION_INSTRUCTION = """
 #话题标签1 #话题标签2 #话题标签3
 
 【核心要求】
-1. 【标题严格 <= 20 字】：小红书标题上限极严格，绝对不得超过 20 个字符。建议格式如“Codex用量已重置（9/8 09:15）”或“OpenAI重置用量 北京时间23点”。
-2. 【北京时间换算】：必须根据发推时间（published_at_beijing）与 timing_inference，推断并换算为读者一目了然的【北京时间】（24小时制几点几分）。严禁保留原推未换算的外国时区（PT/ET/UTC）。
+1. 【标题严格 <= 20 字】：小红书标题上限极严格，绝对不得超过 20 个字符。
+   建议格式如“Codex用量已重置（9/8 09:15）”或“OpenAI重置用量 北京时间23点”。
+2. 【北京时间换算】：必须根据发推时间与 timing_inference，换算为
+   读者一目了然的【北京时间】（24小时制）。严禁保留原推未换算的外国时区（PT/ET/UTC）。
 3. 【真实克制】：严禁使用“炸裂、狂喜、速看、手慢无、家人们”等营销口吻与标题党。不夸大范围或效果。
 4. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时才写“重置卡”。
 5. 文末附带 2-4 个精准话题标签（如 #OpenAI #Codex #ChatGPT）。
@@ -330,4 +332,3 @@ def extract_xhs_title(raw_title: str, bj_display: str, reset_kind: str = "direct
     time_part = bj_display.split()[-1] if " " in bj_display else bj_display
     fallback = f"Codex{action} {time_part}"
     return fallback[:20]
-

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import structlog
-
 from app.channels.base import ChannelMessage, ChannelResult
 from app.channels.browser_publisher.client import (
     BrowserPublisherClient,

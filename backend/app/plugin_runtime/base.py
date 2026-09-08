@@ -73,7 +73,8 @@ class EventDraft(BaseModel):
 
     @model_validator(mode="after")
     def sync_legacy_publish_to_mp(self) -> EventDraft:
-        # Legacy compatibility: if publish_to_mp is True and wechat_mp variant is missing, auto-create it
+        # Legacy compatibility: if publish_to_mp is True and wechat_mp variant is missing,
+        # auto-create it
         has_mp_variant = any(v.platform == "wechat_mp" for v in self.publish_variants)
         if self.publish_to_mp and not has_mp_variant:
             img_list: list[AnyHttpUrl] = []

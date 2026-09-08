@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -34,6 +35,7 @@ from .schemas import (
 from .sources import CodexRssHubSource, PostSource, RssAtomSource, TwscrapeSource, XApiSource
 
 MAX_RECENT_PROCESSED_IDS = 200
+NOTIFICATION_POST_MAX_LENGTH = 180
 
 
 class EmitEventError(RuntimeError):
@@ -53,11 +55,23 @@ def _receipt_status(receipt: Any) -> str | None:
 
 
 def format_post_summary(post: XPost, max_length: int | None = None) -> str:
-    text = post.text.strip()
+    cleaned_lines: list[str] = []
+    for raw_line in post.text.splitlines():
+        line = raw_line.strip()
+        while line.startswith(">"):
+            line = line[1:].lstrip()
+        heading = line.lstrip("#")
+        if heading != line and heading.startswith(" "):
+            continue
+        if re.fullmatch(r"@[A-Za-z0-9_]+\s*原推[：:]?", line):
+            continue
+        if line:
+            cleaned_lines.append(line)
+    text = "\n".join(cleaned_lines)
     if max_length is not None and len(text) > max_length:
         text = text[: max_length - 1].rstrip() + "…"
     bj_time = post.published_at.astimezone(BEIJING_TZ).strftime("%m月%d日 %H:%M")
-    prefix = f"@{post.author_username} 发布了与 Codex 用量重置相关的新消息 (北京时间 {bj_time}):"
+    prefix = f"Codex 可能有用量重置相关更新（北京时间 {bj_time}）。\n@{post.author_username} 原推："
     return f"{prefix}\n\n{text}"
 
 
@@ -184,7 +198,7 @@ class CodexXMonitorPlugin:
             if should_notify:
                 matched += 1
                 summary = format_post_summary(post)
-                content = summary
+                content = format_post_summary(post, max_length=NOTIFICATION_POST_MAX_LENGTH)
                 article_ai_status = "rules_summary"
                 reset_kind = result.reset_kind or detect_reset_kind(post.text) or "direct"
                 bj_display = post.published_at.astimezone(BEIJING_TZ).strftime("%m月%d日 %H:%M")
@@ -215,8 +229,6 @@ class CodexXMonitorPlugin:
                             candidate_title = lines[0].lstrip("# ").strip()
                             if candidate_title:
                                 mp_title = candidate_title[:64]
-                                event_title = mp_title
-                        content = mp_content
                     except Exception as exc:
                         article_ai_status = "fallback_summary"
                         context.logger.warning(
@@ -234,6 +246,7 @@ class CodexXMonitorPlugin:
                     publish_variants.append(
                         PublishVariant(
                             platform="wechat_mp",
+                            mode=config.wechat_mp_publish_mode,
                             title=mp_title,
                             body_text=mp_content,
                             image_urls=[cover_url] if cover_url else [],
@@ -268,13 +281,13 @@ class CodexXMonitorPlugin:
                                 "xhs_ai_summary_failed", post_id=post.id, error=str(exc)
                             )
                     xhs_title = extract_xhs_title(xhs_raw_title, bj_display, reset_kind)
-                    import re
-
                     tags = [t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5]+)", xhs_content)]
-                    xhs_topics = list(dict.fromkeys(tags)) if tags else ["OpenAI", "Codex", "用量重置"]
+                    default_topics = ["OpenAI", "Codex", "用量重置"]
+                    xhs_topics = list(dict.fromkeys(tags)) if tags else default_topics
                     publish_variants.append(
                         PublishVariant(
                             platform="xiaohongshu",
+                            mode=config.xiaohongshu_publish_mode,
                             title=xhs_title,
                             body_text=xhs_content,
                             image_urls=[cover_url] if cover_url else [],
@@ -307,15 +320,13 @@ class CodexXMonitorPlugin:
                             "ai_confidence": getattr(ai_decision, "confidence", None),
                             "ai_reason": getattr(ai_decision, "reason", None),
                             "article_ai_profile": (
-                                config.article_ai_profile
-                                if config.publish_to_wechat_mp
-                                else None
+                                config.article_ai_profile if config.publish_to_wechat_mp else None
                             ),
                             "article_ai_status": article_ai_status,
                         },
                         article=ArticleDraft(
                             title=event_title,
-                            description=summary,
+                            description=content,
                             url=post.url,
                             image_url=cover_url,
                         ),

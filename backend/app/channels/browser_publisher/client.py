@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import structlog
@@ -76,7 +76,7 @@ class BrowserPublisherClient:
                     headers=headers,
                 )
                 if resp.status_code in (200, 202):
-                    return resp.json()
+                    return cast(dict[str, Any], resp.json())
 
                 if resp.status_code >= 500 or resp.status_code == 429:
                     raise BrowserPublisherTemporaryError(

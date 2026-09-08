@@ -127,7 +127,6 @@ class ApiClient(StringIdMixin, TimestampMixin, Base):
     allow_recurring: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allow_cron: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     allow_interactive: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    allow_mp_browser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     max_active_reminders: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
     rate_limit_per_minute: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

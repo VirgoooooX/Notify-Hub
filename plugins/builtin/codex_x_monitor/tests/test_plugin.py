@@ -257,8 +257,12 @@ def test_publish_to_official_account_emits_publish_event_with_ai_summary() -> No
     assert result.emitted_events == 1
     event = context.events[0]
     assert event.publish_to_mp is True
-    assert event.content == "AI 翻译后的公众号正文。"
+    assert event.content.startswith("Codex 可能有用量重置相关更新")
+    assert "\n# " not in event.content
+    assert "\n>" not in event.content
     assert event.article is not None
+    assert event.publish_variants[0].platform == "wechat_mp"
+    assert event.publish_variants[0].body_text == "AI 翻译后的公众号正文。"
     summarize_call = context.ai.calls[-1]
     assert summarize_call["profile"] == "article_summarizer"
     assert "target_post" in summarize_call["content"]
@@ -283,7 +287,7 @@ def test_publish_ai_summary_failure_falls_back_to_deterministic_summary() -> Non
     assert result.emitted_events == 1
     event = context.events[0]
     assert event.publish_to_mp is True
-    assert event.content.startswith("@thsottiaux 发布了")
+    assert event.content.startswith("Codex 可能有用量重置相关更新")
     assert context.logger.messages[0][0] == "article_ai_summary_failed"
 
 
@@ -858,6 +862,26 @@ def test_post_payload_preserves_long_tweet_without_truncation() -> None:
     assert not summary.endswith("…")
 
 
+def test_notification_summary_strips_markdown_heading_and_quote_markers() -> None:
+    from plugins.builtin.codex_x_monitor.plugin import format_post_summary
+
+    post = XPost(
+        id="123457",
+        author_username="thsottiaux",
+        author_display_name="Thomas Sottiaux",
+        text="# 重置消息\n\n> @thsottiaux 原推：\n> All reset for everyone.",
+        url="https://x.com/thsottiaux/status/123457",
+        published_at=datetime.fromisoformat("2026-09-08T04:05:00+00:00"),
+    )
+
+    summary = format_post_summary(post, max_length=180)
+
+    assert "# 重置消息" not in summary
+    assert "\n>" not in summary
+    assert summary.count("@thsottiaux 原推：") == 1
+    assert "All reset for everyone." in summary
+
+
 def test_infer_reset_timing_various_cases() -> None:
     from plugins.builtin.codex_x_monitor.decision_prompt import infer_reset_timing
 
@@ -965,7 +989,9 @@ async def test_plugin_generates_dual_publish_variants() -> None:
             "enabled": True,
             "first_run_mode": "scan_recent",
             "publish_to_wechat_mp": True,
+            "wechat_mp_publish_mode": "publish",
             "publish_to_xiaohongshu": True,
+            "xiaohongshu_publish_mode": "publish",
             "article_ai_profile": "article_fast",
             "xhs_article_ai_profile": "xhs_fast",
         },
@@ -984,9 +1010,10 @@ async def test_plugin_generates_dual_publish_variants() -> None:
     xhs_variant = next(v for v in draft.publish_variants if v.platform == "xiaohongshu")
 
     assert mp_variant.title
+    assert mp_variant.mode == "publish"
     assert mp_variant.image_urls
     assert xhs_variant.title
+    assert xhs_variant.mode == "publish"
     assert len(xhs_variant.title) <= 20
     assert len(xhs_variant.image_urls) >= 1
     assert xhs_variant.topics
-

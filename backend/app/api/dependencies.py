@@ -107,21 +107,6 @@ async def require_article_actor(
     return await _resolve_article_actor(request, authorization, x_api_key)
 
 
-async def require_mp_browser_actor(
-    request: Request,
-    authorization: str | None = Header(default=None),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> Admin | ApiClient:
-    actor = await _resolve_article_actor(request, authorization, x_api_key)
-    if isinstance(actor, ApiClient) and not actor.allow_mp_browser:
-        raise AppError(
-            "mp_browser_forbidden",
-            "API client cannot operate the MP browser publisher",
-            403,
-        )
-    return actor
-
-
 async def require_api_client(
     request: Request, x_api_key: str | None = Header(default=None, alias="X-API-Key")
 ) -> ApiClient:

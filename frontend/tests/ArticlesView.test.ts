@@ -3,7 +3,7 @@ import { createPinia } from 'pinia'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setApiFetcher } from '@/lib/api'
 import ArticlesView from '@/views/ArticlesView.vue'
-import type { MpArticle, MpBrowserSession, Page } from '@/types'
+import type { MpArticle, Page } from '@/types'
 
 const article: MpArticle = {
   id: 'mpa_1',
@@ -29,11 +29,6 @@ const article: MpArticle = {
   created_at: '2026-08-13T00:00:00Z',
   updated_at: '2026-08-13T00:00:00Z',
   payload: {},
-  browser_phase: null,
-  browser_attempt_count: 0,
-  browser_last_error_code: null,
-  browser_last_error_message: null,
-  published_url: null,
 }
 
 function page(items: MpArticle[]): Page<MpArticle> {
@@ -51,7 +46,6 @@ function fetcher(
   requests: Array<{ path: string; method: string; body?: Record<string, unknown> }>,
   options?: {
     effective_mode?: 'library' | 'browser'
-    session?: Partial<MpBrowserSession>
     articles?: MpArticle[]
   },
 ) {
@@ -70,18 +64,6 @@ function fetcher(
         effective_mode: effectiveMode,
         author: 'Notify Hub',
         mp_editor_url: 'https://mp.weixin.qq.com',
-      })
-    }
-    if (path.endsWith('/admin/mp-browser/session')) {
-      return json({
-        state: 'ready',
-        last_seen_at: '2026-09-06T10:00:00Z',
-        current_article_id: null,
-        incident_id: null,
-        last_error_code: null,
-        last_error_message: null,
-        qr_data_url: null,
-        ...(options?.session || {}),
       })
     }
     if (path.endsWith('/admin/articles/mpa_1/publish')) {
@@ -117,103 +99,13 @@ describe('ArticlesView', () => {
     wrapper.unmount()
   })
 
-  it('renders browser mode banner and session ready indicator', async () => {
-    setApiFetcher(fetcher([], { effective_mode: 'browser', session: { state: 'ready' } }))
+  it('renders the standalone Browser Publisher mode banner', async () => {
+    setApiFetcher(fetcher([], { effective_mode: 'browser' }))
     const wrapper = mount(ArticlesView, { global: { plugins: [createPinia()] } })
     await flushPromises()
 
     expect(wrapper.text()).toContain('浏览器自动发布模式')
-    expect(wrapper.text()).toContain('Publisher 在线就绪')
-    wrapper.unmount()
-  })
-
-  it('displays QR code image when session requires auth', async () => {
-    setApiFetcher(
-      fetcher([], {
-        effective_mode: 'browser',
-        session: {
-          state: 'auth_required',
-          qr_data_url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
-        },
-      }),
-    )
-    const wrapper = mount(ArticlesView, { global: { plugins: [createPinia()] } })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('微信公众号登录会话已过期')
-    const img = wrapper.find('img.qr-img')
-    expect(img.exists()).toBe(true)
-    expect(img.attributes('src')).toContain('data:image/png;base64')
-    wrapper.unmount()
-  })
-
-  it('shows offline warning when publisher is offline', async () => {
-    setApiFetcher(
-      fetcher([], {
-        effective_mode: 'browser',
-        session: { state: 'offline' },
-      }),
-    )
-    const wrapper = mount(ArticlesView, { global: { plugins: [createPinia()] } })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('Publisher 处于离线状态 (offline)')
-    wrapper.unmount()
-  })
-
-  it('renders publishing and failed status with published URL link', async () => {
-    const publishedArticle: MpArticle = {
-      ...article,
-      id: 'mpa_pub',
-      status: 'published',
-      published_url: 'https://mp.weixin.qq.com/s/sample_url',
-    }
-    const failedArticle: MpArticle = {
-      ...article,
-      id: 'mpa_fail',
-      status: 'failed',
-      browser_last_error_code: 'EDITOR_TIMEOUT',
-      browser_attempt_count: 3,
-    }
-    setApiFetcher(fetcher([], { articles: [publishedArticle, failedArticle] }))
-    const wrapper = mount(ArticlesView, { global: { plugins: [createPinia()] } })
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('EDITOR_TIMEOUT')
-    const link = wrapper.find('a.published-link')
-    expect(link.exists()).toBe(true)
-    expect(link.attributes('href')).toBe('https://mp.weixin.qq.com/s/sample_url')
-    wrapper.unmount()
-  })
-
-  it('handles PUBLISH_RESULT_UNKNOWN in modal and suppresses blind retry', async () => {
-    const unknownArticle: MpArticle = {
-      ...article,
-      id: 'mpa_unknown',
-      status: 'failed',
-      browser_last_error_code: 'PUBLISH_RESULT_UNKNOWN',
-      browser_last_error_message: 'Result unknown',
-      browser_phase: 'publish_clicked',
-    }
-    setApiFetcher(
-      fetcher([], {
-        effective_mode: 'browser',
-        articles: [unknownArticle],
-      }),
-    )
-    const wrapper = mount(ArticlesView, {
-      attachTo: document.body,
-      global: { plugins: [createPinia()] },
-    })
-    await flushPromises()
-
-    const viewBtn = wrapper.findAll('button').filter((btn) => btn.text().trim() === '查看')[0]
-    await viewBtn.trigger('click')
-    await flushPromises()
-
-    expect(document.body.textContent).toContain('实际结果未知')
-    expect(document.body.textContent).toContain('确认已发布')
-    expect(document.body.textContent).not.toContain('重新排队')
+    expect(wrapper.text()).toContain('独立 Browser Publisher')
     wrapper.unmount()
   })
 })

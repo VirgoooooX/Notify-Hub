@@ -498,13 +498,13 @@ async def test_mp_article_adapter_browser_mode_without_credentials(
     assert res.response_metadata is not None
     assert res.response_metadata["publish_mode"] == "browser"
     assert res.response_metadata["manual_publish_required"] is False
-    assert res.response_metadata["browser_publish_queued"] is True
+    assert "publisher_job_queued" not in res.response_metadata
 
     test_res = await adapter.test("")
     assert test_res.success is True
     assert test_res.response_metadata is not None
     assert test_res.response_metadata["publish_mode"] == "browser"
-    assert test_res.response_metadata["browser_publish_queued"] is True
+    assert test_res.response_metadata["publisher_configured"] is False
 
 
 @pytest.mark.asyncio

@@ -303,9 +303,7 @@ class DeliveryWorker:
             image_url = notification.image_url
             if delivery.channel in ("mp_article", "xhs_article"):
                 variants = payload.get("publish_variants") or []
-                target_platform = (
-                    "wechat_mp" if delivery.channel == "mp_article" else "xiaohongshu"
-                )
+                target_platform = "wechat_mp" if delivery.channel == "mp_article" else "xiaohongshu"
                 for v in variants:
                     if isinstance(v, dict) and v.get("platform") == target_platform:
                         title = v.get("title") or title

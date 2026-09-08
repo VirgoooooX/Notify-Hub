@@ -515,9 +515,8 @@ npm run build
 | `NOTIFY_HUB_MP_APP_SECRET` | 公众号 AppSecret |
 | `NOTIFY_HUB_MP_PUBLISH_MODE` | `browser` 独立 Playwright 全自动发布；`library` 文章库人工发布（默认兜底）；`draft` 官方 API 保存草稿；`publish` 官方 API 提交发布 |
 | `NOTIFY_HUB_MP_AUTHOR` | 文章作者名，默认 `Notify Hub` |
-| `NOTIFY_HUB_MP_BROWSER_ALERT_RECIPIENT_IDS` | 浏览器容器会话失效或登录二维码企业微信接收人 Person ID 列表（逗号分隔） |
-| `NOTIFY_HUB_MP_BROWSER_CLAIM_TIMEOUT_SECONDS` | 浏览器认领超时时间（秒，默认 300） |
-| `NOTIFY_HUB_MP_BROWSER_MAX_ATTEMPTS` | 单篇文章最大发布重试次数（默认 3） |
+| `NOTIFY_HUB_BROWSER_PUBLISHER_API_URL` | 独立 Browser Publisher 的 HTTP 地址 |
+| `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN` | Notify Hub 提交发布任务使用的 Bearer Token，须与发布器一致 |
 
 ### 双路径行为
 
@@ -530,23 +529,8 @@ npm run build
 
 ### Playwright 全自动发布与文章库运维
 
-- **发布模式配置**：设置 `NOTIFY_HUB_MP_PUBLISH_MODE=browser`，此时插件触发的 `publish_to_mp` 会自动落库进入待发布队列（状态 `ready`）；
-- **启动独立发布容器**：
-  ```bash
-  docker compose --profile mp-browser up -d mp-browser-publisher
-  ```
-- **发布器通信与权限**：
-  - 容器通过 `NOTIFY_HUB_MP_BROWSER_API_KEY` 与 Notify Hub 核心通信；
-  - 该密钥必须来自后台「API 客户端」中开启了 `allow_mp_browser` 授权的专用客户端；
-- **登录态与二维码运维**：
-  - 浏览器容器每 30 秒发送一次心跳；服务端若超过 45 秒未收到心跳则自动标记为 `offline`；
-  - 首次启动或登录态过期时，容器捕获微信扫码登录二维码并上报；
-  - 核心服务通过内部事件投递企业微信通知指定接收人（`NOTIFY_HUB_MP_BROWSER_ALERT_RECIPIENT_IDS`），并在后台「公众号文章」页面右上角同步展示扫码弹窗；
-  - 浏览器 User Data 挂载在数据卷 `mp_browser_profile`，扫码登录成功后会话自动持久化；
-- **防重复群发防线**：
-  - 自动化流程保存草稿后记录 `draft_saved`，点击群发后记录 `publish_clicked`；
-  - 进入 `publish_clicked` 阶段后，任何超时或重试仅以 `reconcile` 模式只读查询已发布列表，严禁再次点击发表按钮；
-  - 若多次核对仍无法获取发布链接，状态置为 `failed` 且后台禁止直接 restore，避免重复群发；
-- **错误排查与截图清理**：
-  - 发生异常时，容器自动对当前页面进行截图保存于 `artifacts` 目录；
-  - 内部自动维护至多保留最新的 20 张截图，避免存储泄漏。
+- 设置 `NOTIFY_HUB_MP_PUBLISH_MODE=browser` 后，Notify Hub 通过 `POST /v1/jobs` 将任务推送给独立 Browser Publisher；旧的轮询领取 API、专用权限和内置容器均已删除。
+- Browser Publisher 使用自己的 SQLite 保存任务与阶段，所有重试、发布确认、登录态和二维码均在其控制台查看。
+- 两个服务使用同一高强度 Token：Notify Hub 配置 `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN`，发布器配置 `PUBLISHER_ACCESS_TOKEN`。
+- 若启用登录失效和风控告警，Browser Publisher 通过 `PUBLISHER_NOTIFY_EVENT_URL` 与普通 Notify Hub API Client Key 调用外部事件 API；无需任何发布器专属权限。
+- 微信公众号进入 `publish_clicked` 后只能核对结果，不再次点击发表；异常截图只保留最新 20 张。具体实现和部署参数以独立工程 `L:/Web/Browser Publisher` 的 README 与 compose 为准。

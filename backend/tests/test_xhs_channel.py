@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock
 
 import pytest
 import respx
-
 from app.channels.base import ChannelMessage
 from app.channels.browser_publisher.client import (
     BrowserPublisherClient,
@@ -316,7 +315,7 @@ async def test_mp_adapter_submits_to_browser_publisher_when_in_browser_mode(
     mock_publisher.submit_job.assert_called_once_with(
         client_request_id="notify-hub:dlv_mp_test:wechat_mp",
         platform="wechat_mp",
-        mode="draft",
+        mode="publish",
         title="WeChat Article Title",
         body_text="WeChat article content",
         body_html="<p>WeChat article content</p>",
@@ -325,5 +324,3 @@ async def test_mp_adapter_submits_to_browser_publisher_when_in_browser_mode(
         image_urls=["https://example.com/cover.jpg"],
         source_url=None,
     )
-
-

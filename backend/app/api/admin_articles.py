@@ -14,7 +14,6 @@ VALID_STATUSES = {"draft", "ready", "publishing", "published", "failed", "ignore
 
 
 def serialize_article(article: MpArticle) -> dict[str, Any]:
-    bp = (article.payload or {}).get("browser_publish") or {}
     return {
         "id": article.id,
         "status": article.status,
@@ -39,11 +38,6 @@ def serialize_article(article: MpArticle) -> dict[str, Any]:
         "created_at": article.created_at.isoformat() if article.created_at else None,
         "updated_at": article.updated_at.isoformat() if article.updated_at else None,
         "payload": article.payload,
-        "browser_phase": bp.get("phase"),
-        "browser_attempt_count": bp.get("attempt_count", 0),
-        "browser_last_error_code": bp.get("last_error_code"),
-        "browser_last_error_message": bp.get("last_error_message"),
-        "published_url": bp.get("published_url"),
     }
 
 
