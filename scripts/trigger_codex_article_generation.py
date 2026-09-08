@@ -8,6 +8,9 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "backend"))
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 try:
     from scripts.set_plugin_secret import load_env_manually
 
@@ -69,6 +72,7 @@ async def main() -> None:
         )
         if existing_summarizer is not None:
             profile = existing_summarizer
+            profile.timeout_seconds = 90.0
             print(
                 f"Using existing AI Profile '{profile.id}' ({profile.name}, model={profile.model})"
             )

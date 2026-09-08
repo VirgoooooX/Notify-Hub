@@ -60,13 +60,16 @@ class MPArticleLibraryService:
             event_info = await self._load_event_info(session, delivery_id) if delivery_id else {}
             payload = dict(message.payload or {})
             digest = self._digest(message)
+            raw_content = message.content or ""
+            if "\\n" in raw_content and "\n" not in raw_content:
+                raw_content = raw_content.replace("\\n", "\n")
             content_html = render_wechat_html(
-                content=message.content,
+                content=raw_content,
                 cover_url=message.image_url,
                 source_url=message.url,
             )
             title = message.title
-            content_lines = (message.content or "").strip().splitlines()
+            content_lines = raw_content.strip().splitlines()
             if content_lines and content_lines[0].strip().startswith("# "):
                 extracted_title = content_lines[0].strip().lstrip("# ").strip()
                 if extracted_title:

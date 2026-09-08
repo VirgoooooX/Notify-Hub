@@ -8,6 +8,7 @@ from typing import Any
 
 from .decision_prompt import (
     ARTICLE_GENERATION_INSTRUCTION,
+    BEIJING_TZ,
     RESET_CLASSIFICATION_INSTRUCTION,
     build_article_content,
     build_classification_content,
@@ -52,7 +53,9 @@ def format_post_summary(post: XPost, max_length: int | None = None) -> str:
     text = post.text.strip()
     if max_length is not None and len(text) > max_length:
         text = text[: max_length - 1].rstrip() + "…"
-    return f"@{post.author_username} 发布了与 Codex 用量重置相关的新消息:\n\n{text}"
+    bj_time = post.published_at.astimezone(BEIJING_TZ).strftime("%m月%d日 %H:%M")
+    prefix = f"@{post.author_username} 发布了与 Codex 用量重置相关的新消息 (北京时间 {bj_time}):"
+    return f"{prefix}\n\n{text}"
 
 
 class CodexXMonitorPlugin:
@@ -181,8 +184,11 @@ class CodexXMonitorPlugin:
                 content = summary
                 article_ai_status = "rules_summary"
                 reset_kind = result.reset_kind or detect_reset_kind(post.text) or "direct"
+                bj_display = post.published_at.astimezone(BEIJING_TZ).strftime("%m月%d日 %H:%M")
                 event_title = (
-                    "Codex 可储存重置额度更新" if reset_kind == "banked" else "Codex 用量重置更新"
+                    f"Codex 可储存重置额度更新 ({bj_display})"
+                    if reset_kind == "banked"
+                    else f"Codex 用量重置更新 ({bj_display})"
                 )
                 if config.publish_to_official_account and config.article_ai_profile:
                     try:
@@ -196,6 +202,8 @@ class CodexXMonitorPlugin:
                             cache_key=f"x:{post.author_username}:{post.id}:article",
                         )
                         content = article_result.summary.strip() or summary
+                        if "\\n" in content and "\n" not in content:
+                            content = content.replace("\\n", "\n")
                         article_ai_status = "ai_summarized"
                         lines = content.strip().splitlines()
                         if lines and lines[0].startswith("# "):

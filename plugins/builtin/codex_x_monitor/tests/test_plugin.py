@@ -856,3 +856,65 @@ def test_post_payload_preserves_long_tweet_without_truncation() -> None:
     summary = format_post_summary(post)
     assert long_text in summary
     assert not summary.endswith("…")
+
+
+def test_infer_reset_timing_various_cases() -> None:
+    from plugins.builtin.codex_x_monitor.decision_prompt import infer_reset_timing
+
+    # 2026-09-08 01:15:00 UTC == 2026-09-08 09:15:00 Beijing
+    base_pub = datetime(2026, 9, 8, 1, 15, 0, tzinfo=UTC)
+
+    # Immediate reset
+    res_imm = infer_reset_timing(
+        "Hit the reset button for all ChatGPT Work and Codex users. Enjoy coding this weekend!",
+        base_pub,
+    )
+    assert res_imm["timing_type"] == "immediate"
+    assert "09:15" in res_imm["inferred_reset_time_beijing"]
+    assert "09月08日" in res_imm["inferred_reset_time_beijing"]
+
+    # Relative future: in 2 hours -> 11:15 Beijing
+    res_rel = infer_reset_timing("Will hit the reset button in 2 hours!", base_pub)
+    assert res_rel["timing_type"] == "scheduled_relative"
+    assert "11:15" in res_rel["inferred_reset_time_beijing"]
+
+    # Relative future: in 30 mins -> 09:45 Beijing
+    res_min = infer_reset_timing("Quotas will reset in 30 mins.", base_pub)
+    assert res_min["timing_type"] == "scheduled_relative"
+    assert "09:45" in res_min["inferred_reset_time_beijing"]
+
+    # Exact time PT: 9am PT tomorrow
+    # On Sep 8, PDT is UTC-7. 9am PDT = 16:00 UTC = next day 00:00 Beijing
+    res_pt = infer_reset_timing("Resetting everyone at 9am PT tomorrow.", base_pub)
+    assert res_pt["timing_type"] == "scheduled_exact"
+    assert "00:00" in res_pt["inferred_reset_time_beijing"]
+    assert "09月09日" in res_pt["inferred_reset_time_beijing"]
+
+    # Fallback
+    res_fallback = infer_reset_timing("Some general discussion about usage limits.", base_pub)
+    assert res_fallback["timing_type"] == "post_time_fallback"
+    assert "09:15" in res_fallback["inferred_reset_time_beijing"]
+
+
+def test_post_payload_includes_beijing_time_and_inference() -> None:
+    from plugins.builtin.codex_x_monitor.decision_prompt import (
+        ARTICLE_GENERATION_INSTRUCTION,
+        _post_payload,
+    )
+
+    post = XPost(
+        id="999",
+        author_username="thsottiaux",
+        author_display_name="Thomas Sottiaux",
+        text="Hit the reset button for all ChatGPT Work and Codex users.",
+        url="https://x.com/thsottiaux/status/999",
+        published_at=datetime(2026, 9, 8, 1, 15, 0, tzinfo=UTC),
+    )
+
+    payload = _post_payload(post)
+    assert "published_at_beijing" in payload
+    assert "published_at_beijing_display" in payload
+    assert "09月08日 09:15" in str(payload["published_at_beijing_display"])
+    assert "timing_inference" in payload
+    assert "北京时间" in ARTICLE_GENERATION_INSTRUCTION
+    assert "24小时制" in ARTICLE_GENERATION_INSTRUCTION
