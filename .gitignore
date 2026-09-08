@@ -20,10 +20,15 @@ frontend/coverage/
 frontend/.vite/
 *.tsbuildinfo
 
+# Dynamic generated assets
+frontend/public/xhs_covers/*
+!frontend/public/xhs_covers/.gitkeep
+
 # Local package-manager state
 .npm/
 .python-version
 docs/project-log.md
+
 # Runtime data and secrets
 .env
 .env.*
@@ -40,12 +45,16 @@ docs/project-log.md
 *.db-shm
 *.db-wal
 
+# Temporary, scratch & testing artifacts
+/scratch/
+.tmp/
+.playwright-cli/
+.pi/
+
 # Editors and operating systems
 .idea/
 .vscode/
 .DS_Store
 Thumbs.db
-.codegraph
-.codex/generated
-.playwright-cli
-.tmp
+.codegraph/
+.codex/generated/
