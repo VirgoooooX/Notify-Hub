@@ -24,7 +24,14 @@ QR_SELECTORS = [
     'img[src*="scanloginqrcode"]',
     ".login__type__container img",
 ]
-CONFIRM_BUTTON_NAMES = ["确认", "继续发表", "确定", "群发"]
+CONFIRM_BUTTON_NAMES = [
+    "继续发表",
+    "发表",
+    "继续群发",
+    "群发",
+    "确认",
+    "确定",
+]
 
 
 class WeChatPublisher:
@@ -479,41 +486,73 @@ class WeChatPublisher:
         )
 
     async def click_publish_and_confirm(self, page: Any) -> None:
-        """Click 'button.mass_send' and confirm publication dialog."""
+        """Enter the publish flow and confirm the final publish action."""
         await self.check_risk_control(page)
 
         mass_send_btn = page.locator("button.mass_send")
-        if await mass_send_btn.count() == 0:
-            mass_send_btn = page.get_by_role("button", name="发表")
-        if await mass_send_btn.count() == 0:
-            mass_send_btn = page.get_by_role("button", name="群发")
-        if await mass_send_btn.count() == 0:
+        entry_name = ""
+        if await mass_send_btn.count() == 0 or not await mass_send_btn.first.is_visible():
+            for name in ["下一步", "发表", "群发"]:
+                candidate = page.get_by_role("button", name=name, exact=True)
+                if await candidate.count() > 0 and await candidate.first.is_visible():
+                    mass_send_btn = candidate
+                    entry_name = name
+                    break
+        if await mass_send_btn.count() == 0 or not await mass_send_btn.first.is_visible():
             raise RuntimeError("PUBLISH_CONFIRM_FAILED: Publish / mass_send button not found")
 
+        if not entry_name:
+            try:
+                entry_name = (await mass_send_btn.first.inner_text()).strip()
+            except Exception:
+                entry_name = ""
         await mass_send_btn.first.click()
-        await asyncio.sleep(1.0)
+        next_step_clicked = entry_name == "下一步"
+        ai_declaration_clicked = False
+        deadline = asyncio.get_running_loop().time() + self._settings.operation_timeout_seconds
 
-        # Check for AI declaration if platform displays one
-        ai_option = page.locator(':has-text("AI 辅助生成"), :has-text("AI 生成")')
-        if await ai_option.count() > 0 and await ai_option.first.is_visible():
-            await ai_option.first.click()
-            await asyncio.sleep(0.5)
+        while asyncio.get_running_loop().time() < deadline:
+            await self.check_risk_control(page)
 
-        # In confirmation dialog, click ONLY whitelisted button texts
-        confirmed = False
-        for name in CONFIRM_BUTTON_NAMES:
-            confirm_btn = page.locator(
-                f'.weui-desktop-dialog button:has-text("{name}"), '
-                f'.weui-desktop-modal button:has-text("{name}"), '
-                f'button.weui-desktop-btn_primary:has-text("{name}")'
-            )
-            if await confirm_btn.count() > 0 and await confirm_btn.first.is_visible():
-                await confirm_btn.first.click()
-                confirmed = True
-                break
+            if not ai_declaration_clicked:
+                for option_name in ["AI 辅助生成", "AI 生成"]:
+                    ai_option = page.get_by_text(option_name, exact=True)
+                    if await ai_option.count() > 0 and await ai_option.first.is_visible():
+                        await ai_option.first.click()
+                        ai_declaration_clicked = True
+                        break
 
-        if not confirmed:
-            raise RuntimeError("PUBLISH_CONFIRM_FAILED: Confirmation modal button not found")
+            # Older MP pages use a confirmation dialog directly.
+            for name in CONFIRM_BUTTON_NAMES:
+                confirm_btn = page.locator(
+                    f'.weui-desktop-dialog button:has-text("{name}"), '
+                    f'.weui-desktop-modal button:has-text("{name}"), '
+                    f'[role="dialog"] button:has-text("{name}"), '
+                    f'button.weui-desktop-btn_primary:has-text("{name}")'
+                )
+                if await confirm_btn.count() > 0 and await confirm_btn.first.is_visible():
+                    await confirm_btn.first.click()
+                    return
+
+            # The current MP editor first enters a separate publish page via “下一步”.
+            if not next_step_clicked:
+                next_btn = page.get_by_role("button", name="下一步", exact=True)
+                if await next_btn.count() > 0 and await next_btn.first.is_visible():
+                    await next_btn.first.click()
+                    next_step_clicked = True
+                    await asyncio.sleep(0.5)
+                    continue
+
+            if next_step_clicked:
+                for name in CONFIRM_BUTTON_NAMES:
+                    final_btn = page.get_by_role("button", name=name, exact=True)
+                    if await final_btn.count() > 0 and await final_btn.first.is_visible():
+                        await final_btn.first.click()
+                        return
+
+            await asyncio.sleep(0.25)
+
+        raise RuntimeError("PUBLISH_CONFIRM_FAILED: Final publish button not found")
 
     async def verify_published(self, page: Any, title: str, start_time: datetime) -> str | None:
         """Verify publication success and extract published article URL."""

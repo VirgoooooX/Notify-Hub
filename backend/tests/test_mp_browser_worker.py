@@ -344,3 +344,76 @@ async def test_wechat_open_draft_domain_validation(tmp_path: Path) -> None:
 
     await publisher.open_draft(mock_page, "https://mp.weixin.qq.com/cgi-bin/appmsg?id=1")
     mock_page.goto.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_wechat_publish_supports_next_step_before_final_publish(tmp_path: Path) -> None:
+    settings = MPBrowserSettings(
+        api_base_url="https://hub.example.com/api/v1/admin/mp-browser",
+        api_key=SecretStr("nfy_secure_key_1234567890"),
+        profile_dir=tmp_path / "profile",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    publisher = WeChatPublisher(settings)
+    publisher.check_risk_control = AsyncMock()  # type: ignore[method-assign]
+
+    page = MagicMock()
+    stage = 0
+
+    entry = MagicMock()
+    entry.first = entry
+    entry.count = AsyncMock(return_value=1)
+    entry.is_visible = AsyncMock(return_value=True)
+    entry.inner_text = AsyncMock(return_value="下一步")
+
+    async def click_entry() -> None:
+        nonlocal stage
+        stage = 1
+
+    entry.click = AsyncMock(side_effect=click_entry)
+
+    final = MagicMock()
+    final.first = final
+    final.count = AsyncMock(side_effect=lambda: 1 if stage == 1 else 0)
+    final.is_visible = AsyncMock(side_effect=lambda: stage == 1)
+    final.click = AsyncMock()
+
+    missing = MagicMock()
+    missing.first = missing
+    missing.count = AsyncMock(return_value=0)
+    missing.is_visible = AsyncMock(return_value=False)
+
+    page.locator.side_effect = lambda selector: entry if selector == "button.mass_send" else missing
+    page.get_by_text.return_value = missing
+    page.get_by_role.side_effect = lambda role, name, exact=True: (
+        final if role == "button" and name == "发表" else missing
+    )
+
+    await publisher.click_publish_and_confirm(page)
+
+    entry.click.assert_awaited_once()
+    final.click.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_publish_confirmation_failure_is_not_retried(tmp_path: Path) -> None:
+    settings = MPBrowserSettings(
+        api_base_url="https://hub.example.com/api/v1/admin/mp-browser",
+        api_key=SecretStr("nfy_secure_key_1234567890"),
+        profile_dir=tmp_path / "profile",
+        artifacts_dir=tmp_path / "artifacts",
+    )
+    settings.ensure_directories()
+    api_client = AsyncMock()
+    worker = MPBrowserWorker(settings, api_client, AsyncMock())
+    page = AsyncMock()
+    exc = RuntimeError("PUBLISH_CONFIRM_FAILED: Confirmation button not found")
+
+    await worker._handle_article_failure(page, "art_publish", exc)
+
+    api_client.fail.assert_awaited_once_with(
+        "art_publish",
+        retryable=False,
+        error_code="PUBLISH_CONFIRM_FAILED",
+        error_message=str(exc),
+    )

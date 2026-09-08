@@ -364,6 +364,7 @@ class MPBrowserWorker:
         non_retryable_codes = {
             "CONTENT_REJECTED",
             "PUBLISH_QUOTA_EXHAUSTED",
+            "PUBLISH_CONFIRM_FAILED",
             "SECURITY_CHECK_TRIGGERED",
             "RATE_LIMIT_TRIGGERED",
         }
