@@ -4,6 +4,7 @@ from typing import Any
 
 from app.api.errors import AppError
 from app.api.schemas import EventCreate
+from app.application.platform_settings import read_xiaohongshu_publishing_enabled
 from app.domain.clock import Clock
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import (
@@ -179,10 +180,26 @@ class EventService:
         publish_variants: list[dict[str, Any]] | None = None,
     ) -> AcceptResult:
         """Accept a trusted platform event through the same durable queue boundary."""
+        effective_publish_variants = list(publish_variants or [])
+        suppressed_publish_platforms: list[str] = []
+        if any(
+            isinstance(variant, dict) and variant.get("platform") == "xiaohongshu"
+            for variant in effective_publish_variants
+        ) and not await read_xiaohongshu_publishing_enabled(self._factory):
+            effective_publish_variants = [
+                variant
+                for variant in effective_publish_variants
+                if not (
+                    isinstance(variant, dict)
+                    and variant.get("platform") == "xiaohongshu"
+                )
+            ]
+            suppressed_publish_platforms.append("xiaohongshu")
+
         has_mp = publish_to_mp
         has_xhs = False
-        if publish_variants:
-            for variant in publish_variants:
+        if effective_publish_variants:
+            for variant in effective_publish_variants:
                 plat = (
                     variant.get("platform")
                     if isinstance(variant, dict)
@@ -212,7 +229,7 @@ class EventService:
                 raise AppError(
                     "invalid_broadcast", "Broadcast must use the sole recipient @all", 422
                 )
-            if not recipients:
+            if not recipients and not suppressed_publish_platforms:
                 raise AppError(
                     "recipient_required", "At least one explicit recipient is required", 422
                 )
@@ -248,8 +265,10 @@ class EventService:
             merged_payload = dict(payload or {})
             if has_mp:
                 merged_payload["publish_to_mp"] = True
-            if publish_variants:
-                merged_payload["publish_variants"] = publish_variants
+            if effective_publish_variants:
+                merged_payload["publish_variants"] = effective_publish_variants
+            if suppressed_publish_platforms:
+                merged_payload["publish_suppressed_platforms"] = suppressed_publish_platforms
             notification = Notification(
                 id=new_id("ntf"),
                 event=event,

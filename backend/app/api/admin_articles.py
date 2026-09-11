@@ -76,20 +76,34 @@ async def article_config(
     request: Request, _actor: Admin | ApiClient = Depends(require_article_actor)
 ) -> dict[str, object]:
     settings = request.app.state.settings
-    configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
+    legacy_api_configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
+    browser_publisher_configured = (
+        bool(settings.browser_publisher_api_url)
+        and bool(
+            settings.browser_publisher_access_token
+            and settings.browser_publisher_access_token.get_secret_value()
+        )
+    )
     if settings.mp_publish_mode == "browser":
         effective_mode = "browser"
-    elif settings.mp_publish_mode == "library" or not configured:
+    elif settings.mp_publish_mode == "library" or not legacy_api_configured:
         effective_mode = "library"
     else:
         effective_mode = settings.mp_publish_mode
     return {
         "data": {
-            "configured": configured,
+            "configured": (
+                browser_publisher_configured
+                if settings.mp_publish_mode == "browser"
+                else legacy_api_configured
+            ),
+            "legacy_api_configured": legacy_api_configured,
+            "browser_publisher_configured": browser_publisher_configured,
             "publish_mode": settings.mp_publish_mode,
             "effective_mode": effective_mode,
             "author": settings.mp_author,
             "mp_editor_url": "https://mp.weixin.qq.com",
+            "browser_publisher_api_url": settings.browser_publisher_api_url,
         },
         "request_id": request.state.request_id,
     }

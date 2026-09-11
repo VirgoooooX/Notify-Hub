@@ -61,6 +61,17 @@ async def test_admin_frontend_contracts_require_auth_and_round_trip(
     assert updated.status_code == 200
     assert updated.json()["data"]["timezone"] == "UTC"
     assert updated.json()["data"]["retention_days"] == 90
+    assert updated.json()["data"]["xiaohongshu_publishing_enabled"] is False
+    assert updated.json()["data"]["wechat_mp"]["api_credentials_managed_by"] == "notify_hub"
+    assert updated.json()["data"]["browser_publisher"]["api_url"] == "http://192.168.31.100:8790"
+
+    xhs_enabled = await client.patch(
+        "/api/v1/admin/settings",
+        headers=headers,
+        json={"xiaohongshu_publishing_enabled": True},
+    )
+    assert xhs_enabled.status_code == 200
+    assert xhs_enabled.json()["data"]["xiaohongshu_publishing_enabled"] is True
 
     settings_data = updated.json()["data"]["wecom"]
     assert settings_data["api_base_url"] == "https://qyapi.weixin.qq.com"

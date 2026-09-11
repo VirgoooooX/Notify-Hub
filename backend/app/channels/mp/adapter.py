@@ -45,11 +45,14 @@ class CoverImage:
 class MPArticleAdapter:
     """Deliver channel-neutral article messages to the WeChat Official Account.
 
-    Two delivery paths are supported:
+    Three delivery paths are supported:
 
     - ``library``: store the rendered article in the Notify Hub article workspace
       for manual review and browser import (used automatically when MP API
       credentials are absent, or when ``mp_publish_mode == "library"``);
+    - ``browser``: record the article and queue the complete article payload
+      for Browser Publisher. Browser Publisher owns the official MP API draft
+      creation as well as the final Playwright publication step;
     - ``api``: upload cover material, create a draft and optionally submit
       publish through the official MP API, while recording the article in the
       workspace as an audit/history entry.
@@ -97,7 +100,10 @@ class MPArticleAdapter:
                 "manual_publish_required": mode == "library",
             }
             if mode == "browser":
-                metadata["publisher_configured"] = self._browser_publisher_client is not None
+                metadata["publisher_configured"] = (
+                    self._browser_publisher_client is not None
+                    and bool(getattr(self._browser_publisher_client, "configured", True))
+                )
             return ChannelResult(
                 True,
                 response_metadata=metadata,
@@ -129,6 +135,17 @@ class MPArticleAdapter:
                 "CHANNEL_NOT_CONFIGURED",
                 "MP article library is not available",
             )
+        mode = "browser" if self._settings.mp_publish_mode == "browser" else "library"
+        if mode == "browser" and (
+            self._browser_publisher_client is None
+            or not getattr(self._browser_publisher_client, "configured", True)
+        ):
+            return ChannelResult(
+                False,
+                False,
+                "CHANNEL_NOT_CONFIGURED",
+                "Browser Publisher client is required for MP browser mode",
+            )
         try:
             article_id = await self._library.store_from_delivery(
                 delivery_id=message.delivery_id,
@@ -147,7 +164,6 @@ class MPArticleAdapter:
                 "LIBRARY_STORE_FAILED",
                 "MP article library store failed",
             )
-        mode = "browser" if self._settings.mp_publish_mode == "browser" else "library"
         metadata: dict[str, object] = {
             "article_id": article_id,
             "publish_mode": mode,
@@ -201,14 +217,17 @@ class MPArticleAdapter:
                 content_type=cover.content_type,
                 content=cover.content,
             )
+            body_html = message.payload.get("body_html")
+            if not isinstance(body_html, str) or not body_html.strip():
+                body_html = text_to_html(message.content)
             articles = [
                 {
                     "title": message.title,
                     "author": self._settings.mp_author,
                     "digest": self._digest(message),
-                    "content": text_to_html(message.content),
+                    "content": body_html,
                     "thumb_media_id": thumb_media_id,
-                    "need_open_comment": 0,
+                    "need_open_comment": 1,
                     "only_fans_can_comment": 0,
                 }
             ]
@@ -302,6 +321,10 @@ class MPArticleAdapter:
         return {"article_recorded": self._library is not None}
 
     def _workspace_mode(self) -> bool:
+        # Browser Publisher owns both the official API draft phase and the
+        # Playwright publication phase. Notify Hub only records and dispatches
+        # the article payload in this mode, regardless of legacy MP secrets
+        # that may still exist in its environment.
         if self._settings.mp_publish_mode in {"library", "browser"}:
             return True
         return not (bool(self._settings.mp_app_id) and self._settings.mp_app_secret is not None)

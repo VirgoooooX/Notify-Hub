@@ -30,7 +30,13 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 
 `live` 只证明进程能响应；`ready` 检查数据库、Alembic revision 和 Delivery Worker 心跳。`ready` 失败时不得继续接收需要可靠持久化的新事件，应先查看返回的 `checks` 和容器日志。
 
-### 2.2 建议分级
+### 2.2 发布平台总开关
+
+小红书发布有两层开关：系统设置中的 `xiaohongshu_publishing_enabled` 是平台级安全总闸，默认 `false`；插件配置中的 `publish_to_xiaohongshu` 是业务意图开关。只有两者都开启，事件才会创建小红书投递。平台总闸关闭时，新的小红书变体不会创建投递，已经排队但尚未发送的投递也会被取消；公众号开关不受影响。
+
+当前仅 Codex X Monitor 使用小红书，因此默认保持平台总闸关闭，并在需要验收时同时打开平台总闸和插件开关。不要把平台总闸当作插件配置的替代品；未来其他插件可以独立选择公众号或小红书。
+
+### 2.3 建议分级
 
 | 级别 | 例子 | 首要动作 |
 | --- | --- | --- |
@@ -38,7 +44,7 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 | P2 | `ready` 持续失败、Worker 心跳过期、dead/retry 队列持续增长、SQLite 锁错误持续出现 | 暂停变更，检查数据库和租约，评估是否需要回滚 |
 | P3 | 单条永久失败、单个非法回调、单个媒体缺失 | 隔离单条记录，按审计流程重试或修正配置 |
 
-### 2.3 X 数据源与健康告警
+### 2.4 X 数据源与健康告警
 
 Notify Hub 的 X 时间线是平台能力，不是插件私有网络配置。通用默认值仍是 RSSHub；当前 iStoreOS 部署使用 twscrape 主抓，失败时由平台单次降级到 RSSHub：
 
@@ -511,9 +517,9 @@ npm run build
 
 | 变量 | 说明 |
 | --- | --- |
-| `NOTIFY_HUB_MP_APP_ID` | 公众号 AppID，与 Secret 成对配置；个人订阅号可留空走文章库或 browser 模式 |
-| `NOTIFY_HUB_MP_APP_SECRET` | 公众号 AppSecret |
-| `NOTIFY_HUB_MP_PUBLISH_MODE` | `browser` 独立 Playwright 全自动发布；`library` 文章库人工发布（默认兜底）；`draft` 官方 API 保存草稿；`publish` 官方 API 提交发布 |
+| `NOTIFY_HUB_MP_APP_ID` | 旧版 Notify Hub 直连模式使用的公众号 AppID；`browser` 模式不读取它 |
+| `NOTIFY_HUB_MP_APP_SECRET` | 旧版 Notify Hub 直连模式使用的公众号 AppSecret；`browser` 模式不读取它 |
+| `NOTIFY_HUB_MP_PUBLISH_MODE` | `browser` 委托 Browser Publisher（由发布器调用官方 API 建草稿并用 Playwright 最终发表）；`library` 文章库人工发布（默认兜底）；`draft` / `publish` 仅保留旧版 Notify Hub 官方 API 直连 |
 | `NOTIFY_HUB_MP_AUTHOR` | 文章作者名，默认 `Notify Hub` |
 | `NOTIFY_HUB_BROWSER_PUBLISHER_API_URL` | 独立 Browser Publisher 的 HTTP 地址 |
 | `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN` | Notify Hub 提交发布任务使用的 Bearer Token，须与发布器一致 |
@@ -521,7 +527,8 @@ npm run build
 ### 双路径行为
 
 - **文章库模式（library）**：未配置 AppID/Secret 或显式设置为 `library` 时，`mp_article` 投递把文章写入文章库（`ready`），后台「公众号文章」可预览、复制公众号富文本格式；发布按钮由人工确认发布后再标记状态。
-- **官方 API 模式（draft/publish）**：平台下载并校验封面、上传永久素材、建草稿，再按模式保存草稿或提交发布；文章同时记录到文章库作为历史。
+- **官方 API 模式（draft/publish）**：平台下载并校验封面、上传永久素材、建草稿，再按模式保存草稿或提交发布；文章同时记录到文章库作为历史。草稿请求固定开启留言，且不限制为仅粉丝可留言。
+- **browser 统一发布网关模式**：设置 `browser` 后，Notify Hub 只把标题、正文、封面 URL 和文章元数据提交给 Browser Publisher，不调用公众号 API，也不提交 `platform_draft_id`。Browser Publisher 自己获取 Access Token、上传封面、调用 `draft/add`，再由 Playwright 打开草稿、点击最终发表并核对结果；不参与内容编辑、图片上传、封面选择或保存草稿的，是 API 已创建草稿之后的 Playwright 阶段。
 - 显式配置 `draft`/`publish` 但凭证不完整时，投递以不可重试错误进入 dead，可查询、可审计，不隐式降级为文本通知。
 - Access Token 缓存并发安全，Token 失效只强制刷新重试一次；永久参数错误不反复重试；
 - 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；
@@ -530,7 +537,9 @@ npm run build
 ### Playwright 全自动发布与文章库运维
 
 - 设置 `NOTIFY_HUB_MP_PUBLISH_MODE=browser` 后，Notify Hub 通过 `POST /v1/jobs` 将任务推送给独立 Browser Publisher；旧的轮询领取 API、专用权限和内置容器均已删除。
-- Browser Publisher 使用自己的 SQLite 保存任务与阶段，所有重试、发布确认、登录态和二维码均在其控制台查看。
+- Browser Publisher 使用自己的 SQLite 保存任务与阶段，所有重试、发布确认、登录态和登录二维码均在其控制台查看；发表确认二维码不捕获、不转发。
 - 两个服务使用同一高强度 Token：Notify Hub 配置 `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN`，发布器配置 `PUBLISHER_ACCESS_TOKEN`。
+- Browser Publisher 的公众号官方 API 凭据使用 `PUBLISHER_WECHAT_MP_APP_ID`、`PUBLISHER_WECHAT_MP_APP_SECRET`、`PUBLISHER_WECHAT_MP_API_BASE_URL` 和 `PUBLISHER_WECHAT_MP_AUTHOR`；不要把 `NOTIFY_HUB_MP_*` 当作 `browser` 模式的凭据来源。
+- 如果公众号 API 需要经过已配置 IP 白名单的受信任代理，把 `PUBLISHER_WECHAT_MP_API_BASE_URL` 指向该代理的 HTTPS 入口（含必要路径前缀）；不要把任意代理参数透传到任务请求。
 - 若启用登录失效和风控告警，Browser Publisher 通过 `PUBLISHER_NOTIFY_EVENT_URL` 与普通 Notify Hub API Client Key 调用外部事件 API；无需任何发布器专属权限。
-- 微信公众号进入 `publish_clicked` 后只能核对结果，不再次点击发表；异常截图只保留最新 20 张。具体实现和部署参数以独立工程 `L:/Web/Browser Publisher` 的 README 与 compose 为准。
+- 微信公众号进入 `publish_clicked` 或 `waiting_manual_confirm` 后只能核对结果，不再次点击发表；「群发通知 / 发送群通知」在发表前关闭。具体实现和部署参数以独立工程 `L:/Web/Browser Publisher` 的 README 与 compose 为准。

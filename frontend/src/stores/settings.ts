@@ -1,14 +1,19 @@
 import { defineStore } from 'pinia'
 import { ApiError, api } from '@/lib/api'
 import { DEFAULT_TIMEZONE, resolveTimezone } from '@/lib/time'
+import type { BrowserPublisherSettings, WechatMpSettings } from '@/types'
 
 interface PlatformSettingsResponse {
   timezone?: unknown
+  xiaohongshu_publishing_enabled?: unknown
+  wechat_mp?: WechatMpSettings
+  browser_publisher?: BrowserPublisherSettings
 }
 
 export const useSettingsStore = defineStore('settings', {
   state: () => ({
     timezone: DEFAULT_TIMEZONE,
+    xiaohongshuPublishingEnabled: false,
     loaded: false,
     loading: false,
     loadError: false,
@@ -26,6 +31,7 @@ export const useSettingsStore = defineStore('settings', {
           typeof settings.timezone === 'string' ? settings.timezone : undefined,
           DEFAULT_TIMEZONE,
         )
+        this.xiaohongshuPublishingEnabled = settings.xiaohongshu_publishing_enabled === true
         this.loaded = true
       } catch (error) {
         // UTC is an explicit, deterministic compatibility fallback.  It keeps

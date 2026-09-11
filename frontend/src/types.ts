@@ -100,8 +100,25 @@ export interface MpArticle {
 }
 export interface MpArticleConfig {
   configured: boolean
+  legacy_api_configured?: boolean
+  browser_publisher_configured?: boolean
   publish_mode: 'library' | 'draft' | 'publish' | 'browser'
   effective_mode: 'library' | 'draft' | 'publish' | 'browser'
   author: string
   mp_editor_url: string
+  browser_publisher_api_url?: string
+}
+
+export interface WechatMpSettings {
+  publish_mode: 'library' | 'draft' | 'publish' | 'browser'
+  effective_mode: 'library' | 'draft' | 'publish' | 'browser'
+  legacy_api_credentials_configured: boolean
+  api_credentials_managed_by: 'notify_hub' | 'browser_publisher'
+  author: string
+}
+
+export interface BrowserPublisherSettings {
+  api_url: string
+  access_token_configured: boolean
+  configured: boolean
 }

@@ -5,6 +5,10 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 import structlog
+from app.application.platform_settings import (
+    XIAOHONGSHU_PUBLISHING_ENABLED_KEY,
+    is_platform_setting_enabled,
+)
 from app.channels.base import ChannelMessage, ChannelResult, NotificationChannel
 from app.domain.clock import Clock
 from app.infrastructure.database.base import new_id
@@ -14,6 +18,7 @@ from app.infrastructure.database.models import (
     DeliveryAttempt,
     DeliveryStatus,
     Notification,
+    PlatformSetting,
     RecipientType,
     WeComIdentity,
     WorkerHeartbeat,
@@ -234,6 +239,23 @@ class DeliveryWorker:
             if delivery is None or delivery.status != DeliveryStatus.PROCESSING.value:
                 return None
             notification = delivery.notification
+            if delivery.channel == "xhs_article":
+                platform_setting = await session.get(
+                    PlatformSetting, XIAOHONGSHU_PUBLISHING_ENABLED_KEY
+                )
+                if platform_setting is None or not is_platform_setting_enabled(
+                    platform_setting.value
+                ):
+                    delivery.status = DeliveryStatus.CANCELLED.value
+                    delivery.claimed_by = None
+                    delivery.claim_expires_at = None
+                    delivery.last_error_code = "PLATFORM_DISABLED"
+                    delivery.last_error_message = (
+                        "Xiaohongshu publishing is disabled at the platform level"
+                    )
+                    delivery.updated_at = self._clock.now()
+                    await session.commit()
+                    return None
             if (
                 delivery.channel == "wecom"
                 and notification.reminder_id

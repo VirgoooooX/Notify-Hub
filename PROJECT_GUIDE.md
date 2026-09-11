@@ -101,10 +101,11 @@ pending -> processing -> succeeded
 ### 公众号文章发布
 - 公众号发布是平台渠道能力：插件只通过 `publish_to_mp` 表达发布意图并提供文章内容与封面，不接触公众号 AppID/Secret，也不直接调用微信接口；
 - 三种发布模式：
-  - `browser`（全自动）：个人号首选。Notify Hub 将任务推送给独立 Browser Publisher，由其持久化任务、管理登录态并自动完成微信公众号发布；
+  - `browser`（统一发布网关）：Notify Hub 将完整文章任务推送给独立 Browser Publisher，由其负责官方 API 建草稿、Playwright 最终发表和结果核对；公众号凭据只配置在 Browser Publisher；
   - `library`（文章工作台）：半自动。文章进入 `mp_articles` 文章库，后台可预览并复制富文本，最终发布由人工确认；未配置 AppID/Secret 时默认兜底；
-  - `draft` / `publish`（官方 API）：企业/认证号使用。核心上传永久素材、建草稿、按模式保存或提交发布；
+  - `draft` / `publish`（Notify Hub 兼容模式）：保留用于旧部署的官方 API 直连；新部署优先使用 `browser`，由 Browser Publisher 统一负责平台执行；
 - 发布决策由插件确定性规则与 AI 置信度阈值完成；AI 摘要只生成文章正文，不决定是否发布；
+- `browser` 模式的官方 API 草稿请求由 Browser Publisher 固定开启留言（`need_open_comment=1`）；Playwright 发表前关闭「群发通知 / 发送群通知」。发表需要管理员确认时进入 `waiting_manual_confirm`，只核对结果，不重复点击；公众号登录态失效二维码仍只用于登录恢复；
 - 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；
 - 显式配置 `draft`/`publish` 但凭证不完整时，投递按不可重试错误进入 dead，不隐式降级为文本通知。
 

@@ -615,3 +615,59 @@ ADR-029 在 Notify Hub 内嵌了微信公众号 Playwright 发布器，但随着
 - Notify Hub 删除旧 `mp-browser-publisher` 运行时、领取 API、会话心跳页面和 `allow_mp_browser` 运行时权限；历史迁移与已取代 ADR 仅为审计保留；
 - 新增 `XhsArticleAdapter`（渠道名 `xhs_article`），由 Delivery Worker 进行任务消费与投递；
 - Codex X Monitor 插件支持独立配置 `publish_to_wechat_mp` 和 `publish_to_xiaohongshu` 开关与独立 AI Profile。
+
+---
+
+## ADR-032：微信公众号官方草稿 API 与 Playwright 最终发表分离
+
+**状态：已由 ADR-033 取代**
+
+### 决策
+
+在 `mp_publish_mode=browser` 且公众号凭证完整时，采用两阶段流程：
+
+1. Notify Hub 通过官方 `draft/add` 创建包含正文、封面和留言设置的完整草稿；`need_open_comment` 固定为 `1`，`only_fans_can_comment` 固定为 `0`。
+2. Notify Hub 将官方返回的、不透明的草稿 `media_id` 作为 `platform_draft_id` 推送到 Browser Publisher。该值不当作网页编辑器 URL 的 `appmsgid`。
+3. Browser Publisher 通过草稿标题在公众号草稿列表中定位并打开草稿，只执行最终「发表」和结果核对，不编辑正文、不上传图片、不选封面、不保存草稿。
+4. 发表前若发现「群发通知 / 发送群通知」开关为开启状态，自动关闭；默认关闭状态不重复点击。
+5. 发表后若微信要求管理员确认，发送一次文字通知并将任务置为 `waiting_manual_confirm`。该状态和恢复流程只允许轮询/核对结果，禁止再次点击发表。网页登录态失效时仍保留登录二维码捕获，但发表确认二维码不截图、不转发。
+
+### 原因
+
+- 官方 API 的草稿 `media_id` 与网页编辑器的数字 `appmsgid` 是两种不同标识，直接拼接 URL 会导致编辑器未打开，进而出现「发表按钮未找到」；
+- 将内容生成和最终发表分离可以避免 Playwright 重复上传/编辑，并把人工安全确认纳入可恢复状态机；
+- 关闭群发通知和开启留言分别由网页操作与官方 API 明确控制，避免依赖微信后台默认值。
+
+### 后果
+
+- `browser` 模式需要同时配置公众号 AppID/Secret 和 Browser Publisher 地址/Token；
+- Browser Publisher 新增 `platform_draft_id` 入队字段、按标题打开 API 草稿、`waiting_manual_confirm` 状态以及「尚未点击发表」错误分类；
+- 没有官方 API 凭证时保留现有文章库/旧浏览器兜底路径，不宣称已经走官方 API 草稿流程。
+
+---
+
+## ADR-033：公众号官方 API 下沉到 Browser Publisher
+
+**状态：已接受**
+
+### 决策
+
+`mp_publish_mode=browser` 采用统一发布网关边界：
+
+1. Notify Hub 只负责生成后的文章投递调度、文章历史记录和发布总控；它向 Browser Publisher 提交标题、正文、封面 URL、摘要和来源等任务数据，不调用公众号官方 API，也不提交 `platform_draft_id`。
+2. Browser Publisher 独占公众号执行凭据（`AppID` / `AppSecret`），负责获取 Access Token、上传封面、调用 `draft/add` 创建完整草稿，再由 Playwright 打开 API 草稿并发起最终「发表」及结果核对。
+3. Playwright 不参与 API 草稿的正文编辑、图片上传、封面选择和保存草稿；没有 Browser Publisher API 凭据时，保留旧浏览器编辑器路径作为兼容兜底。
+4. `api_creating_draft` 是 API 草稿创建的持久化检查点。若 `draft/add` 请求结果丢失或 Worker 在该阶段崩溃，系统标记结果未知并停止自动重试，避免创建重复草稿；只有拿到明确的草稿 `media_id` 后才进入 `draft_saved`。
+5. 原有 `draft` / `publish` 模式暂时保留为 Notify Hub 直连兼容模式；新部署和 `browser` 模式不依赖 Notify Hub 的公众号凭据。
+
+### 原因
+
+- Notify Hub 是调度与可靠投递中枢，不应同时承担不同平台的 Token、素材协议和浏览器会话细节；
+- 公众号 API 和 Playwright 最终发表都属于同一个平台执行器，集中在 Browser Publisher 后，凭据、代理、网络白名单和恢复逻辑只有一个归属；
+- 官方 `draft/add` 没有可由业务任务透传的幂等键，结果未知时盲目重试会产生重复草稿，必须以持久化阶段保护。
+
+### 后果
+
+- Browser Publisher 新增 `PUBLISHER_WECHAT_MP_APP_ID`、`PUBLISHER_WECHAT_MP_APP_SECRET`、`PUBLISHER_WECHAT_MP_API_BASE_URL` 和 `PUBLISHER_WECHAT_MP_AUTHOR`；
+- Notify Hub 的 `browser` 模式不读取 `NOTIFY_HUB_MP_APP_ID` / `NOTIFY_HUB_MP_APP_SECRET`，设置页只展示外部发布器节点和配置状态；
+- ADR-032 中“Notify Hub 创建官方草稿并传递 `platform_draft_id`”的过渡实现仅保留为历史兼容行为，新的任务链路不再使用它。

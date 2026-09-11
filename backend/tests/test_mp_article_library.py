@@ -4,11 +4,13 @@ import ipaddress
 import struct
 import zlib
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from app.api.errors import AppError
 from app.channels.base import ChannelMessage
+from app.channels.browser_publisher.client import BrowserPublisherClient
 from app.channels.mp.adapter import MPArticleAdapter
 from app.channels.mp.client import MPClient
 from app.channels.mp.render import render_body, render_wechat_html
@@ -213,6 +215,44 @@ async def test_adapter_api_mode_records_library_article() -> None:
     assert stored["status"] == "published"
     assert stored["provider_publish_id"] == "123"
     assert stored["provider_draft_media_id"] == "draft-1"
+
+
+@pytest.mark.asyncio
+async def test_adapter_browser_mode_dispatches_complete_article_to_publisher() -> None:
+    library = FakeLibrary()
+    settings = make_settings(publish_mode="browser")
+    browser_publisher = AsyncMock(spec=BrowserPublisherClient)
+    browser_publisher.base_url = "http://192.168.31.100:8790"
+    browser_publisher.submit_job.return_value = {
+        "id": "wechat_job_gateway_001",
+        "status": "queued",
+    }
+    adapter = MPArticleAdapter(
+        None,
+        settings,
+        library=library,
+        browser_publisher_client=browser_publisher,
+    )
+    result = await adapter.send(article_message("delivery_gateway"))
+
+    assert result.success is True
+    assert result.provider_message_id == "mpa_fake_1"
+    assert result.response_metadata["publish_mode"] == "browser"
+    assert result.response_metadata["publisher_job_id"] == "wechat_job_gateway_001"
+    assert library.stored[0]["status"] == "ready"
+    assert "provider_draft_media_id" not in library.stored[0]
+    browser_publisher.submit_job.assert_awaited_once_with(
+        client_request_id="notify-hub:delivery_gateway:wechat_mp",
+        platform="wechat_mp",
+        mode="publish",
+        title="Codex 用量可能已重置",
+        body_text="# 摘要\n\n第一段\n\n- 要点一\n- 要点二",
+        body_html=None,
+        author="Test Author",
+        digest="摘要内容",
+        image_urls=["https://img.example.com/cover.png"],
+        source_url="https://x.com/post/1",
+    )
 
 
 @pytest.mark.asyncio
@@ -480,10 +520,17 @@ async def test_mp_article_adapter_browser_mode_without_credentials(
     _client, app = api
     library = app.state.mp_article_library
     settings = make_settings(publish_mode="browser", credentials=False)
+    browser_publisher = AsyncMock(spec=BrowserPublisherClient)
+    browser_publisher.base_url = "http://publisher.test"
+    browser_publisher.submit_job.return_value = {
+        "id": "browser-job-without-notify-credentials",
+        "status": "queued",
+    }
     adapter = MPArticleAdapter(
         client=None,
         settings=settings,
         library=library,
+        browser_publisher_client=browser_publisher,
     )
     msg = ChannelMessage(
         message_type="article",
@@ -498,13 +545,15 @@ async def test_mp_article_adapter_browser_mode_without_credentials(
     assert res.response_metadata is not None
     assert res.response_metadata["publish_mode"] == "browser"
     assert res.response_metadata["manual_publish_required"] is False
-    assert "publisher_job_queued" not in res.response_metadata
+    assert res.response_metadata["publisher_job_id"] == "browser-job-without-notify-credentials"
+    assert res.response_metadata["publisher_job_queued"] is True
+    browser_publisher.submit_job.assert_awaited_once()
 
     test_res = await adapter.test("")
     assert test_res.success is True
     assert test_res.response_metadata is not None
     assert test_res.response_metadata["publish_mode"] == "browser"
-    assert test_res.response_metadata["publisher_configured"] is False
+    assert test_res.response_metadata["publisher_configured"] is True
 
 
 @pytest.mark.asyncio

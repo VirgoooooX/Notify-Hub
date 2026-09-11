@@ -5,6 +5,7 @@ import json
 import struct
 import zlib
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -216,6 +217,8 @@ async def test_mp_adapter_publishes_article_and_returns_provider_ids() -> None:
     assert article["thumb_media_id"] == "media-1"
     assert article["content"] == "<p>第一段</p><p>第二段</p>"
     assert article["digest"]
+    assert article["need_open_comment"] == 1
+    assert article["only_fans_can_comment"] == 0
 
 
 @pytest.mark.asyncio
@@ -240,6 +243,42 @@ async def test_mp_adapter_draft_mode_skips_publish() -> None:
         "article_recorded": False,
     }
     assert not any(request.url.path.endswith("/cgi-bin/freepublish/submit") for request in requests)
+
+
+@pytest.mark.asyncio
+async def test_mp_browser_mode_only_dispatches_payload_to_publisher() -> None:
+    def fail_if_notify_calls(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(
+            f"Notify Hub must not call the MP API in browser mode: {request.url}"
+        )
+
+    settings = make_settings(publish_mode="browser")
+    http = make_transport(fail_if_notify_calls)
+    notify_mp_client = MPClient(settings, SystemClock(), http_client=http)
+    library = AsyncMock()
+    library.store_from_delivery.return_value = "article-1"
+    publisher = AsyncMock()
+    publisher.base_url = "http://publisher.test"
+    publisher.submit_job.return_value = {"id": "publisher-job-1"}
+    adapter = MPArticleAdapter(
+        notify_mp_client,
+        settings,
+        library=library,
+        browser_publisher_client=publisher,
+    )
+
+    try:
+        result = await adapter.send(article_message())
+    finally:
+        await http.aclose()
+
+    assert result.success is True
+    assert result.response_metadata["publish_mode"] == "browser"
+    publisher.submit_job.assert_awaited_once()
+    submitted = publisher.submit_job.await_args.kwargs
+    assert submitted["platform"] == "wechat_mp"
+    assert submitted["mode"] == "publish"
+    assert "platform_draft_id" not in submitted
 
 
 @pytest.mark.asyncio

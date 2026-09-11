@@ -8,9 +8,10 @@ import AppInput from '@/components/ui/AppInput.vue'
 import AppSelect from '@/components/ui/AppSelect.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import AppAlert from '@/components/ui/AppAlert.vue'
+import AppSwitch from '@/components/ui/AppSwitch.vue'
 import DescriptionList from '@/components/data/DescriptionList.vue'
 import { useUiStore } from '@/stores/ui'
-import type { AIProfile } from '@/types'
+import type { AIProfile, WechatMpSettings } from '@/types'
 import { APP_VERSION } from '@/lib/version'
 import { DEFAULT_TIMEZONE } from '@/lib/time'
 import { useSettingsStore } from '@/stores/settings'
@@ -26,6 +27,7 @@ const settings = reactive({
   timezone: DEFAULT_TIMEZONE,
   retention_days: 90,
   default_reminder_parser_profile_id: '',
+  xiaohongshu_publishing_enabled: false,
   version: APP_VERSION,
   wecom: {
     configured: false,
@@ -36,6 +38,18 @@ const settings = reactive({
     aes_key_configured: false,
     api_base_url: 'https://qyapi.weixin.qq.com',
     using_proxy: false
+  },
+  wechat_mp: {
+    publish_mode: 'browser' as WechatMpSettings['publish_mode'],
+    effective_mode: 'browser' as WechatMpSettings['effective_mode'],
+    legacy_api_credentials_configured: false,
+    api_credentials_managed_by: 'browser_publisher' as WechatMpSettings['api_credentials_managed_by'],
+    author: 'Notify Hub'
+  },
+  browser_publisher: {
+    api_url: 'http://192.168.31.100:8790',
+    access_token_configured: false,
+    configured: false
   }
 })
 
@@ -74,7 +88,8 @@ async function save() {
       timezone: settings.timezone,
       retention_days: settings.retention_days,
       default_reminder_parser_profile_id:
-        settings.default_reminder_parser_profile_id || null
+        settings.default_reminder_parser_profile_id || null,
+      xiaohongshu_publishing_enabled: settings.xiaohongshu_publishing_enabled
     })
     platform.setTimezone(settings.timezone)
     ui.toast('平台设置已保存', 'success')
@@ -143,7 +158,58 @@ async function publishReminderMenu() {
             </option>
           </AppSelect>
         </div>
-        
+        <div class="platform-toggle mt-4">
+          <div class="platform-toggle-copy">
+            <label for="xiaohongshu-publishing-enabled">小红书平台发布总开关</label>
+            <span class="field-help">关闭后，Notify Hub 不会创建或投递小红书文章；插件内的小红书开关仍保留。</span>
+          </div>
+          <AppSwitch
+            id="xiaohongshu-publishing-enabled"
+            v-model="settings.xiaohongshu_publishing_enabled"
+          />
+        </div>
+        <AppAlert v-if="!settings.xiaohongshu_publishing_enabled" variant="warning" class="info-alert">
+          当前已关闭小红书平台发布。公众号发布不受影响。
+        </AppAlert>
+
+        <div class="panel-header-wrap mt-6">
+          <h3 class="panel-title">
+            内容发布平台
+          </h3>
+          <StatusBadge
+            :status="settings.wechat_mp.effective_mode === 'browser' && settings.browser_publisher.configured ? 'active' : 'disabled'"
+          />
+        </div>
+
+        <AppAlert variant="info" class="info-alert">
+          Notify Hub 只负责文章生成、投递调度和历史记录。公众号的 AppID、AppSecret、Access Token、封面上传和草稿 API 均由 Browser Publisher 管理；这里不会读取或保存发布器的公众号密钥。
+        </AppAlert>
+
+        <DescriptionList class="details-list">
+          <dt>公众号当前模式</dt>
+          <dd>
+            {{ settings.wechat_mp.effective_mode === 'browser' ? '委托 Browser Publisher（官方 API 建草稿 + Playwright 最终发表）' : settings.wechat_mp.effective_mode }}
+          </dd>
+          <dt>Browser Publisher 地址</dt>
+          <dd class="mono">
+            {{ settings.browser_publisher.api_url }}
+          </dd>
+          <dt>发布器鉴权 Token</dt>
+          <dd>
+            {{ settings.browser_publisher.access_token_configured ? '已配置' : '未配置' }}
+          </dd>
+          <dt>公众号 API 密钥归属</dt>
+          <dd>
+            {{ settings.wechat_mp.api_credentials_managed_by === 'browser_publisher' ? 'Browser Publisher' : 'Notify Hub（仅兼容旧 direct API 模式）' }}
+          </dd>
+        </DescriptionList>
+
+        <div class="form-actions mt-4">
+          <RouterLink class="link" to="/articles">
+            打开公众号文章库
+          </RouterLink>
+        </div>
+
         <div class="panel-header-wrap mt-6">
           <h3 class="panel-title">
             企业微信凭据配置
@@ -388,6 +454,29 @@ async function publishReminderMenu() {
   font-size: var(--text-xs);
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.platform-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  background-color: var(--surface-hover);
+}
+
+.platform-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.field-help {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
 }
 
 .desc-text {

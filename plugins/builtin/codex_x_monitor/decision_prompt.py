@@ -225,8 +225,17 @@ ARTICLE_GENERATION_INSTRUCTION = """
 正常、克制、口语化的中文内容，让读者准确知道这条原推说了什么，特别是推断并换算出准确的
 【北京时间重置时间】。
 
+【公众号标题要求（用于封面）】
+1. summary 第一行必须是唯一的一级标题（以“# ”开头），它就是公众号文章标题。
+2. 标题以简洁明了为第一优先：建议控制在 8-16 个字符，严格不超过 20 个字符；汉字、
+   英文字母、数字、空格和标点都计入字符数。
+3. 标题只保留一个核心事实（主题 + 状态），不要堆叠用户范围、原因、完整时间或多个并列结论；
+   不要使用括号补充说明、双标题或完整的长句。
+4. 北京时间的具体日期和时刻放在正文第一段或要点中，不要为了塞进标题而拉长标题。
+   可参考“Codex额度已重置”“Codex可储存额度更新”等短标题。
+
 【输出结构】
-# 简短、事实性的标题（建议包含换算后的北京时间节点）
+# 适合封面展示的简短、事实性标题（北京时间放在正文，不必放进标题）
 
 > @原推作者 原推：
 > [完整目标原推正文，保留原语言，不翻译，不删改]
@@ -246,7 +255,8 @@ ARTICLE_GENERATION_INSTRUCTION = """
      （参考 target_post 的 published_at_beijing_display / timing_inference）。
    - 未来计划或相对时间（如 “in 2 hours”、“9am PT”）：
      必须以发推时刻为基准精准换算，算出对应的北京时间具体日期与时刻（24小时制几月几号几点）。
-4. 标题与正文解读中均应体现此换算后的北京时间重置点，让国内读者一眼看懂具体是几号几点。
+4. 正文解读中必须体现此换算后的北京时间重置点，让国内读者一眼看懂具体是几号几点；
+   标题遵守上面的封面长度要求。
 
 【必须遵守】
 1. 原推必须完整引用，不能截断、缩写、改写或添加省略号。
@@ -320,6 +330,19 @@ XHS_NOTE_GENERATION_INSTRUCTION = """
 5. “banked reset” 译为“可储存的重置额度”或保留英文；只有原文明确说 “reset card” 时才写“重置卡”。
 6. 【话题标签】：文末必须包含 #codex #openai 标签，可补充 1-2 个相关话题（如 #ChatGPT #AI编程）。
 """.strip()
+
+
+WECHAT_TITLE_MAX_LENGTH = 20
+
+
+def extract_wechat_title(raw_title: str, reset_kind: str = "direct") -> str:
+    """Keep the generated WeChat title short and complete for cover rendering."""
+    title = raw_title.lstrip("# ").strip()
+    if 1 <= len(title) <= WECHAT_TITLE_MAX_LENGTH:
+        return title
+    if reset_kind == "banked":
+        return "Codex可储存额度更新"
+    return "Codex额度已重置"
 
 
 def extract_xhs_title(raw_title: str, bj_display: str, reset_kind: str = "direct") -> str:

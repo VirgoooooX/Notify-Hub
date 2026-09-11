@@ -262,6 +262,7 @@ def test_publish_to_official_account_emits_publish_event_with_ai_summary() -> No
     assert "\n>" not in event.content
     assert event.article is not None
     assert event.publish_variants[0].platform == "wechat_mp"
+    assert len(event.publish_variants[0].title) <= 20
     assert event.publish_variants[0].body_text == "AI 翻译后的公众号正文。"
     summarize_call = context.ai.calls[-1]
     assert summarize_call["profile"] == "article_summarizer"
@@ -942,6 +943,24 @@ def test_post_payload_includes_beijing_time_and_inference() -> None:
     assert "timing_inference" in payload
     assert "北京时间" in ARTICLE_GENERATION_INSTRUCTION
     assert "24小时制" in ARTICLE_GENERATION_INSTRUCTION
+    assert "公众号标题要求（用于封面）" in ARTICLE_GENERATION_INSTRUCTION
+    assert "严格不超过 20 个字符" in ARTICLE_GENERATION_INSTRUCTION
+    assert "北京时间的具体日期和时刻放在正文" in ARTICLE_GENERATION_INSTRUCTION
+
+
+def test_extract_wechat_title_is_short_and_complete() -> None:
+    from plugins.builtin.codex_x_monitor.decision_prompt import extract_wechat_title
+
+    assert extract_wechat_title("# Codex额度已重置") == "Codex额度已重置"
+
+    long_title = "ChatGPT Work与Codex面向全部用户的用量额度已经完成重置"
+    direct_title = extract_wechat_title(long_title)
+    assert direct_title == "Codex额度已重置"
+    assert 1 <= len(direct_title) <= 20
+
+    banked_title = extract_wechat_title(long_title, reset_kind="banked")
+    assert banked_title == "Codex可储存额度更新"
+    assert len(banked_title) <= 20
 
 
 def test_extract_xhs_title_bounded_to_20_chars() -> None:
@@ -1054,4 +1073,3 @@ async def test_codex_x_monitor_xhs_private_visibility() -> None:
     assert xhs_variant.visibility == "private"
     assert "codex" in [t.lower() for t in xhs_variant.topics]
     assert "openai" in [t.lower() for t in xhs_variant.topics]
-

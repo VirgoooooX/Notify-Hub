@@ -47,8 +47,10 @@ AI 判定 Prompt 只把账号历史作为辅助上下文，不把过去习惯当
 
 ## 小红书发布（可选）
 
-- 开启 `publish_to_xiaohongshu` 后生成小红书图文任务；
+- 平台设置中的“小红书平台发布总开关”默认关闭；关闭时核心会丢弃小红书投递意图，不会创建或投递小红书文章；
+- 只有平台总开关开启后，插件配置中的 `publish_to_xiaohongshu` 才会生成小红书图文任务；
 - `xiaohongshu_publish_mode` 可选 `draft`（默认，只保存草稿）或 `publish`（自动发布）。
+- `xiaohongshu_visibility` 控制公开/私密；`xhs_cover_image_url` 可选，未设置时由插件生成动态封面。
 - 是否发布仍由规则判定与 `ai_min_confidence` 置信度阈值决定，AI 摘要不参与发布决策。
 
 ## 测试

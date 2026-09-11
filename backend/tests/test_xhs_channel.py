@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import respx
+from app.application.platform_settings import XIAOHONGSHU_PUBLISHING_ENABLED_KEY
 from app.channels.base import ChannelMessage
 from app.channels.browser_publisher.client import (
     BrowserPublisherClient,
@@ -13,6 +14,8 @@ from app.channels.browser_publisher.client import (
     BrowserPublisherTemporaryError,
 )
 from app.channels.xhs.adapter import XhsArticleAdapter
+from app.infrastructure.database.models import Delivery, PlatformSetting
+from sqlalchemy import func, select
 
 
 @pytest.mark.asyncio
@@ -218,6 +221,16 @@ async def test_event_service_and_delivery_worker_dual_variants(api: tuple[object
     session_factory = app.state.session_factory
     clock = app.state.clock
 
+    async with session_factory() as session, session.begin():
+        session.add(
+            PlatformSetting(
+                key=XIAOHONGSHU_PUBLISHING_ENABLED_KEY,
+                value=True,
+                created_at=clock.now(),
+                updated_at=clock.now(),
+            )
+        )
+
     mp_variant = {
         "platform": "wechat_mp",
         "title": "WeChat MP In-Depth Title",
@@ -274,6 +287,38 @@ async def test_event_service_and_delivery_worker_dual_variants(api: tuple[object
     assert xhs_msg.content == "XHS concise note body text."
     assert xhs_msg.payload.get("topics") == ["OpenAI", "Codex"]
     assert xhs_msg.payload.get("image_urls") == ["https://example.com/xhs_img1.png"]
+
+
+@pytest.mark.asyncio
+async def test_xhs_platform_is_disabled_by_default(api: tuple[object, object]) -> None:
+    _client, app = api
+    event_service = app.state.event_service
+
+    receipt = await event_service.accept_internal_event(
+        source_type="plugin",
+        source_id="codex_x_monitor",
+        event_type="codex.usage_reset",
+        event_key="xhs-platform-default-off",
+        title="Default Event Title",
+        content="Default content",
+        recipients=[],
+        message_type="article",
+        publish_variants=[
+            {
+                "platform": "xiaohongshu",
+                "title": "Codex用量已重置",
+                "body_text": "XHS concise note body text.",
+                "image_urls": ["https://example.com/xhs_img1.png"],
+            }
+        ],
+    )
+
+    async with app.state.session_factory() as session:
+        delivery_count = await session.scalar(
+            select(func.count(Delivery.id))
+        )
+    assert receipt.duplicate is False
+    assert delivery_count == 0
 
 
 @pytest.mark.asyncio

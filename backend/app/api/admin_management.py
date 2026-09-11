@@ -6,7 +6,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
 from app.application.audit import add_audit
-from app.application.platform_settings import read_platform_timezone
+from app.application.platform_settings import (
+    read_platform_timezone,
+    read_xiaohongshu_publishing_enabled,
+)
 from app.config import DEFAULT_WECOM_API_BASE_URL
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.models import (
@@ -28,6 +31,7 @@ class SettingsUpdate(BaseModel):
     timezone: str | None = Field(default=None, max_length=100)
     retention_days: int | None = Field(default=None, ge=7, le=3650)
     default_reminder_parser_profile_id: str | None = Field(default=None, max_length=64)
+    xiaohongshu_publishing_enabled: bool = False
 
     @field_validator("timezone")
     @classmethod
@@ -131,6 +135,23 @@ async def get_settings(
     wecom["configured"] = all(
         wecom[key] for key in ("corp_id_configured", "agent_id_configured", "secret_configured")
     )
+    legacy_mp_api_configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
+    browser_publisher_token_configured = bool(
+        settings.browser_publisher_access_token
+        and settings.browser_publisher_access_token.get_secret_value()
+    )
+    browser_publisher = {
+        "api_url": settings.browser_publisher_api_url,
+        "access_token_configured": browser_publisher_token_configured,
+        "configured": bool(settings.browser_publisher_api_url)
+        and browser_publisher_token_configured,
+    }
+    if settings.mp_publish_mode == "browser":
+        mp_effective_mode = "browser"
+    elif settings.mp_publish_mode == "library" or not legacy_mp_api_configured:
+        mp_effective_mode = "library"
+    else:
+        mp_effective_mode = settings.mp_publish_mode
     return {
         "data": {
             "timezone": await read_platform_timezone(
@@ -142,8 +163,23 @@ async def get_settings(
             "default_reminder_parser_profile_id": await _setting(
                 request, "default_reminder_parser_profile_id", None
             ),
+            "xiaohongshu_publishing_enabled": await read_xiaohongshu_publishing_enabled(
+                request.app.state.session_factory
+            ),
             "version": request.app.version,
             "wecom": wecom,
+            "wechat_mp": {
+                "publish_mode": settings.mp_publish_mode,
+                "effective_mode": mp_effective_mode,
+                "legacy_api_credentials_configured": legacy_mp_api_configured,
+                "api_credentials_managed_by": (
+                    "browser_publisher"
+                    if settings.mp_publish_mode == "browser"
+                    else "notify_hub"
+                ),
+                "author": settings.mp_author,
+            },
+            "browser_publisher": browser_publisher,
         },
         "request_id": request.state.request_id,
     }

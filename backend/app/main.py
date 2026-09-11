@@ -187,6 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     browser_publisher_token = (
         settings.browser_publisher_access_token.get_secret_value()
         if settings.browser_publisher_access_token
+        and settings.browser_publisher_access_token.get_secret_value()
         else None
     )
     browser_publisher_client = BrowserPublisherClient(
@@ -194,9 +195,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         access_token=browser_publisher_token,
     )
     xhs_channel = XhsArticleAdapter(browser_publisher_client)
-    mp_client = MPClient(settings, clock)
     mp_library = MPArticleLibraryService(factory, clock, settings)
     mp_credentials = bool(settings.mp_app_id) and settings.mp_app_secret is not None
+    # The browser route must not use Notify Hub's MP credentials. Keep the
+    # direct client only for the legacy draft/publish modes.
+    mp_client = (
+        MPClient(settings, clock)
+        if settings.mp_publish_mode in {"draft", "publish"} and mp_credentials
+        else None
+    )
     mp_channel = MPArticleAdapter(
         mp_client if mp_credentials else None,
         settings,
@@ -344,7 +351,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if tasks:
             await asyncio.gather(*tasks)
         await wecom_client.close()
-        await mp_client.close()
+        if mp_client is not None:
+            await mp_client.close()
         await x_source.close()
         await media_http.aclose()
         await engine.dispose()

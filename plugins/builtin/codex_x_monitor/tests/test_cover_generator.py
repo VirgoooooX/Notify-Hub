@@ -3,6 +3,8 @@ import tempfile
 from PIL import Image
 from plugins.builtin.codex_x_monitor.cover_generator import (
     generate_dynamic_xhs_cover,
+    generate_dynamic_wechat_cover,
+    generate_all_dynamic_covers,
     _wrap_mixed_text,
     _get_text_font,
     _get_emoji_font,
@@ -68,3 +70,59 @@ def test_generate_dynamic_xhs_cover_fallback_on_missing_template():
             output_dirs=[out_dir],
         )
         assert result == "codex_xhs_cover.png"
+
+
+def test_generate_dynamic_wechat_cover():
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        out_dir = Path(tmp_dir)
+
+        # Test left layout (Option 2)
+        rel_left = generate_dynamic_wechat_cover(
+            "ChatGPT Work与Codex可储存重置额度异常已修复",
+            "post_wechat_left",
+            layout="left",
+            output_dirs=[out_dir],
+        )
+        assert rel_left == "wechat_covers/cover_post_wechat_left.png"
+        path_left = out_dir / "cover_post_wechat_left.png"
+        assert path_left.exists()
+        with Image.open(path_left) as im:
+            assert im.size == (1376, 586)
+            assert im.mode == "RGB"
+
+        # Test center layout (Option 1)
+        rel_center = generate_dynamic_wechat_cover(
+            "ChatGPT Work与Codex可储存重置额度异常已修复",
+            "post_wechat_center",
+            layout="center",
+            output_dirs=[out_dir],
+        )
+        assert rel_center == "wechat_covers/cover_post_wechat_center.png"
+        path_center = out_dir / "cover_post_wechat_center.png"
+        assert path_center.exists()
+        with Image.open(path_center) as im:
+            assert im.size == (1376, 586)
+            assert im.mode == "RGB"
+
+
+def test_generate_all_dynamic_covers():
+    with tempfile.TemporaryDirectory() as tmp_dir_xhs, tempfile.TemporaryDirectory() as tmp_dir_wx:
+        out_xhs = Path(tmp_dir_xhs)
+        out_wx = Path(tmp_dir_wx)
+
+        res = generate_all_dynamic_covers(
+            "ChatGPT Work与Codex可储存重置额度异常已修复",
+            "post_unified_1",
+            layout="left",
+            output_dirs_xhs=[out_xhs],
+            output_dirs_wechat=[out_wx],
+        )
+
+        assert res["xhs"] == "xhs_covers/cover_post_unified_1.png"
+        assert res["wechat"] == "wechat_covers/cover_post_unified_1.png"
+
+        assert (out_xhs / "cover_post_unified_1.png").exists()
+        assert (out_wx / "cover_post_unified_1.png").exists()
+
+
+

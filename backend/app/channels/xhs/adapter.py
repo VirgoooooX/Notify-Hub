@@ -20,7 +20,7 @@ class XhsArticleAdapter:
         self._client = client
 
     async def send(self, message: ChannelMessage) -> ChannelResult:
-        if self._client is None:
+        if self._client is None or not getattr(self._client, "configured", True):
             return ChannelResult(
                 False,
                 False,
@@ -86,6 +86,6 @@ class XhsArticleAdapter:
 
     async def test(self, recipient: str) -> ChannelResult:
         del recipient
-        if self._client is None:
+        if self._client is None or not getattr(self._client, "configured", True):
             return ChannelResult(False, False, "CHANNEL_NOT_CONFIGURED", "Client not configured")
         return ChannelResult(True, response_metadata={"platform": "xiaohongshu"})

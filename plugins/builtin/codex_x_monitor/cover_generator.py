@@ -176,6 +176,12 @@ def _draw_mixed_on_layer(
             cur_x += tbbox[2] - tbbox[0]
 
 
+WECHAT_OFFICIAL_ASPECT_RATIO = 2.35
+WECHAT_LOGO_TOP = 66
+WECHAT_LOGO_BOTTOM = 460
+WECHAT_LOGO_HEIGHT = 394
+
+
 def _render_title_lines(
     layer: Image.Image,
     lines: list[str],
@@ -187,15 +193,72 @@ def _render_title_lines(
     dx: int = 0,
     dy: int = 0,
     line_h: int = 66,
+    center_y: int = TITLE_ZONE_CENTER,
 ) -> None:
-    """Draw all lines centered vertically around TITLE_ZONE_CENTER and horizontally centered."""
+    """Draw all lines centered vertically around center_y and horizontally centered."""
     n = len(lines)
     for i, ln in enumerate(lines):
         lw, _ = _measure_mixed_text(ln, text_font, emoji_font)
         sx = (total_w - lw) // 2 + dx
-        # Centered vertically in the red box area regardless of line count
-        cy = TITLE_ZONE_CENTER - (n - 1) * line_h / 2 + i * line_h + dy
+        # Centered vertically around center_y regardless of line count
+        cy = center_y - (n - 1) * line_h / 2 + i * line_h + dy
         _draw_mixed_on_layer(layer, ln, sx, cy, text_font, emoji_font, fill, is_color_emoji=is_color_emoji)
+
+
+def _composite_neon_title(
+    base_image: Image.Image,
+    lines: list[str],
+    text_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    emoji_font: ImageFont.FreeTypeFont | None,
+    total_w: int,
+    total_h: int,
+    center_y: int,
+    line_height: int = 66,
+) -> Image.Image:
+    """Render 5-layer neon aura, deep drop-shadow and crisp foreground text onto base_image."""
+    # 1. Deep drop shadow for contrast against bright background
+    shadow_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    _render_title_lines(
+        shadow_layer, lines, text_font, emoji_font, total_w,
+        (2, 4, 18, 240), is_color_emoji=False, dx=2, dy=5, line_h=line_height, center_y=center_y,
+    )
+    shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(8))
+
+    # 2. Broad radiant blue-violet aura
+    glow_far = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    _render_title_lines(
+        glow_far, lines, text_font, emoji_font, total_w,
+        (80, 140, 255, 230), is_color_emoji=False, line_h=line_height, center_y=center_y,
+    )
+    glow_far = glow_far.filter(ImageFilter.GaussianBlur(32))
+
+    # 3. Mid electric cyan glow
+    glow_mid = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    _render_title_lines(
+        glow_mid, lines, text_font, emoji_font, total_w,
+        (100, 210, 255, 240), is_color_emoji=False, line_h=line_height, center_y=center_y,
+    )
+    glow_mid = glow_mid.filter(ImageFilter.GaussianBlur(14))
+
+    # 4. Tight electric white aura
+    glow_tight = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    _render_title_lines(
+        glow_tight, lines, text_font, emoji_font, total_w,
+        (230, 245, 255, 255), is_color_emoji=False, line_h=line_height, center_y=center_y,
+    )
+    glow_tight = glow_tight.filter(ImageFilter.GaussianBlur(4))
+
+    # 5. Foreground text layer (crisp white + embedded color emojis)
+    text_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
+    _render_title_lines(
+        text_layer, lines, text_font, emoji_font, total_w,
+        (255, 255, 255, 255), is_color_emoji=True, line_h=line_height, center_y=center_y,
+    )
+
+    result = base_image
+    for layer in (shadow_layer, glow_far, glow_mid, glow_tight, text_layer):
+        result = Image.alpha_composite(result, layer)
+    return result
 
 
 def generate_dynamic_xhs_cover(
@@ -270,53 +333,18 @@ def generate_dynamic_xhs_cover(
         emoji_font = _get_emoji_font(font_size)
         lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
 
-        # Glow layer 1: Deep drop shadow for intense contrast against bright background
-        shadow_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        _render_title_lines(
-            shadow_layer, lines, main_font, emoji_font, w,
-            (2, 4, 18, 240), is_color_emoji=False, dx=2, dy=5, line_h=line_height,
-        )
-        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(8))
-
-        # Glow layer 2: Broad radiant blue-violet aura
-        glow_far = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        _render_title_lines(
-            glow_far, lines, main_font, emoji_font, w,
-            (80, 140, 255, 230), is_color_emoji=False, line_h=line_height,
-        )
-        glow_far = glow_far.filter(ImageFilter.GaussianBlur(32))
-
-        # Glow layer 3: Mid electric cyan glow
-        glow_mid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        _render_title_lines(
-            glow_mid, lines, main_font, emoji_font, w,
-            (100, 210, 255, 240), is_color_emoji=False, line_h=line_height,
-        )
-        glow_mid = glow_mid.filter(ImageFilter.GaussianBlur(14))
-
-        # Glow layer 4: Tight electric white aura
-        glow_tight = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        _render_title_lines(
-            glow_tight, lines, main_font, emoji_font, w,
-            (230, 245, 255, 255), is_color_emoji=False, line_h=line_height,
-        )
-        glow_tight = glow_tight.filter(ImageFilter.GaussianBlur(4))
-
-        # Foreground text layer (crisp white + embedded color emojis)
-        text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        _render_title_lines(
-            text_layer, lines, main_font, emoji_font, w,
-            (255, 255, 255, 255), is_color_emoji=True, line_h=line_height,
-        )
-
         # ── 3. Composite all layers ──
-        final_img = Image.alpha_composite(template, top_layer)
-        final_img = Image.alpha_composite(final_img, shadow_layer)
-        final_img = Image.alpha_composite(final_img, glow_far)
-        final_img = Image.alpha_composite(final_img, glow_mid)
-        final_img = Image.alpha_composite(final_img, glow_tight)
-        final_img = Image.alpha_composite(final_img, text_layer)
-        final_img = final_img.convert("RGB")
+        composited = Image.alpha_composite(template, top_layer)
+        final_img = _composite_neon_title(
+            composited,
+            lines,
+            main_font,
+            emoji_font,
+            w,
+            h,
+            center_y=TITLE_ZONE_CENTER,
+            line_height=line_height,
+        ).convert("RGB")
 
         # Determine target output paths
         repo_root = base_dir.parent.parent.parent
@@ -339,4 +367,214 @@ def generate_dynamic_xhs_cover(
     except Exception as exc:
         logger.exception("generate_xhs_cover_failed", extra={"post_id": post_id, "error": str(exc)})
         return fallback_static
+
+
+WECHAT_LEFT_LOGO_LEFT = 95
+WECHAT_LEFT_LOGO_WIDTH = 350
+WECHAT_LEFT_GAP = 95
+WECHAT_LEFT_TITLE_BOX_LEFT = 540
+WECHAT_LEFT_TITLE_BOX_WIDTH = 741
+
+
+def generate_dynamic_wechat_cover(
+    title: str,
+    post_id: str,
+    *,
+    layout: str = "left",
+    template_path: Path | None = None,
+    output_dirs: list[Path] | None = None,
+) -> str:
+    """Generate dynamic WeChat Official Account cover directly at 2.35:1.
+
+    Supports two distinct aesthetic layouts:
+      1. 'left' (Option 2): Logo on the left (refined 350px size with generous breathing room),
+         title on the right (large font size 62px, line height 114px).
+         Strictly enforces 3 horizontal equidistant gaps:
+         Gap1 (image left to logo) = Gap2 (logo to title) = Gap3 (title to image right) = 95px.
+      2. 'center' (Option 1): Logo on top, title below.
+         Strictly enforces 3 vertical equidistant gaps:
+         D1 (top to logo) = D2 (logo to title) = D3 (title to bottom) = 49px.
+
+    Returns relative path, e.g. 'wechat_covers/cover_{post_id}.png'.
+    Falls back to 'codex_wechat_cover.png' on any failure.
+    """
+    rel_path = f"wechat_covers/cover_{post_id}.png"
+    fallback_static = "codex_wechat_cover.png"
+
+    try:
+        base_dir = Path(__file__).resolve().parent
+        clean_title = title.strip()
+        if not clean_title:
+            clean_title = "Codex 用量重置提醒"
+
+        if layout == "left":
+            tpl_path = template_path or (base_dir / "codex_wechat_left_template.png")
+            if not tpl_path.exists():
+                logger.warning("wechat_left_template_not_found", extra={"path": str(tpl_path)})
+                return fallback_static
+
+            template = Image.open(tpl_path).convert("RGBA")
+            w, h = template.size
+
+            font_size = 62
+            max_title_width = WECHAT_LEFT_TITLE_BOX_WIDTH
+            main_font = _get_text_font(font_size, weight=700, bevel=50)
+            emoji_font = _get_emoji_font(font_size)
+            lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+
+            line_height = 114
+            if len(lines) > 2:
+                font_size = 50
+                line_height = 76
+                main_font = _get_text_font(font_size, weight=700, bevel=50)
+                emoji_font = _get_emoji_font(font_size)
+                lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+
+            title_cx = WECHAT_LEFT_TITLE_BOX_LEFT + WECHAT_LEFT_TITLE_BOX_WIDTH // 2  # 910
+            cy = h // 2  # 293
+
+            def draw_left_title(layer, fill, is_color=True, dx=0, dy=0):
+                n = len(lines)
+                for i, ln in enumerate(lines):
+                    lw, _ = _measure_mixed_text(ln, main_font, emoji_font)
+                    sx = title_cx - lw // 2 + dx
+                    cur_cy = cy - (n - 1) * line_height / 2 + i * line_height + dy
+                    _draw_mixed_on_layer(layer, ln, sx, cur_cy, main_font, emoji_font, fill, is_color_emoji=is_color)
+
+            shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw_left_title(shadow, (2, 4, 18, 240), is_color=False, dx=2, dy=5)
+            shadow = shadow.filter(ImageFilter.GaussianBlur(8))
+
+            glow_far = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw_left_title(glow_far, (80, 140, 255, 230), is_color=False)
+            glow_far = glow_far.filter(ImageFilter.GaussianBlur(32))
+
+            glow_mid = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw_left_title(glow_mid, (100, 210, 255, 240), is_color=False)
+            glow_mid = glow_mid.filter(ImageFilter.GaussianBlur(14))
+
+            glow_tight = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw_left_title(glow_tight, (230, 245, 255, 255), is_color=False)
+            glow_tight = glow_tight.filter(ImageFilter.GaussianBlur(4))
+
+            text_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+            draw_left_title(text_layer, (255, 255, 255, 255), is_color=True)
+
+            composited = template
+            for layer in (shadow, glow_far, glow_mid, glow_tight, text_layer):
+                composited = Image.alpha_composite(composited, layer)
+            final_img = composited.convert("RGB")
+
+        else:
+            # Option 1: Top-down centered layout
+            tpl_path = template_path or (base_dir / "codex_wechat_template.png")
+            if not tpl_path.exists():
+                logger.warning("wechat_template_not_found", extra={"path": str(tpl_path)})
+                return fallback_static
+
+            template = Image.open(tpl_path).convert("RGBA")
+            w, h = template.size
+            target_h = int(round(w / WECHAT_OFFICIAL_ASPECT_RATIO))  # 586 for w=1376
+
+            font_size = 46
+            max_title_width = w - 160
+            main_font = _get_text_font(font_size, weight=700, bevel=50)
+            emoji_font = _get_emoji_font(font_size)
+            lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+
+            ref_bbox = main_font.getbbox("用量重置")
+            char_cy = (ref_bbox[1] + ref_bbox[3]) / 2
+
+            if len(lines) == 1:
+                line_height = 54
+                text_bbox = main_font.getbbox(lines[0])
+                h_ink = text_bbox[3] - text_bbox[1]
+                D = max(10, int(round((target_h - WECHAT_LOGO_HEIGHT - h_ink) / 3)))
+                crop_top = max(0, int(round(WECHAT_LOGO_TOP - D)))
+                target_center_y = int(round(WECHAT_LOGO_BOTTOM + D - text_bbox[1] + char_cy))
+            else:
+                font_size = 42
+                line_height = 54
+                main_font = _get_text_font(font_size, weight=700, bevel=50)
+                emoji_font = _get_emoji_font(font_size)
+                lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+                ref_bbox = main_font.getbbox("用量重置")
+                char_cy = (ref_bbox[1] + ref_bbox[3]) / 2
+                first_bbox = main_font.getbbox(lines[0])
+                h_ink = first_bbox[3] - first_bbox[1]
+                total_text_h = (len(lines) - 1) * line_height + h_ink
+                D = max(10, int(round((target_h - WECHAT_LOGO_HEIGHT - total_text_h) / 3)))
+                crop_top = max(0, int(round(WECHAT_LOGO_TOP - D)))
+                target_center_y = int(round(WECHAT_LOGO_BOTTOM + D + total_text_h / 2 - h_ink / 2 + char_cy))
+
+            full_img = _composite_neon_title(
+                template,
+                lines,
+                main_font,
+                emoji_font,
+                w,
+                h,
+                center_y=target_center_y,
+                line_height=line_height,
+            ).convert("RGB")
+
+            crop_box = (0, crop_top, w, crop_top + target_h)
+            final_img = full_img.crop(crop_box)
+
+        # Determine target output paths
+        repo_root = base_dir.parent.parent.parent
+        target_dirs = output_dirs or [
+            repo_root / "frontend" / "dist" / "wechat_covers",
+            repo_root / "frontend" / "public" / "wechat_covers",
+        ]
+
+        saved = False
+        for d in target_dirs:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                out_file = d / f"cover_{post_id}.png"
+                final_img.save(out_file, "PNG", optimize=True)
+                saved = True
+            except Exception as exc:
+                logger.warning("save_wechat_cover_failed", extra={"dir": str(d), "error": str(exc)})
+
+        return rel_path if saved else fallback_static
+    except Exception as exc:
+        logger.exception("generate_wechat_cover_failed", extra={"post_id": post_id, "error": str(exc)})
+        return fallback_static
+
+
+def generate_all_dynamic_covers(
+    title: str,
+    post_id: str,
+    *,
+    layout: str = "left",
+    subtext: str = "· 官 方 额 度 动 态 ·",
+    xhs_template_path: Path | None = None,
+    wechat_template_path: Path | None = None,
+    output_dirs_xhs: list[Path] | None = None,
+    output_dirs_wechat: list[Path] | None = None,
+) -> dict[str, str]:
+    """Generate both Xiaohongshu cover (3:4) and WeChat Official Account cover (2.35:1) in a single call."""
+    xhs_cover = generate_dynamic_xhs_cover(
+        title,
+        post_id,
+        subtext=subtext,
+        template_path=xhs_template_path,
+        output_dirs=output_dirs_xhs,
+    )
+    wechat_cover = generate_dynamic_wechat_cover(
+        title,
+        post_id,
+        layout=layout,
+        template_path=wechat_template_path,
+        output_dirs=output_dirs_wechat,
+    )
+    return {
+        "xhs": xhs_cover,
+        "wechat": wechat_cover,
+    }
+
+
+
 

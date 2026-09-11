@@ -31,12 +31,19 @@ class BrowserPublisherClient:
         self.access_token = access_token
         self.timeout = timeout
 
+    @property
+    def configured(self) -> bool:
+        """Whether the client has enough information to call the publisher."""
+
+        return bool(self.base_url and self.access_token and self.access_token.strip())
+
     async def submit_job(
         self,
         *,
         client_request_id: str,
         platform: str,
         mode: str | None = None,
+        platform_draft_id: str | None = None,
         title: str,
         body_text: str,
         body_html: str | None = None,
@@ -57,6 +64,7 @@ class BrowserPublisherClient:
             "client_request_id": client_request_id,
             "platform": platform,
             "mode": mode,
+            "platform_draft_id": platform_draft_id,
             "content": {
                 "title": title,
                 "body_text": body_text,

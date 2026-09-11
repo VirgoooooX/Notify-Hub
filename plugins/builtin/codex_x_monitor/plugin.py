@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from .cover_generator import generate_dynamic_xhs_cover
 from .decision_prompt import (
     ARTICLE_GENERATION_INSTRUCTION,
     BEIJING_TZ,
@@ -14,9 +15,9 @@ from .decision_prompt import (
     XHS_NOTE_GENERATION_INSTRUCTION,
     build_article_content,
     build_classification_content,
+    extract_wechat_title,
     extract_xhs_title,
 )
-from .cover_generator import generate_dynamic_xhs_cover
 from .matcher import detect_reset_kind, match_post
 from .schemas import (
     PLUGIN_API_VERSION,
@@ -208,7 +209,7 @@ class CodexXMonitorPlugin:
                     if reset_kind == "banked"
                     else f"Codex 用量重置更新 ({bj_display})"
                 )
-                mp_title = event_title
+                mp_title = extract_wechat_title("", reset_kind)
                 mp_content = content
                 if config.publish_to_wechat_mp and config.article_ai_profile:
                     try:
@@ -229,7 +230,7 @@ class CodexXMonitorPlugin:
                         if lines and lines[0].startswith("# "):
                             candidate_title = lines[0].lstrip("# ").strip()
                             if candidate_title:
-                                mp_title = candidate_title[:64]
+                                mp_title = extract_wechat_title(candidate_title, reset_kind)
                     except Exception as exc:
                         article_ai_status = "fallback_summary"
                         context.logger.warning(
