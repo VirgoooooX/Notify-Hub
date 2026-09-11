@@ -77,12 +77,9 @@ async def article_config(
 ) -> dict[str, object]:
     settings = request.app.state.settings
     legacy_api_configured = bool(settings.mp_app_id) and settings.mp_app_secret is not None
-    browser_publisher_configured = (
-        bool(settings.browser_publisher_api_url)
-        and bool(
-            settings.browser_publisher_access_token
-            and settings.browser_publisher_access_token.get_secret_value()
-        )
+    browser_publisher_configured = bool(settings.browser_publisher_api_url) and bool(
+        settings.browser_publisher_access_token
+        and settings.browser_publisher_access_token.get_secret_value()
     )
     if settings.mp_publish_mode == "browser":
         effective_mode = "browser"

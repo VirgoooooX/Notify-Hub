@@ -173,9 +173,7 @@ async def get_settings(
                 "effective_mode": mp_effective_mode,
                 "legacy_api_credentials_configured": legacy_mp_api_configured,
                 "api_credentials_managed_by": (
-                    "browser_publisher"
-                    if settings.mp_publish_mode == "browser"
-                    else "notify_hub"
+                    "browser_publisher" if settings.mp_publish_mode == "browser" else "notify_hub"
                 ),
                 "author": settings.mp_author,
             },

@@ -111,7 +111,7 @@ async def test_recipient_and_broadcast_permissions(api: tuple[httpx.AsyncClient,
 async def test_api_client_upload_media_and_send_image_event(
     api: tuple[httpx.AsyncClient, Any],
 ) -> None:
-    client, app = api
+    client, _app = api
     access = await initialize_and_login(client)
     headers = {"Authorization": f"Bearer {access}"}
     person = await client.post(
@@ -177,4 +177,3 @@ async def test_api_client_upload_media_and_send_image_event(
         },
     )
     assert evt_res.status_code == 202, evt_res.text
-

@@ -189,10 +189,7 @@ class EventService:
             effective_publish_variants = [
                 variant
                 for variant in effective_publish_variants
-                if not (
-                    isinstance(variant, dict)
-                    and variant.get("platform") == "xiaohongshu"
-                )
+                if not (isinstance(variant, dict) and variant.get("platform") == "xiaohongshu")
             ]
             suppressed_publish_platforms.append("xiaohongshu")
 

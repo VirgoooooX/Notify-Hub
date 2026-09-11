@@ -1,7 +1,11 @@
-"""Dynamic 3:4 Xiaohongshu cover image generator for Codex X Monitor with full Color Emoji support."""
+"""Dynamic Xiaohongshu and WeChat cover image generator for Codex X Monitor.
+
+Includes full Color Emoji support.
+"""
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from pathlib import Path
@@ -40,18 +44,19 @@ EMOJI_PATTERN = re.compile(
 TITLE_ZONE_CENTER = 940
 
 
-def _get_text_font(size: int, weight: int = 700, bevel: int = 50) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def _get_text_font(
+    size: int, weight: int = 700, bevel: int = 50
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     for fp in CANDIDATE_TEXT_FONTS:
         if Path(fp).exists():
             try:
                 font = ImageFont.truetype(fp, size)
                 # Apply variable font axes if supported (e.g. AlimamaFangYuanTi VF)
-                try:
+                with contextlib.suppress(Exception):
                     font.set_variation_by_axes([weight, bevel])
-                except Exception:
-                    pass
                 return font
             except Exception:
+                logger.debug("Failed to load text font from %s", fp, exc_info=True)
                 continue
     return ImageFont.load_default()
 
@@ -62,6 +67,7 @@ def _get_emoji_font(size: int) -> ImageFont.FreeTypeFont | None:
             try:
                 return ImageFont.truetype(fp, size)
             except Exception:
+                logger.debug("Failed to load emoji font from %s", fp, exc_info=True)
                 continue
     return None
 
@@ -75,7 +81,7 @@ def _measure_mixed_text(
     if not emoji_font:
         clean = "".join(c for c in text if c < "\U00010000").strip()
         bbox = text_font.getbbox(clean)
-        return bbox[2] - bbox[0], bbox[3] - bbox[1]
+        return int(bbox[2] - bbox[0]), int(bbox[3] - bbox[1])
 
     parts = EMOJI_PATTERN.split(text)
     total_w = 0
@@ -85,12 +91,12 @@ def _measure_mixed_text(
             continue
         if EMOJI_PATTERN.match(part):
             ebbox = emoji_font.getbbox(part)
-            total_w += (ebbox[2] - ebbox[0]) + 10
-            max_h = max(max_h, ebbox[3] - ebbox[1])
+            total_w += int(ebbox[2] - ebbox[0]) + 10
+            max_h = max(max_h, int(ebbox[3] - ebbox[1]))
         else:
             tbbox = text_font.getbbox(part)
-            total_w += tbbox[2] - tbbox[0]
-            max_h = max(max_h, tbbox[3] - tbbox[1])
+            total_w += int(tbbox[2] - tbbox[0])
+            max_h = max(max_h, int(tbbox[3] - tbbox[1]))
     return total_w, max_h
 
 
@@ -144,7 +150,7 @@ def _draw_mixed_on_layer(
     fill: tuple[int, int, int, int] = (255, 255, 255, 255),
     is_color_emoji: bool = True,
 ) -> None:
-    """Render mixed text + color emojis on a transparent RGBA layer with vertical centerline alignment."""
+    """Render mixed text + color emojis on transparent layer with vertical centerline alignment."""
     draw = ImageDraw.Draw(layer)
     ref_bbox = text_font.getbbox("用量重置")
     char_cy = (ref_bbox[1] + ref_bbox[3]) / 2
@@ -168,12 +174,12 @@ def _draw_mixed_on_layer(
                 draw.text((cur_x, ey), part, font=emoji_font, embedded_color=True)
             else:
                 draw.text((cur_x, ey), part, font=emoji_font, fill=fill)
-            cur_x += (ebbox[2] - ebbox[0]) + 10
+            cur_x += int(ebbox[2] - ebbox[0]) + 10
         else:
             ty = int(center_y - char_cy)
             draw.text((cur_x, ty), part, font=text_font, fill=fill)
             tbbox = text_font.getbbox(part)
-            cur_x += tbbox[2] - tbbox[0]
+            cur_x += int(tbbox[2] - tbbox[0])
 
 
 WECHAT_OFFICIAL_ASPECT_RATIO = 2.35
@@ -202,7 +208,9 @@ def _render_title_lines(
         sx = (total_w - lw) // 2 + dx
         # Centered vertically around center_y regardless of line count
         cy = center_y - (n - 1) * line_h / 2 + i * line_h + dy
-        _draw_mixed_on_layer(layer, ln, sx, cy, text_font, emoji_font, fill, is_color_emoji=is_color_emoji)
+        _draw_mixed_on_layer(
+            layer, ln, sx, cy, text_font, emoji_font, fill, is_color_emoji=is_color_emoji
+        )
 
 
 def _composite_neon_title(
@@ -219,40 +227,77 @@ def _composite_neon_title(
     # 1. Deep drop shadow for contrast against bright background
     shadow_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     _render_title_lines(
-        shadow_layer, lines, text_font, emoji_font, total_w,
-        (2, 4, 18, 240), is_color_emoji=False, dx=2, dy=5, line_h=line_height, center_y=center_y,
+        shadow_layer,
+        lines,
+        text_font,
+        emoji_font,
+        total_w,
+        (2, 4, 18, 240),
+        is_color_emoji=False,
+        dx=2,
+        dy=5,
+        line_h=line_height,
+        center_y=center_y,
     )
     shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(8))
 
     # 2. Broad radiant blue-violet aura
     glow_far = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     _render_title_lines(
-        glow_far, lines, text_font, emoji_font, total_w,
-        (80, 140, 255, 230), is_color_emoji=False, line_h=line_height, center_y=center_y,
+        glow_far,
+        lines,
+        text_font,
+        emoji_font,
+        total_w,
+        (80, 140, 255, 230),
+        is_color_emoji=False,
+        line_h=line_height,
+        center_y=center_y,
     )
     glow_far = glow_far.filter(ImageFilter.GaussianBlur(32))
 
     # 3. Mid electric cyan glow
     glow_mid = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     _render_title_lines(
-        glow_mid, lines, text_font, emoji_font, total_w,
-        (100, 210, 255, 240), is_color_emoji=False, line_h=line_height, center_y=center_y,
+        glow_mid,
+        lines,
+        text_font,
+        emoji_font,
+        total_w,
+        (100, 210, 255, 240),
+        is_color_emoji=False,
+        line_h=line_height,
+        center_y=center_y,
     )
     glow_mid = glow_mid.filter(ImageFilter.GaussianBlur(14))
 
     # 4. Tight electric white aura
     glow_tight = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     _render_title_lines(
-        glow_tight, lines, text_font, emoji_font, total_w,
-        (230, 245, 255, 255), is_color_emoji=False, line_h=line_height, center_y=center_y,
+        glow_tight,
+        lines,
+        text_font,
+        emoji_font,
+        total_w,
+        (230, 245, 255, 255),
+        is_color_emoji=False,
+        line_h=line_height,
+        center_y=center_y,
     )
     glow_tight = glow_tight.filter(ImageFilter.GaussianBlur(4))
 
     # 5. Foreground text layer (crisp white + embedded color emojis)
     text_layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 0))
     _render_title_lines(
-        text_layer, lines, text_font, emoji_font, total_w,
-        (255, 255, 255, 255), is_color_emoji=True, line_h=line_height, center_y=center_y,
+        text_layer,
+        lines,
+        text_font,
+        emoji_font,
+        total_w,
+        (255, 255, 255, 255),
+        is_color_emoji=True,
+        line_h=line_height,
+        center_y=center_y,
     )
 
     result = base_image
@@ -269,7 +314,7 @@ def generate_dynamic_xhs_cover(
     template_path: Path | None = None,
     output_dirs: list[Path] | None = None,
 ) -> str:
-    """Generate dynamic 3:4 Xiaohongshu cover with Alimama FangYuanTi VF typography and punchy neon glow.
+    """Generate dynamic 3:4 Xiaohongshu cover with typography and punchy neon glow.
 
     The title automatically wraps if it exceeds width, and remains vertically centered
     between the Codex icon bottom and the image bottom.
@@ -428,18 +473,28 @@ def generate_dynamic_wechat_cover(
                 line_height = 76
                 main_font = _get_text_font(font_size, weight=700, bevel=50)
                 emoji_font = _get_emoji_font(font_size)
-                lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+                lines = _wrap_mixed_text(
+                    clean_title, main_font, emoji_font, max_width=max_title_width
+                )
 
             title_cx = WECHAT_LEFT_TITLE_BOX_LEFT + WECHAT_LEFT_TITLE_BOX_WIDTH // 2  # 910
             cy = h // 2  # 293
 
-            def draw_left_title(layer, fill, is_color=True, dx=0, dy=0):
+            def draw_left_title(
+                layer: Image.Image,
+                fill: tuple[int, int, int, int],
+                is_color: bool = True,
+                dx: int = 0,
+                dy: int = 0,
+            ) -> None:
                 n = len(lines)
                 for i, ln in enumerate(lines):
                     lw, _ = _measure_mixed_text(ln, main_font, emoji_font)
                     sx = title_cx - lw // 2 + dx
                     cur_cy = cy - (n - 1) * line_height / 2 + i * line_height + dy
-                    _draw_mixed_on_layer(layer, ln, sx, cur_cy, main_font, emoji_font, fill, is_color_emoji=is_color)
+                    _draw_mixed_on_layer(
+                        layer, ln, sx, cur_cy, main_font, emoji_font, fill, is_color_emoji=is_color
+                    )
 
             shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
             draw_left_title(shadow, (2, 4, 18, 240), is_color=False, dx=2, dy=5)
@@ -474,7 +529,7 @@ def generate_dynamic_wechat_cover(
 
             template = Image.open(tpl_path).convert("RGBA")
             w, h = template.size
-            target_h = int(round(w / WECHAT_OFFICIAL_ASPECT_RATIO))  # 586 for w=1376
+            target_h = round(w / WECHAT_OFFICIAL_ASPECT_RATIO)  # 586 for w=1376
 
             font_size = 46
             max_title_width = w - 160
@@ -489,23 +544,27 @@ def generate_dynamic_wechat_cover(
                 line_height = 54
                 text_bbox = main_font.getbbox(lines[0])
                 h_ink = text_bbox[3] - text_bbox[1]
-                D = max(10, int(round((target_h - WECHAT_LOGO_HEIGHT - h_ink) / 3)))
-                crop_top = max(0, int(round(WECHAT_LOGO_TOP - D)))
-                target_center_y = int(round(WECHAT_LOGO_BOTTOM + D - text_bbox[1] + char_cy))
+                D = max(10, round((target_h - WECHAT_LOGO_HEIGHT - h_ink) / 3))
+                crop_top = max(0, round(WECHAT_LOGO_TOP - D))
+                target_center_y = round(WECHAT_LOGO_BOTTOM + D - text_bbox[1] + char_cy)
             else:
                 font_size = 42
                 line_height = 54
                 main_font = _get_text_font(font_size, weight=700, bevel=50)
                 emoji_font = _get_emoji_font(font_size)
-                lines = _wrap_mixed_text(clean_title, main_font, emoji_font, max_width=max_title_width)
+                lines = _wrap_mixed_text(
+                    clean_title, main_font, emoji_font, max_width=max_title_width
+                )
                 ref_bbox = main_font.getbbox("用量重置")
                 char_cy = (ref_bbox[1] + ref_bbox[3]) / 2
                 first_bbox = main_font.getbbox(lines[0])
                 h_ink = first_bbox[3] - first_bbox[1]
                 total_text_h = (len(lines) - 1) * line_height + h_ink
-                D = max(10, int(round((target_h - WECHAT_LOGO_HEIGHT - total_text_h) / 3)))
-                crop_top = max(0, int(round(WECHAT_LOGO_TOP - D)))
-                target_center_y = int(round(WECHAT_LOGO_BOTTOM + D + total_text_h / 2 - h_ink / 2 + char_cy))
+                D = max(10, round((target_h - WECHAT_LOGO_HEIGHT - total_text_h) / 3))
+                crop_top = max(0, round(WECHAT_LOGO_TOP - D))
+                target_center_y = round(
+                    WECHAT_LOGO_BOTTOM + D + total_text_h / 2 - h_ink / 2 + char_cy
+                )
 
             full_img = _composite_neon_title(
                 template,
@@ -540,7 +599,9 @@ def generate_dynamic_wechat_cover(
 
         return rel_path if saved else fallback_static
     except Exception as exc:
-        logger.exception("generate_wechat_cover_failed", extra={"post_id": post_id, "error": str(exc)})
+        logger.exception(
+            "generate_wechat_cover_failed", extra={"post_id": post_id, "error": str(exc)}
+        )
         return fallback_static
 
 
@@ -555,7 +616,7 @@ def generate_all_dynamic_covers(
     output_dirs_xhs: list[Path] | None = None,
     output_dirs_wechat: list[Path] | None = None,
 ) -> dict[str, str]:
-    """Generate both Xiaohongshu cover (3:4) and WeChat Official Account cover (2.35:1) in a single call."""
+    """Generate both Xiaohongshu cover (3:4) and WeChat cover (2.35:1) in a single call."""
     xhs_cover = generate_dynamic_xhs_cover(
         title,
         post_id,
@@ -574,7 +635,3 @@ def generate_all_dynamic_covers(
         "xhs": xhs_cover,
         "wechat": wechat_cover,
     }
-
-
-
-

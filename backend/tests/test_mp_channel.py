@@ -248,9 +248,7 @@ async def test_mp_adapter_draft_mode_skips_publish() -> None:
 @pytest.mark.asyncio
 async def test_mp_browser_mode_only_dispatches_payload_to_publisher() -> None:
     def fail_if_notify_calls(request: httpx.Request) -> httpx.Response:
-        raise AssertionError(
-            f"Notify Hub must not call the MP API in browser mode: {request.url}"
-        )
+        raise AssertionError(f"Notify Hub must not call the MP API in browser mode: {request.url}")
 
     settings = make_settings(publish_mode="browser")
     http = make_transport(fail_if_notify_calls)

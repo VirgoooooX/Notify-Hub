@@ -314,9 +314,7 @@ async def test_xhs_platform_is_disabled_by_default(api: tuple[object, object]) -
     )
 
     async with app.state.session_factory() as session:
-        delivery_count = await session.scalar(
-            select(func.count(Delivery.id))
-        )
+        delivery_count = await session.scalar(select(func.count(Delivery.id)))
     assert receipt.duplicate is False
     assert delivery_count == 0
 

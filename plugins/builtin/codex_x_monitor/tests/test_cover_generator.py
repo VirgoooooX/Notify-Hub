@@ -1,13 +1,15 @@
-from pathlib import Path
 import tempfile
+from pathlib import Path
+
 from PIL import Image
+
 from plugins.builtin.codex_x_monitor.cover_generator import (
-    generate_dynamic_xhs_cover,
-    generate_dynamic_wechat_cover,
-    generate_all_dynamic_covers,
-    _wrap_mixed_text,
-    _get_text_font,
     _get_emoji_font,
+    _get_text_font,
+    _wrap_mixed_text,
+    generate_all_dynamic_covers,
+    generate_dynamic_wechat_cover,
+    generate_dynamic_xhs_cover,
 )
 
 
@@ -123,6 +125,3 @@ def test_generate_all_dynamic_covers():
 
         assert (out_xhs / "cover_post_unified_1.png").exists()
         assert (out_wx / "cover_post_unified_1.png").exists()
-
-
-

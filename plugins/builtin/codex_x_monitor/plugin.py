@@ -289,13 +289,17 @@ class CodexXMonitorPlugin:
                         generated_rel = generate_dynamic_xhs_cover(xhs_title, post.id)
                         xhs_cover_url = context.media.public_static_url(generated_rel)
 
-                    raw_tags = [t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5\-]+)", xhs_content)]
+                    raw_tags = [
+                        t.strip("#") for t in re.findall(r"#([\w\u4e00-\u9fa5\-]+)", xhs_content)
+                    ]
                     mandatory_topics = ["codex", "openai"]
                     extra_topics = [t for t in raw_tags if t.lower() not in mandatory_topics]
                     xhs_topics = list(dict.fromkeys(mandatory_topics + extra_topics))
-                    # Strip trailing hashtag lines from body_text so they are not duplicated as plain text
+                    # Strip trailing hashtag lines from body_text so they
+                    # are not duplicated as plain text
                     clean_lines = [
-                        line for line in xhs_content.splitlines()
+                        line
+                        for line in xhs_content.splitlines()
                         if not re.match(r"^(?:#[\w\u4e00-\u9fa5\-]+(?:\s+|$))+$", line.strip())
                     ]
                     clean_body = "\n".join(clean_lines).strip()
