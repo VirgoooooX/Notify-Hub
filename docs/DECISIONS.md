@@ -654,7 +654,7 @@ ADR-029 在 Notify Hub 内嵌了微信公众号 Playwright 发布器，但随着
 
 `mp_publish_mode=browser` 采用统一发布网关边界：
 
-1. Notify Hub 只负责生成后的文章投递调度、文章历史记录和发布总控；它向 Browser Publisher 提交标题、正文、封面 URL、摘要和来源等任务数据，不调用公众号官方 API，也不提交 `platform_draft_id`。
+1. Notify Hub 只负责生成后的文章投递调度、文章历史记录和发布总控；它向 Browser Publisher 提交标题、正文、封面 URL、摘要和来源等任务数据。若正文引用 HTTP 图片，Notify Hub 先通过发布器的媒体接口上传并将正文引用替换为 `publisher-media://<media_id>`；它不调用公众号官方 API，也不提交 `platform_draft_id`。
 2. Browser Publisher 独占公众号执行凭据（`AppID` / `AppSecret`），负责获取 Access Token、上传封面、调用 `draft/add` 创建完整草稿，再由 Playwright 打开 API 草稿并发起最终「发表」及结果核对。
 3. Playwright 不参与 API 草稿的正文编辑、图片上传、封面选择和保存草稿；没有 Browser Publisher API 凭据时，保留旧浏览器编辑器路径作为兼容兜底。
 4. `api_creating_draft` 是 API 草稿创建的持久化检查点。若 `draft/add` 请求结果丢失或 Worker 在该阶段崩溃，系统标记结果未知并停止自动重试，避免创建重复草稿；只有拿到明确的草稿 `media_id` 后才进入 `draft_saved`。

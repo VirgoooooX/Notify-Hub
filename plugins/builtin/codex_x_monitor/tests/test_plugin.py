@@ -41,6 +41,15 @@ BASE_CONFIG = {
 }
 
 
+def test_wechat_cover_public_asset_matches_plugin_asset() -> None:
+    """Keep the public fallback cover in sync with the plugin's canonical asset."""
+    repo_root = Path(__file__).resolve().parents[4]
+    plugin_cover = repo_root / "plugins" / "builtin" / "codex_x_monitor" / "codex_wechat_cover.png"
+    public_cover = repo_root / "frontend" / "public" / "codex_wechat_cover.png"
+
+    assert public_cover.read_bytes() == plugin_cover.read_bytes()
+
+
 def test_validate_config_expands_ai_profile_default() -> None:
     validated = CodexXMonitorPlugin.validate_config({**BASE_CONFIG, "decision_mode": "ai"})
 

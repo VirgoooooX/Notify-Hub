@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
@@ -19,6 +22,14 @@ from app.media.errors import MediaError
 from app.media.validation import MediaKind, validate_media
 
 logger = structlog.get_logger()
+
+MP_INLINE_IMAGE_MAX_BYTES = 1 * 1024 * 1024
+MARKDOWN_IMAGE_RE = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<target>[^)]*)\)")
+HTML_IMAGE_SRC_RE = re.compile(
+    r'(?P<prefix><img\b[^>]*?\s+src\s*=\s*["\'])(?P<src>[^"\']+)'
+    r'(?P<suffix>["\'])',
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def text_to_html(text: str) -> str:
@@ -173,22 +184,35 @@ class MPArticleAdapter:
             client_req_id = f"notify-hub:{message.delivery_id or 'adhoc'}:wechat_mp"
             cover_urls = [str(message.image_url)] if message.image_url else []
             try:
-                publish_mode = message.payload.get("mode") or "publish"
-                res = await self._browser_publisher_client.submit_job(
-                    client_request_id=client_req_id,
-                    platform="wechat_mp",
-                    mode=publish_mode,
-                    title=message.title,
-                    body_text=message.content,
-                    body_html=message.payload.get("body_html"),
-                    author=self._settings.mp_author,
-                    digest=self._digest(message),
-                    image_urls=cover_urls,
-                    source_url=message.url,
+                body_text, body_html, uploaded_media_ids = await self._prepare_browser_article_body(
+                    message
                 )
+                publish_mode = message.payload.get("mode") or "publish"
+                submit_kwargs: dict[str, Any] = {
+                    "client_request_id": client_req_id,
+                    "platform": "wechat_mp",
+                    "mode": publish_mode,
+                    "title": message.title,
+                    "body_text": body_text,
+                    "body_html": body_html,
+                    "author": self._settings.mp_author,
+                    "digest": self._digest(message),
+                    "image_urls": cover_urls,
+                    "source_url": message.url,
+                }
+                if uploaded_media_ids:
+                    submit_kwargs["uploaded_media_ids"] = uploaded_media_ids
+                res = await self._browser_publisher_client.submit_job(**submit_kwargs)
                 metadata["publisher_job_id"] = res.get("id")
                 metadata["publisher_job_queued"] = True
                 metadata["console_url"] = self._browser_publisher_client.base_url
+            except MediaError as exc:
+                return ChannelResult(
+                    False,
+                    exc.retryable,
+                    "PUBLISHER_TEMPORARY" if exc.retryable else "PAYLOAD_INVALID",
+                    f"MP article inline image is invalid ({exc.code})",
+                )
             except BrowserPublisherTemporaryError as exc:
                 return ChannelResult(False, True, "PUBLISHER_TEMPORARY", str(exc))
             except BrowserPublisherError as exc:
@@ -201,6 +225,103 @@ class MPArticleAdapter:
             provider_message_id=article_id,
             response_metadata=metadata,
         )
+
+    async def _prepare_browser_article_body(
+        self, message: ChannelMessage
+    ) -> tuple[str, str | None, list[str]]:
+        """Upload HTTP images referenced by the article body to Browser Publisher."""
+        body_html = message.payload.get("body_html")
+        if isinstance(body_html, str) and body_html.strip():
+            references = [match.group("src") for match in HTML_IMAGE_SRC_RE.finditer(body_html)]
+            body_format = "html"
+            body = body_html
+        else:
+            body = message.content
+            references = [
+                self._markdown_image_reference(match.group("target"))
+                for match in MARKDOWN_IMAGE_RE.finditer(body)
+            ]
+            body_format = "text"
+
+        unsupported = [
+            source
+            for source in references
+            if not source or urlsplit(source).scheme not in {"http", "https"}
+        ]
+        if unsupported:
+            raise MediaError(
+                "unsupported_media_reference",
+                "MP browser article images must use absolute HTTP(S) URLs",
+            )
+
+        sources: list[str] = []
+        for source in references:
+            if source and source not in sources and urlsplit(source).scheme in {"http", "https"}:
+                sources.append(source)
+        if not sources:
+            return message.content, body_html if body_format == "html" else None, []
+        if self._downloader is None:
+            raise MediaError("download_unavailable", "MP inline image downloader is not available")
+        browser_publisher = self._browser_publisher_client
+        if browser_publisher is None:
+            raise MediaError(
+                "upload_unavailable",
+                "Browser Publisher inline image upload is not available",
+            )
+        inline_limit = min(self._settings.media_image_max_bytes, MP_INLINE_IMAGE_MAX_BYTES)
+        replacements: dict[str, str] = {}
+        uploaded_media_ids: list[str] = []
+        for index, source in enumerate(sources, start=1):
+            data = await self._downloader.download(source, max_bytes=inline_limit)
+            validated = validate_media(data, MediaKind.IMAGE, max_bytes=inline_limit)
+            media_id = await browser_publisher.upload_media(
+                filename=f"inline-{index}{validated.extension}",
+                content_type=validated.mime_type,
+                content=data,
+            )
+            replacements[source] = f"publisher-media://{media_id}"
+            uploaded_media_ids.append(media_id)
+
+        if body_format == "html":
+
+            def replace_html_image(match: re.Match[str]) -> str:
+                replacement = replacements.get(match.group("src"))
+                if replacement is None:
+                    return match.group(0)
+                return f"{match.group('prefix')}{replacement}{match.group('suffix')}"
+
+            return (
+                message.content,
+                HTML_IMAGE_SRC_RE.sub(replace_html_image, body),
+                uploaded_media_ids,
+            )
+
+        def replace_markdown_image(match: re.Match[str]) -> str:
+            target = match.group("target").strip()
+            reference, title_suffix = self._markdown_image_parts(target)
+            replacement = replacements.get(reference)
+            if replacement is None:
+                return match.group(0)
+            return f"![{match.group('alt')}]({replacement}{title_suffix})"
+
+        return MARKDOWN_IMAGE_RE.sub(replace_markdown_image, body), None, uploaded_media_ids
+
+    @staticmethod
+    def _markdown_image_reference(target: str) -> str:
+        reference, _title_suffix = MPArticleAdapter._markdown_image_parts(target)
+        return reference
+
+    @staticmethod
+    def _markdown_image_parts(target: str) -> tuple[str, str]:
+        value = target.strip()
+        if not value:
+            return "", ""
+        if value.startswith("<"):
+            closing = value.find(">")
+            if closing >= 0:
+                return value[1:closing], value[closing + 1 :]
+        parts = value.split(maxsplit=1)
+        return parts[0], (f" {parts[1]}" if len(parts) == 2 else "")
 
     async def _send_via_api(self, message: ChannelMessage) -> ChannelResult:
         if self._client is None:

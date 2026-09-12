@@ -256,6 +256,100 @@ async def test_adapter_browser_mode_dispatches_complete_article_to_publisher() -
 
 
 @pytest.mark.asyncio
+async def test_adapter_browser_mode_uploads_http_images_referenced_by_body() -> None:
+    library = FakeLibrary()
+    settings = make_settings(publish_mode="browser")
+    browser_publisher = AsyncMock(spec=BrowserPublisherClient)
+    browser_publisher.base_url = "http://192.168.31.100:8790"
+    browser_publisher.upload_media.return_value = "med_inline_1"
+    browser_publisher.submit_job.return_value = {
+        "id": "wechat_job_inline_001",
+        "status": "queued",
+    }
+    downloader = AsyncMock(spec=SafeMediaDownloader)
+    downloader.download.return_value = _png_bytes()
+    adapter = MPArticleAdapter(
+        None,
+        settings,
+        downloader=downloader,
+        library=library,
+        browser_publisher_client=browser_publisher,
+    )
+    body_html = (
+        '<img data-src="https://img.example.com/not-the-image.png" '
+        'src="https://img.example.com/inline.png" />'
+    )
+    message = ChannelMessage(
+        message_type="article",
+        title="正文图片",
+        content="正文",
+        recipients=[],
+        image_url="https://img.example.com/cover.png",
+        payload={"publish_to_mp": True, "body_html": body_html},
+        delivery_id="delivery_inline",
+    )
+
+    result = await adapter.send(message)
+
+    assert result.success is True
+    downloader.download.assert_awaited_once_with(
+        "https://img.example.com/inline.png", max_bytes=1 * 1024 * 1024
+    )
+    browser_publisher.upload_media.assert_awaited_once_with(
+        filename="inline-1.png",
+        content_type="image/png",
+        content=_png_bytes(),
+    )
+    browser_publisher.submit_job.assert_awaited_once_with(
+        client_request_id="notify-hub:delivery_inline:wechat_mp",
+        platform="wechat_mp",
+        mode="publish",
+        title="正文图片",
+        body_text="正文",
+        body_html='<img data-src="https://img.example.com/not-the-image.png" '
+        'src="publisher-media://med_inline_1" />',
+        author="Test Author",
+        digest="正文",
+        image_urls=["https://img.example.com/cover.png"],
+        source_url=None,
+        uploaded_media_ids=["med_inline_1"],
+    )
+
+
+@pytest.mark.asyncio
+async def test_adapter_browser_mode_rejects_local_body_image_reference() -> None:
+    library = FakeLibrary()
+    settings = make_settings(publish_mode="browser")
+    browser_publisher = AsyncMock(spec=BrowserPublisherClient)
+    browser_publisher.base_url = "http://192.168.31.100:8790"
+    adapter = MPArticleAdapter(
+        None,
+        settings,
+        library=library,
+        browser_publisher_client=browser_publisher,
+    )
+    message = ChannelMessage(
+        message_type="article",
+        title="本地图片",
+        content="正文",
+        recipients=[],
+        image_url="https://img.example.com/cover.png",
+        payload={
+            "publish_to_mp": True,
+            "body_html": '<p>正文</p><img src="images/inline.png">',
+        },
+        delivery_id="delivery_local_inline",
+    )
+
+    result = await adapter.send(message)
+
+    assert result.success is False
+    assert result.retryable is False
+    assert result.error_code == "PAYLOAD_INVALID"
+    browser_publisher.submit_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_adapter_test_returns_success_in_library_mode() -> None:
     adapter = MPArticleAdapter(None, make_settings(credentials=False))
     result = await adapter.test("unused")

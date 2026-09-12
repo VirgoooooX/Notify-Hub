@@ -212,6 +212,30 @@ async def test_browser_publisher_client_http_calls() -> None:
 
 
 @pytest.mark.asyncio
+@respx.mock
+async def test_browser_publisher_client_uploads_media() -> None:
+    client = BrowserPublisherClient(
+        base_url="http://192.168.31.100:8790",
+        access_token="secret-token-123",
+    )
+    route = respx.post("http://192.168.31.100:8790/v1/media").respond(
+        status_code=201,
+        json={"media_id": "med_inline_1"},
+    )
+
+    media_id = await client.upload_media(
+        filename="inline-1.png",
+        content_type="image/png",
+        content=b"image-bytes",
+    )
+
+    assert media_id == "med_inline_1"
+    assert route.calls.last.request.headers["authorization"] == "Bearer secret-token-123"
+    assert b"inline-1.png" in route.calls.last.request.content
+    assert b"image-bytes" in route.calls.last.request.content
+
+
+@pytest.mark.asyncio
 async def test_event_service_and_delivery_worker_dual_variants(api: tuple[object, object]) -> None:
     from app.channels.base import FakeChannel
     from app.workers.delivery_worker import DeliveryWorker
