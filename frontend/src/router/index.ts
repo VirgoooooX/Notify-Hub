@@ -31,6 +31,7 @@ const routes = [
       { path: 'notifications/:id', name: 'notification-detail', component: () => import('@/views/NotificationDetailView.vue'), meta: { title: '通知详情' } },
       { path: 'people', name: 'people', component: () => import('@/views/PeopleView.vue'), meta: { title: '接收人' } },
       { path: 'api-clients', name: 'api-clients', component: () => import('@/views/ApiClientsView.vue'), meta: { title: 'API Clients' } },
+      { path: 'profiles', name: 'profiles', component: () => import('@/views/ProfilesView.vue'), meta: { title: '应用 Profiles' } },
       { path: 'plugins', name: 'plugins', component: () => import('@/views/PluginsView.vue'), meta: { title: '插件运行台' } },
       { path: 'ai/providers', name: 'ai-providers', component: () => import('@/views/AIProvidersView.vue'), meta: { title: 'AI Providers' } },
       { path: 'ai/profiles', name: 'ai-profiles', component: () => import('@/views/AIProfilesView.vue'), meta: { title: 'AI Profiles' } },

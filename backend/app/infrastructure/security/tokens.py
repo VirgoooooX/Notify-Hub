@@ -48,6 +48,7 @@ def create_mobile_identity_token(
     settings: Settings,
     clock: Clock,
     *,
+    profile_id: str | None = None,
     lifetime: timedelta = timedelta(minutes=30),
 ) -> str:
     """Issue a short-lived token for a verified WeCom identity.
@@ -63,14 +64,24 @@ def create_mobile_identity_token(
         "exp": now + lifetime,
         "jti": secrets.token_hex(16),
     }
+    if profile_id is not None:
+        payload["profile_id"] = profile_id
     return jwt.encode(payload, settings.jwt_secret.get_secret_value(), algorithm="HS256")
 
 
 def decode_mobile_identity_token(token: str, settings: Settings) -> str:
+    identity_id, _profile_id = decode_mobile_identity_token_context(token, settings)
+    return identity_id
+
+
+def decode_mobile_identity_token_context(token: str, settings: Settings) -> tuple[str, str | None]:
     payload = jwt.decode(token, settings.jwt_secret.get_secret_value(), algorithms=["HS256"])
     if payload.get("type") != "wecom_mobile" or not isinstance(payload.get("sub"), str):
         raise jwt.InvalidTokenError("invalid token type")
-    return str(payload["sub"])
+    profile_id = payload.get("profile_id")
+    if profile_id is not None and not isinstance(profile_id, str):
+        raise jwt.InvalidTokenError("invalid mobile token profile")
+    return str(payload["sub"]), profile_id
 
 
 def create_refresh_token() -> str:

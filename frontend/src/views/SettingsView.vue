@@ -26,7 +26,7 @@ import AppAlert from '@/components/ui/AppAlert.vue'
 import AppSwitch from '@/components/ui/AppSwitch.vue'
 import DescriptionList from '@/components/data/DescriptionList.vue'
 import { useUiStore } from '@/stores/ui'
-import type { AIProfile, WechatMpSettings, BrowserPublisherSettings } from '@/types'
+import type { AIProfile, ApplicationProfile, WechatMpSettings, BrowserPublisherSettings } from '@/types'
 import { APP_VERSION } from '@/lib/version'
 import { DEFAULT_TIMEZONE } from '@/lib/time'
 import { useSettingsStore } from '@/stores/settings'
@@ -43,6 +43,7 @@ const busy = ref(false)
 const testing = ref(false)
 const publishingMenu = ref(false)
 const parserProfiles = ref<AIProfile[]>([])
+const appProfiles = ref<ApplicationProfile[]>([])
 
 const timezonePresets = [
   { label: '中国标准时间 (Asia/Shanghai)', value: 'Asia/Shanghai' },
@@ -103,9 +104,10 @@ onMounted(async () => {
   }
 
   try {
-    const [platformSettings, profiles] = await Promise.all([
+    const [platformSettings, aiProfiles, applicationProfiles] = await Promise.all([
       api.get<Record<string, unknown>>('/admin/settings'),
-      api.get<AIProfile[]>('/admin/ai/profiles')
+      api.get<AIProfile[]>('/admin/ai/profiles'),
+      api.get<{ items: ApplicationProfile[] }>('/admin/profiles')
     ])
     Object.assign(settings, platformSettings)
     platform.setTimezone(
@@ -116,9 +118,10 @@ onMounted(async () => {
       typeof platformSettings.default_reminder_parser_profile_id === 'string'
         ? platformSettings.default_reminder_parser_profile_id
         : ''
-    parserProfiles.value = profiles.filter(
+    parserProfiles.value = (Array.isArray(aiProfiles) ? aiProfiles : []).filter(
       (profile) => profile.capability === 'extract' && profile.enabled
     )
+    appProfiles.value = applicationProfiles?.items ?? []
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '设置加载失败', 'danger')
   }
@@ -349,8 +352,39 @@ async function publishReminderMenu() {
   <!-- TAB 2: 企业微信渠道 (WeCom) -->
   <section v-show="activeTab === 'wecom'" class="tab-panel" aria-labelledby="tab-wecom-btn">
     <AppAlert variant="info" class="info-alert mb-4">
-      企业微信是 Notify Hub 核心通知与即时待办通道。为保证线上运行环境的一致性与安全性，凭据由只读 Secret 文件或环境变量注入，管理界面仅做就绪审计，避免配置分叉。
+      企业微信是 Notify Hub 核心通知与即时待办通道。默认 Profile 兼容只读 Secret 文件或环境变量；其他 Profile 的 Agent 元数据和加密 Secret 请在应用 Profiles 页面维护，本页保留默认链路审计与测试。
     </AppAlert>
+
+    <AppCard padding="md" class="profile-runtime-card">
+      <template #header>
+        <div class="panel-header-wrap">
+          <div class="title-with-icon">
+            <Layers class="header-icon" :size="18" />
+            <h3 class="panel-title">
+              应用 Profile 运行时
+            </h3>
+          </div>
+          <RouterLink class="quick-link-action" to="/profiles">
+            管理 Profiles <ArrowRight :size="14" />
+          </RouterLink>
+        </div>
+      </template>
+      <p class="desc-text">
+        当前平台使用共享核心与 Worker；每个 Profile 独立维护 Agent、回调、成员、交互状态和媒体引用。
+      </p>
+      <div v-if="appProfiles.length" class="profile-runtime-list">
+        <div v-for="profile in appProfiles" :key="profile.id" class="profile-runtime-row">
+          <div class="profile-runtime-name">
+            <strong>{{ profile.name }}</strong><span class="mono muted">{{ profile.key }}</span>
+          </div>
+          <div class="profile-runtime-capabilities">
+            <span>{{ profile.wecom?.agent_id_configured ? `Agent ${profile.wecom.agent_id ?? ''}` : 'Agent 未配置' }}</span><span>{{ profile.wecom?.secret_configured ? 'Secret 已配置' : 'Secret 未配置' }}</span>
+          </div>
+          <StatusBadge :status="profile.enabled && profile.wecom?.agent_id_configured && profile.wecom?.secret_configured ? 'active' : 'disabled'" />
+        </div>
+      </div>
+      <EmptyState v-else title="Profile 列表不可用" description="请前往应用 Profiles 页面检查初始化状态。" />
+    </AppCard>
 
     <div class="tab-grid">
       <!-- 左列：凭据就绪清单与网络设置 -->
@@ -1096,6 +1130,48 @@ async function publishReminderMenu() {
 .info-alert {
   margin-top: 0;
   margin-bottom: var(--space-4);
+}
+
+.profile-runtime-card {
+  margin-bottom: var(--space-4);
+}
+
+.profile-runtime-list {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.profile-runtime-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(180px, 1.4fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-hover);
+}
+
+.profile-runtime-name,
+.profile-runtime-capabilities {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.profile-runtime-name .mono,
+.profile-runtime-capabilities {
+  font-size: 10px;
+}
+
+.profile-runtime-capabilities {
+  color: var(--text-secondary);
+}
+
+@media (max-width: 700px) {
+  .profile-runtime-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 .warning-alert {

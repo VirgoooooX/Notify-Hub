@@ -40,15 +40,14 @@ from app.application.wecom_media_service import (
     DatabaseMediaCacheRepository,
     OutboundWeComMediaService,
 )
+from app.application.wecom_menu_publication_service import WeComMenuPublicationService
 from app.application.wecom_menu_service import WeComMenuService
 from app.application.x_health_service import XHealthService
 from app.application.x_source_service import XSourceService
-from app.channels.base import NotificationChannel, UnconfiguredChannel
+from app.channels.base import ChannelResult, NotificationChannel
 from app.channels.browser_publisher.client import BrowserPublisherClient
 from app.channels.mp.adapter import MPArticleAdapter
 from app.channels.mp.client import MPClient
-from app.channels.wecom.adapter import WeComAdapter
-from app.channels.wecom.client import WeComClient
 from app.channels.wecom.crypto import WeComCrypto
 from app.channels.wecom.media_adapter import WeComTemporaryMediaAdapter
 from app.channels.xhs.adapter import XhsArticleAdapter
@@ -64,6 +63,10 @@ from app.media.downloader import SafeMediaDownloader
 from app.media.speech import LocalCommandAmrTranscoder, LocalCommandTTS
 from app.media.storage import MediaStorage
 from app.plugin_runtime.registry import PluginRegistry
+from app.profiles.errors import ProfileError
+from app.profiles.registry import ProfileAwareWeComChannel, ProfileRegistry
+from app.profiles.routing import ProfileRoutingService
+from app.profiles.service import ApplicationProfileService
 from app.version import APP_VERSION
 from app.workers.delivery_worker import DeliveryWorker
 from app.workers.interaction_worker import InteractionWorker
@@ -92,9 +95,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     clock = SystemClock()
-    event_service = EventService(factory, clock)
     ai_control_service = AIControlService(factory, clock.now)
-    wecom_client = WeComClient(settings, clock)
     worker_stop = asyncio.Event()
     secret_store = (
         SecretStore(
@@ -105,12 +106,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.secret_encryption_key is not None
         else None
     )
+    profile_registry = ProfileRegistry(
+        factory,
+        settings,
+        secret_store=secret_store,
+        clock=clock,
+    )
+    profile_routing = ProfileRoutingService(factory, profile_registry)
+    event_service = EventService(
+        factory,
+        clock,
+        profiles=profile_registry,
+        routing=profile_routing,
+    )
     ai_service = AIService(factory, secret_store=secret_store)
     reminder_service = ReminderService(
         factory,
         ReminderEventEmitterAdapter(event_service),
         settings.jwt_secret.get_secret_value(),
         clock,
+        profile_registry,
+        profile_routing,
     )
     reminder_access_service = ReminderAccessService(factory, reminder_service, clock)
     reminder_draft_service = ReminderDraftService(factory, reminder_service, clock=clock)
@@ -122,16 +138,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ai=ai_service,
         clock=clock,
         default_timezone=settings.app_timezone,
+        routing=profile_routing,
     )
     reminder_worker = ReminderWorker(reminder_service, clock=clock)
     callback_service = WeComCallbackService(factory)
-    mobile_identity_service = MobileIdentityService(factory, settings, clock)
+    mobile_identity_service = MobileIdentityService(factory, settings, clock, profile_routing)
     mobile_reminder_query_service = MobileReminderQueryService(factory)
     wecom_menu_service = WeComMenuService(
         reminder_service,
         mobile_identity_service,
         settings.public_base_url,
+        routing=profile_routing,
     )
+    wecom_menu_publication_service = WeComMenuPublicationService(profile_registry, profile_routing)
     media_http = httpx.AsyncClient(follow_redirects=False)
     media_storage = MediaStorage(settings.media_root)
     media_service = MediaService(
@@ -149,10 +168,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         retention_seconds=settings.media_retention_seconds,
     )
     x_source = XSourceService(settings)
-    temporary_media = WeComTemporaryMediaAdapter(
-        wecom_client,
-        DatabaseMediaCacheRepository(factory),
-    )
     tts_media_service = (
         TtsMediaService(
             LocalCommandTTS(settings.tts_command),
@@ -163,27 +178,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else None
     )
 
+    async def update_template_card_for_profile(
+        response_code: str, user_id: str, profile_id: str
+    ) -> ChannelResult:
+        try:
+            runtime = await profile_registry.runtime(profile_id)
+            return await runtime.client.update_template_card(
+                response_code=response_code, user_ids=[user_id]
+            )
+        except ProfileError as exc:
+            return ChannelResult(False, False, exc.code, exc.message)
+
+    conversation_reply_emitter = ConversationReplyEmitterAdapter(factory, event_service)
     interaction_worker = InteractionWorker(
         factory,
         reminder_service,
         conversation_service,
-        emit_reply=ConversationReplyEmitterAdapter(factory, event_service),
-        update_card=lambda response_code, user_id: wecom_client.update_template_card(
-            response_code=response_code, user_ids=[user_id]
-        ),
+        emit_reply_profile=conversation_reply_emitter,
+        update_card_profile=update_template_card_for_profile,
         menu_service=wecom_menu_service,
         clock=clock,
     )
-    outbound_media = OutboundWeComMediaService(
-        factory,
-        media_storage,
-        temporary_media,
+    profile_registry.set_media_factory(
+        lambda profile_id, client: OutboundWeComMediaService(
+            factory,
+            media_storage,
+            WeComTemporaryMediaAdapter(
+                client,
+                DatabaseMediaCacheRepository(factory, profile_id=profile_id),
+                profile_id=profile_id,
+            ),
+        )
     )
-    channel = (
-        WeComAdapter(wecom_client, settings, outbound_media)
-        if settings.wecom_corp_id
-        else UnconfiguredChannel()
-    )
+    channel: NotificationChannel = ProfileAwareWeComChannel(profile_registry)
     browser_publisher_token = (
         settings.browser_publisher_access_token.get_secret_value()
         if settings.browser_publisher_access_token
@@ -240,7 +267,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     plugin_service = PluginService(
         session_factory=factory,
         registry=PluginRegistry(),
-        event_emitter=PluginEventEmitterAdapter(event_service),
+        event_emitter=PluginEventEmitterAdapter(event_service, factory),
         secret_resolver=PluginSecretResolverAdapter(secret_store),
         clock=clock.now,
         media_service=media_service,
@@ -248,6 +275,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         x_source=x_source,
         ai_service=ai_service,
         reminder_access=reminder_access_service,
+        profiles=profile_registry,
     )
     plugin_worker = PluginWorker(plugin_service, worker_id="plugin-main")
     x_health_service = XHealthService(
@@ -282,6 +310,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        await profile_registry.ensure_default_profile()
         await ai_control_service.bootstrap_if_empty(
             enabled=settings.ai_enabled,
             preset=settings.ai_bootstrap_preset,
@@ -350,7 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await plugin_worker.stop()
         if tasks:
             await asyncio.gather(*tasks)
-        await wecom_client.close()
+        await profile_registry.close()
         if mp_client is not None:
             await mp_client.close()
         await x_source.close()
@@ -367,7 +396,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.event_service = event_service
     app.state.ai_control_service = ai_control_service
     app.state.ai_service = ai_service
-    app.state.notification_service = NotificationService(factory, clock)
+    app.state.notification_service = NotificationService(
+        factory,
+        clock,
+        profiles=profile_registry,
+        routing=profile_routing,
+    )
     app.state.notification_channel = channel
     app.state.delivery_worker = worker
     app.state.reminder_service = reminder_service
@@ -375,10 +409,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.reminder_maintenance_service = reminder_maintenance_service
     app.state.conversation_service = conversation_service
     app.state.wecom_callback_service = callback_service
-    app.state.wecom_client = wecom_client
+    # Kept as a nullable compatibility hook for tests and older integrations;
+    # production menu/card routing uses ProfileRegistry below.
+    app.state.wecom_client = None
+    app.state.profile_registry = profile_registry
+    app.state.profile_routing = profile_routing
+    app.state.application_profile_service = ApplicationProfileService(
+        factory,
+        registry=profile_registry,
+        secret_store=secret_store,
+        clock=clock,
+    )
     app.state.mobile_identity_service = mobile_identity_service
     app.state.mobile_reminder_query_service = mobile_reminder_query_service
     app.state.wecom_menu_service = wecom_menu_service
+    app.state.wecom_menu_publication_service = wecom_menu_publication_service
     app.state.media_service = media_service
     app.state.tts_media_service = tts_media_service
     app.state.plugin_service = plugin_service
@@ -419,6 +464,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from app.api.admin_auth import router as auth_router
     from app.api.admin_core import router as admin_router
     from app.api.admin_management import router as management_router
+    from app.api.admin_profiles import router as profiles_router
     from app.api.ai import router as ai_router
     from app.api.client_reminders import router as client_reminders_router
     from app.api.events import router as events_router
@@ -435,6 +481,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(admin_router, prefix="/api/v1/admin")
     app.include_router(articles_router, prefix="/api/v1/admin")
     app.include_router(management_router, prefix="/api/v1/admin")
+    app.include_router(profiles_router, prefix="/api/v1/admin")
     app.include_router(events_router, prefix="/api/v1")
     app.include_router(client_reminders_router, prefix="/api/v1")
     app.include_router(plugins_router, prefix="/api/v1/admin")

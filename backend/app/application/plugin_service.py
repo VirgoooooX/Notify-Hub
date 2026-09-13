@@ -42,6 +42,8 @@ from app.plugin_runtime.registry import PluginLoadError, PluginRegistry
 from app.plugin_runtime.runner import PluginRunner, RunOutcome
 from app.plugin_runtime.schedule import next_run_at
 from app.plugin_runtime.schema import validate_json_schema
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.registry import ProfileRegistry
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -97,6 +99,7 @@ class PluginService:
         x_source: XSourceService | None = None,
         ai_service: Any = None,
         reminder_access: ReminderAccessService | None = None,
+        profiles: ProfileRegistry | None = None,
     ) -> None:
         self._factory = session_factory
         self.registry = registry
@@ -111,6 +114,7 @@ class PluginService:
         self._x_source = x_source
         self._ai_service = ai_service
         self._reminder_access = reminder_access
+        self._profiles = profiles
 
     async def initialize(self) -> None:
         self.registry.discover()
@@ -213,6 +217,7 @@ class PluginService:
 
         return {
             "id": row.id,
+            "profile_id": row.profile_id,
             "name": row.name,
             "version": row.version,
             "description": row.description,
@@ -227,6 +232,20 @@ class PluginService:
             "schedule": row.schedule,
             "schedule_inherits_default": row.schedule_inherits_default is True,
         }
+
+    async def update_profile(self, plugin_id: str, profile_ref: str | None) -> dict[str, Any]:
+        profile_id = DEFAULT_PROFILE_ID
+        if self._profiles is not None:
+            profile_id = await self._profiles.resolve_id(profile_ref)
+        elif profile_ref:
+            profile_id = profile_ref
+        async with self._factory() as session, session.begin():
+            plugin = await session.get(PluginRecord, plugin_id)
+            if plugin is None:
+                raise PluginNotFoundError(plugin_id)
+            plugin.profile_id = profile_id
+            plugin.updated_at = self._clock()
+            return self._plugin_dict(plugin)
 
     async def update_config(
         self,
@@ -551,6 +570,7 @@ class PluginService:
             if plugin_row is None:
                 raise PluginNotFoundError(plugin_id)
             manifest = PluginManifest.model_validate(plugin_row.manifest)
+            profile_id = plugin_row.profile_id
         registered = self.registry.get(plugin_id)
         config = self._validate_config(registered.plugin_class, await self._config.get(plugin_id))
         runtime_profiles = set(manifest.permissions.ai_profiles)
@@ -602,6 +622,7 @@ class PluginService:
                     access=self._reminder_access,
                     plugin_id=plugin_id,
                     run_id=run_id,
+                    profile_id=profile_id,
                     permissions=ReminderPermissions(
                         allow_create=manifest.permissions.reminders.create,
                         allow_recurring=manifest.permissions.reminders.allow_recurring,

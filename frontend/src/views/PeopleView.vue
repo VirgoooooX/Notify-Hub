@@ -212,6 +212,23 @@ onMounted(load)
           <span v-else class="default-badge-inactive">普通接收人 (点击设为默认)</span>
         </div>
 
+        <div class="profiles-section">
+          <div class="identities-title">
+            应用 Profile memberships
+          </div>
+          <div v-if="person.profiles?.length" class="profile-chip-list">
+            <span
+              v-for="profile in person.profiles"
+              :key="profile.id"
+              class="profile-chip"
+              :class="{ disabled: !profile.enabled || !profile.member_enabled }"
+            >
+              {{ profile.name }} · {{ profile.key }}
+            </span>
+          </div>
+          <span v-else class="no-identities">尚未绑定应用 Profile</span>
+        </div>
+
         <div class="identities-section">
           <div class="identities-title">
             企业微信身份
@@ -382,6 +399,32 @@ onMounted(load)
   margin-top: var(--space-4);
   border-top: 1px solid var(--border-subtle);
   padding-top: var(--space-3);
+}
+
+.profiles-section {
+  margin-top: var(--space-3);
+}
+
+.profile-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.profile-chip {
+  padding: 3px 7px;
+  border: 1px solid rgba(31, 107, 79, .2);
+  border-radius: var(--radius-pill);
+  background: rgba(31, 107, 79, .08);
+  color: #1f6b4f;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.profile-chip.disabled {
+  border-color: var(--border-subtle);
+  background: var(--surface-hover);
+  color: var(--text-tertiary);
 }
 
 .identities-title {

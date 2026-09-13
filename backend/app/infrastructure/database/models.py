@@ -6,6 +6,7 @@ from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin, TimestampMixin
 from app.infrastructure.database.utc_datetime import UTCDateTime
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -114,6 +115,9 @@ class RefreshSession(StringIdMixin, TimestampMixin, Base):
 
 class ApiClient(StringIdMixin, TimestampMixin, Base):
     __tablename__ = "api_clients"
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     key_prefix: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
@@ -136,8 +140,13 @@ class ApiClient(StringIdMixin, TimestampMixin, Base):
 class Event(StringIdMixin, Base):
     __tablename__ = "events"
     __table_args__ = (
-        UniqueConstraint("source_type", "source_id", "event_key", name="uq_event_source_key"),
+        UniqueConstraint(
+            "profile_id", "source_type", "source_id", "event_key", name="uq_event_source_key"
+        ),
         Index("ix_events_accepted_at", "accepted_at"),
+    )
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
     )
     source_type: Mapped[str] = mapped_column(String(30), nullable=False)
     source_id: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -158,6 +167,9 @@ class Event(StringIdMixin, Base):
 
 class Notification(StringIdMixin, Base):
     __tablename__ = "notifications"
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     event_id: Mapped[str | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"))
     reminder_id: Mapped[str | None] = mapped_column(String(64))
     reminder_occurrence_id: Mapped[str | None] = mapped_column(
@@ -183,6 +195,7 @@ class Delivery(StringIdMixin, Base):
     __tablename__ = "deliveries"
     __table_args__ = (
         UniqueConstraint(
+            "profile_id",
             "notification_id",
             "channel",
             "recipient_type",
@@ -190,6 +203,9 @@ class Delivery(StringIdMixin, Base):
             name="uq_delivery_target",
         ),
         Index("ix_deliveries_queue", "status", "next_attempt_at"),
+    )
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
     )
     notification_id: Mapped[str] = mapped_column(
         ForeignKey("notifications.id", ondelete="CASCADE"), nullable=False
@@ -303,6 +319,9 @@ class MpArticle(StringIdMixin, Base):
     )
     status: Mapped[str] = mapped_column(
         String(20), default=MpArticleStatus.READY.value, nullable=False
+    )
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     author: Mapped[str] = mapped_column(String(100), nullable=False)

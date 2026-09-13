@@ -46,6 +46,10 @@ class PluginScheduleUpdate(BaseModel):
     schedule: PluginSchedule = Field(discriminator="type")
 
 
+class PluginProfileUpdate(BaseModel):
+    profile_id: str | None = Field(default=None, max_length=64)
+
+
 class DataResponse(BaseModel):
     data: Any
 
@@ -156,6 +160,18 @@ async def reset_schedule(plugin_id: str, request: Request) -> DataResponse:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     await _audit(request, "plugin.schedule.reset", plugin_id)
     return DataResponse(data={"schedule": result, "schedule_inherits_default": True})
+
+
+@router.put("/{plugin_id}/profile")
+async def update_profile(
+    plugin_id: str, body: PluginProfileUpdate, request: Request
+) -> DataResponse:
+    try:
+        result = await _service(request).update_profile(plugin_id, body.profile_id)
+    except PluginNotFoundError as exc:
+        raise _not_found(exc) from exc
+    await _audit(request, "plugin.profile.update", plugin_id)
+    return DataResponse(data=result)
 
 
 @router.post("/{plugin_id}/enable", status_code=status.HTTP_204_NO_CONTENT)

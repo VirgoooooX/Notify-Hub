@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/lib/api'
 import type { Notification, Delivery } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -19,6 +20,7 @@ import { useSettingsStore } from '@/stores/settings'
 const route = useRoute()
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profileLabel, loadProfiles } = useApplicationProfiles()
 const item = ref<Notification>()
 const target = ref<Delivery>()
 const busy = ref(false)
@@ -49,8 +51,13 @@ async function retry() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void settings.load()
+  try {
+    await loadProfiles()
+  } catch {
+    // The notification remains readable when the profile catalogue is unavailable.
+  }
   void load()
 })
 
@@ -100,6 +107,8 @@ const duration = (milliseconds?: number) => {
           <dd class="mono">
             {{ item.id }}
           </dd>
+          <dt>应用 Profile</dt>
+          <dd>{{ profileLabel(item.profile_id) }}</dd>
           <dt>消息类型</dt>
           <dd>{{ item.message_type }}</dd>
           <dt>优先级</dt>
@@ -132,6 +141,7 @@ const duration = (milliseconds?: number) => {
               {{ delivery.recipient_name ?? delivery.recipient_id ?? '未知接收人' }}
             </h3>
             <span class="mono muted delivery-id">{{ delivery.id }}</span>
+            <span class="mono muted delivery-profile">{{ profileLabel(delivery.profile_id ?? item.profile_id) }}</span>
           </div>
           <div class="header-actions">
             <StatusBadge :status="delivery.status" />

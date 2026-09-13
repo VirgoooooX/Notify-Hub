@@ -5,7 +5,7 @@ import builtins
 import hashlib
 import hmac
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time, timedelta
 from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
@@ -45,6 +45,11 @@ from app.domain.reminders import (
 )
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import Delivery, Notification, Person, WeComIdentity
+from app.infrastructure.database.profile_models import (
+    ApplicationProfile,
+    ProfileMember,
+    ProfileUserState,
+)
 from app.infrastructure.database.reminder_models import (
     IncomingMessage,
     NotificationAction,
@@ -53,6 +58,10 @@ from app.infrastructure.database.reminder_models import (
     ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.errors import ProfileError
+from app.profiles.registry import ProfileRegistry
+from app.profiles.routing import ProfileRoutingService
 from sqlalchemy import delete, exists, func, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -90,6 +99,7 @@ class ReminderEventDraft:
     url: str | None = None
     media_asset_id: str | None = None
     payload: dict[str, Any] = field(default_factory=dict)
+    profile_id: str = DEFAULT_PROFILE_ID
 
 
 class ReminderEventEmitter(Protocol):
@@ -121,6 +131,7 @@ class ReminderCreate:
     content_type: str = "text"
     media_asset_id: str | None = None
     url: str | None = None
+    profile_id: str = DEFAULT_PROFILE_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,11 +196,15 @@ class ReminderService:
         emit_event: ReminderEventEmitter,
         action_token_secret: str,
         clock: Clock | None = None,
+        profiles: ProfileRegistry | None = None,
+        routing: ProfileRoutingService | None = None,
     ) -> None:
         self._sessions = session_factory
         self._emit_event = emit_event
         self._action_token_secret = action_token_secret.encode()
         self._clock = clock or SystemClock()
+        self._profiles = profiles
+        self._routing = routing
         self._deliveries = ReminderDeliveryService(self._sessions, self._clock.now)
 
     def action_token(self, action_id: str) -> str:
@@ -203,6 +218,16 @@ class ReminderService:
         return f"v1.{action_id}.{signature}"
 
     async def create(self, command: ReminderCreate, *, now: datetime | None = None) -> Reminder:
+        if self._profiles is not None:
+            profile_id = await self._profiles.resolve_id(command.profile_id)
+            if profile_id != command.profile_id:
+                command = replace(command, profile_id=profile_id)
+        if self._routing is not None:
+            await self._routing.resolve(command.profile_id, capability="outbound_enabled")
+            if command.broadcast:
+                await self._routing.resolve(command.profile_id, capability="broadcast_enabled")
+            else:
+                await self._routing.validate_recipients(command.profile_id, command.recipient_ids)
         instant = _utc(now or self._clock.now())
         validate_timezone(command.timezone)
         if not command.title.strip():
@@ -274,6 +299,7 @@ class ReminderService:
         )
         reminder = Reminder(
             id=new_id("rem"),
+            profile_id=command.profile_id,
             creator_person_id=command.creator_person_id,
             title=command.title.strip(),
             content=command.content.strip(),
@@ -342,19 +368,36 @@ class ReminderService:
             )
         return reminder
 
-    async def get(self, reminder_id: str) -> Reminder:
+    async def get(self, reminder_id: str, *, profile_id: str | None = None) -> Reminder:
         async with self._sessions() as session:
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             return reminder
 
     async def update(
-        self, reminder_id: str, command: ReminderUpdate, *, now: datetime | None = None
+        self,
+        reminder_id: str,
+        command: ReminderUpdate,
+        *,
+        profile_id: str | None = None,
+        now: datetime | None = None,
     ) -> Reminder:
         instant = _utc(now or self._clock.now())
+        if (
+            self._routing is not None
+            and profile_id is not None
+            and command.recipient_ids is not None
+        ):
+            await self._routing.validate_recipients(profile_id, command.recipient_ids)
         async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             if reminder.status not in {ReminderStatus.ACTIVE.value, ReminderStatus.PAUSED.value}:
@@ -513,12 +556,19 @@ class ReminderService:
         return reminder
 
     async def list(
-        self, *, offset: int = 0, limit: int = 50, status: str | None = None
+        self,
+        *,
+        offset: int = 0,
+        limit: int = 50,
+        status: str | None = None,
+        profile_id: str | None = None,
     ) -> Sequence[Reminder]:
         if offset < 0 or limit < 1 or limit > 200:
             raise ReminderError("invalid pagination")
         async with self._sessions() as session:
             query = select(Reminder)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
             if status == "awaiting_ack":
                 query = query.where(
                     Reminder.status == ReminderStatus.ACTIVE.value,
@@ -532,9 +582,11 @@ class ReminderService:
             )
             return rows.all()
 
-    async def count(self, *, status: str | None = None) -> int:
+    async def count(self, *, status: str | None = None, profile_id: str | None = None) -> int:
         async with self._sessions() as session:
             query = select(func.count(Reminder.id))
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
             if status == "awaiting_ack":
                 query = query.where(
                     Reminder.status == ReminderStatus.ACTIVE.value,
@@ -545,39 +597,55 @@ class ReminderService:
                 query = query.where(Reminder.status == status)
             return int(await session.scalar(query) or 0)
 
-    async def pause(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
-        return await self._transition(reminder_id, "pause", now=now)
+    async def pause(
+        self, reminder_id: str, *, profile_id: str | None = None, now: datetime | None = None
+    ) -> Reminder:
+        return await self._transition(reminder_id, "pause", profile_id=profile_id, now=now)
 
-    async def resume(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
-        return await self._transition(reminder_id, "activate", now=now)
+    async def resume(
+        self, reminder_id: str, *, profile_id: str | None = None, now: datetime | None = None
+    ) -> Reminder:
+        return await self._transition(reminder_id, "activate", profile_id=profile_id, now=now)
 
-    async def cancel(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
-        reminder = await self._transition(reminder_id, "cancel", now=now)
+    async def cancel(
+        self, reminder_id: str, *, profile_id: str | None = None, now: datetime | None = None
+    ) -> Reminder:
+        reminder = await self._transition(reminder_id, "cancel", profile_id=profile_id, now=now)
         await self._cancel_active_occurrences(reminder_id, now=now)
-        await self._cancel_pending_deliveries(reminder_id)
+        await self._cancel_pending_deliveries(reminder_id, profile_id=profile_id)
         return reminder
 
-    async def complete(self, reminder_id: str, *, now: datetime | None = None) -> Reminder:
-        reminder = await self._transition(reminder_id, "complete", now=now)
+    async def complete(
+        self, reminder_id: str, *, profile_id: str | None = None, now: datetime | None = None
+    ) -> Reminder:
+        reminder = await self._transition(reminder_id, "complete", profile_id=profile_id, now=now)
         await self._cancel_active_occurrences(reminder_id, now=now)
-        await self._cancel_pending_deliveries(reminder_id)
+        await self._cancel_pending_deliveries(reminder_id, profile_id=profile_id)
         return reminder
 
-    async def delete(self, reminder_id: str, *, now: datetime | None = None) -> None:
+    async def delete(
+        self, reminder_id: str, *, profile_id: str | None = None, now: datetime | None = None
+    ) -> None:
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session:
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             current_status = reminder.status
 
         if current_status in {ReminderStatus.ACTIVE.value, ReminderStatus.PAUSED.value}:
-            await self.cancel(reminder_id, now=instant)
+            await self.cancel(reminder_id, profile_id=profile_id, now=instant)
         else:
-            await self._cancel_pending_deliveries(reminder_id)
+            await self._cancel_pending_deliveries(reminder_id, profile_id=profile_id)
 
         async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             await session.delete(reminder)
@@ -615,11 +683,19 @@ class ReminderService:
             )
 
     async def snooze(
-        self, reminder_id: str, *, until: datetime, actor_person_id: str | None = None
+        self,
+        reminder_id: str,
+        *,
+        until: datetime,
+        profile_id: str | None = None,
+        actor_person_id: str | None = None,
     ) -> Reminder:
         target = normalize_utc(until)
         async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             if actor_person_id and reminder.creator_person_id != actor_person_id:
@@ -755,6 +831,8 @@ class ReminderService:
 
             occurrence = ReminderOccurrence(
                 id=new_id("roc"),
+                profile_id=reminder.profile_id,
+                profile_id_snapshot=reminder.profile_id,
                 reminder_id=reminder.id,
                 occurrence_key=occurrence_key,
                 scheduled_for=scheduled_time,
@@ -929,6 +1007,7 @@ class ReminderService:
             )
             if completion:
                 draft = ReminderEventDraft(
+                    profile_id=occurrence.profile_id_snapshot,
                     source_type="reminder",
                     source_id=reminder.id,
                     event_type="reminder.broadcast_all_completed",
@@ -961,6 +1040,7 @@ class ReminderService:
                     hint = _broadcast_interactive_hint(occurrence.notify_on_all_completed_snapshot)
                     content = f"{content}\n\n{hint}" if content else hint
                 draft = ReminderEventDraft(
+                    profile_id=occurrence.profile_id_snapshot,
                     source_type="reminder",
                     source_id=reminder.id,
                     event_type="reminder.broadcast_triggered",
@@ -1166,6 +1246,7 @@ class ReminderService:
                 content = f"{content}\n\n{hint}" if content else hint
 
             draft = ReminderEventDraft(
+                profile_id=occurrence.profile_id_snapshot,
                 source_type="reminder",
                 source_id=occurrence.reminder_id,
                 event_type="reminder.triggered",
@@ -1236,7 +1317,9 @@ class ReminderService:
                 cancel_after_accept = True
         if cancel_after_accept:
             await self._cancel_pending_deliveries(
-                occurrence.reminder_id, occurrence_id=occurrence.id
+                occurrence.reminder_id,
+                profile_id=occurrence.profile_id_snapshot,
+                occurrence_id=occurrence.id,
             )
         return acceptance
 
@@ -1287,12 +1370,18 @@ class ReminderService:
         sender_wecom_userid: str,
         operation: str,
         incoming_message_id: str | None = None,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> InteractiveOccurrenceResult:
         """Operate exactly the occurrence last delivered successfully to this WeCom user."""
         allowed = {"complete", "snooze_10", "snooze_30", "ignore_today", "stop"}
         if operation not in allowed:
             raise ReminderError("unsupported interactive reminder operation")
+        if self._routing is not None:
+            try:
+                await self._routing.resolve(profile_id, capability="interactive_enabled")
+            except ProfileError as exc:
+                raise ReminderPermissionDenied(str(exc)) from exc
 
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
@@ -1307,6 +1396,19 @@ class ReminderService:
             )
             if identity is None:
                 raise ReminderPermissionDenied("sender is not recognized")
+            member = await session.scalar(
+                select(ProfileMember.id).where(
+                    ProfileMember.profile_id == profile_id,
+                    ProfileMember.person_id == identity.person_id,
+                    ProfileMember.enabled.is_(True),
+                )
+            )
+            if member is None:
+                profile_exists = await session.scalar(
+                    select(ApplicationProfile.id).where(ApplicationProfile.id == profile_id)
+                )
+                if profile_exists is not None or profile_id != DEFAULT_PROFILE_ID:
+                    raise ReminderPermissionDenied("sender is not a member of this profile")
 
             incoming: IncomingMessage | None = None
             if incoming_message_id is not None:
@@ -1325,14 +1427,29 @@ class ReminderService:
                         prior_occurrence.reminder_id,
                         prior_occurrence.id,
                     )
-            if identity.latest_interactive_occurrence_id is None:
+            state = await session.scalar(
+                select(ProfileUserState).where(
+                    ProfileUserState.profile_id == profile_id,
+                    ProfileUserState.wecom_identity_id == identity.id,
+                )
+            )
+            latest_occurrence_id = (
+                state.latest_interactive_occurrence_id if state is not None else None
+            )
+            if state is None:
+                profile_exists = await session.scalar(
+                    select(ApplicationProfile.id).where(ApplicationProfile.id == profile_id)
+                )
+                if profile_exists is None and profile_id == DEFAULT_PROFILE_ID:
+                    latest_occurrence_id = identity.latest_interactive_occurrence_id
+            if latest_occurrence_id is None:
                 raise ReminderNotFound("no interactive reminder has been delivered")
 
-            occurrence = await session.get(
-                ReminderOccurrence, identity.latest_interactive_occurrence_id
-            )
+            occurrence = await session.get(ReminderOccurrence, latest_occurrence_id)
             if occurrence is None:
                 raise ReminderNotFound("latest interactive occurrence no longer exists")
+            if occurrence.profile_id_snapshot != profile_id:
+                raise ReminderPermissionDenied("interactive occurrence belongs to another profile")
             reminder = await session.get(Reminder, occurrence.reminder_id)
             recipient = await session.scalar(
                 select(ReminderOccurrenceRecipient).where(
@@ -1347,7 +1464,11 @@ class ReminderService:
                 "not_active", occurrence.title_snapshot, reminder.id, occurrence.id
             )
             if occurrence.status != "active" or recipient.status != RecipientStatus.PENDING.value:
-                identity.latest_interactive_occurrence_id = None
+                if state is None:
+                    identity.latest_interactive_occurrence_id = None
+                else:
+                    state.latest_interactive_occurrence_id = None
+                    state.updated_at = instant
                 if incoming is not None:
                     incoming.event_payload = {
                         **incoming.event_payload,
@@ -1417,7 +1538,11 @@ class ReminderService:
                 result_code, occurrence.title_snapshot, reminder.id, occurrence.id
             )
             if operation in {"complete", "stop"}:
-                identity.latest_interactive_occurrence_id = None
+                if state is None:
+                    identity.latest_interactive_occurrence_id = None
+                else:
+                    state.latest_interactive_occurrence_id = None
+                    state.updated_at = instant
             cancel_recipient_id: str | None = identity.person_id
             if operation == "complete":
                 if occurrence.ack_policy_snapshot == AckPolicy.ANY.value:
@@ -1460,7 +1585,8 @@ class ReminderService:
                         reminder.updated_at = instant
 
             notification_ids = select(Notification.id).where(
-                Notification.reminder_occurrence_id == occurrence.id
+                Notification.reminder_occurrence_id == occurrence.id,
+                Notification.profile_id == profile_id,
             )
             delivery_filters: builtins.list[Any] = [
                 Delivery.notification_id.in_(notification_ids),
@@ -1503,20 +1629,30 @@ class ReminderService:
         *,
         action_token: str,
         sender_wecom_userid: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> AcknowledgementResult:
         from app.domain.reminders import hash_action_token
 
+        if self._routing is not None:
+            try:
+                await self._routing.resolve(profile_id, capability="interactive_enabled")
+            except ProfileError as exc:
+                raise ReminderPermissionDenied(str(exc)) from exc
         token_hash = hash_action_token(action_token)
         async with self._sessions() as session:
             action_id = await session.scalar(
-                select(NotificationAction.id).where(NotificationAction.token_hash == token_hash)
+                select(NotificationAction.id).where(
+                    NotificationAction.token_hash == token_hash,
+                    NotificationAction.profile_id == profile_id,
+                )
             )
         if action_id is None:
             raise ReminderPermissionDenied("invalid action token")
         return await self.acknowledge_action_id(
             action_id=action_id,
             sender_wecom_userid=sender_wecom_userid,
+            profile_id=profile_id,
             now=now,
             expected_token=action_token,
         )
@@ -1526,6 +1662,7 @@ class ReminderService:
         *,
         action_id: str,
         sender_wecom_userid: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
         expected_token: str | None = None,
     ) -> AcknowledgementResult:
@@ -1539,6 +1676,8 @@ class ReminderService:
                 and not action_token_matches(expected_token, action.token_hash)
             ):
                 raise ReminderPermissionDenied("invalid action token")
+            if action.profile_id != profile_id:
+                raise ReminderPermissionDenied("action belongs to another profile")
             identity = await session.scalar(
                 select(WeComIdentity).where(
                     WeComIdentity.user_id == sender_wecom_userid,
@@ -1555,6 +1694,8 @@ class ReminderService:
                 occurrence = await session.get(ReminderOccurrence, action.occurrence_id)
                 if occ_recipient is None or occurrence is None:
                     raise ReminderPermissionDenied("occurrence not found")
+                if occurrence.profile_id_snapshot != profile_id:
+                    raise ReminderPermissionDenied("occurrence belongs to another profile")
                 if occ_recipient.person_id != identity.person_id:
                     raise ReminderPermissionDenied("sender is not authorized for this action")
                 if occurrence.status == "acknowledged":
@@ -1623,6 +1764,8 @@ class ReminderService:
                 reminder = await session.get(Reminder, action.reminder_id)
                 if recipient is None or reminder is None:
                     raise ReminderPermissionDenied("sender is not a reminder recipient")
+                if reminder.profile_id != profile_id:
+                    raise ReminderPermissionDenied("reminder belongs to another profile")
                 if recipient.person_id != identity.person_id:
                     raise ReminderPermissionDenied("sender is not authorized for this action")
                 if reminder.status == ReminderStatus.COMPLETED.value:
@@ -1654,21 +1797,34 @@ class ReminderService:
         if occurrence_id is not None:
             cancelled = await self._cancel_pending_deliveries(
                 reminder_id,
+                profile_id=reminder.profile_id,
                 occurrence_id=occurrence_id,
                 recipient_id=None if completed else cancel_recipient_id,
             )
         else:
-            cancelled = await self._cancel_pending_deliveries(reminder_id) if completed else 0
+            cancelled = (
+                await self._cancel_pending_deliveries(reminder_id, profile_id=reminder.profile_id)
+                if completed
+                else 0
+            )
         return AcknowledgementResult(
             "completed" if completed else "acknowledged", reminder_id, completed, cancelled
         )
 
     async def _transition(
-        self, reminder_id: str, operation: str, *, now: datetime | None
+        self,
+        reminder_id: str,
+        operation: str,
+        *,
+        profile_id: str | None,
+        now: datetime | None,
     ) -> Reminder:
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
-            reminder = await session.get(Reminder, reminder_id)
+            query = select(Reminder).where(Reminder.id == reminder_id)
+            if profile_id is not None:
+                query = query.where(Reminder.profile_id == profile_id)
+            reminder = await session.scalar(query)
             if reminder is None:
                 raise ReminderNotFound(reminder_id)
             snapshot = ReminderSnapshot(
@@ -1691,11 +1847,13 @@ class ReminderService:
         self,
         reminder_id: str,
         *,
+        profile_id: str | None = None,
         occurrence_id: str | None = None,
         recipient_id: str | None = None,
     ) -> int:
         return await self._deliveries.cancel_pending(
             reminder_id,
+            profile_id=profile_id,
             occurrence_id=occurrence_id,
             recipient_id=recipient_id,
         )

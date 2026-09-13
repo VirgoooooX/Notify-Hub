@@ -8,6 +8,7 @@ from app.infrastructure.database.media_models import MediaAsset
 from app.infrastructure.database.utc_datetime import restore_utc
 from app.media.errors import MediaError, MediaTooLargeError
 from app.media.validation import CHANNEL_MAX_BYTES, MediaKind, validate_media
+from app.profiles.constants import DEFAULT_PROFILE_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,6 +26,8 @@ class WeComMediaTransport(Protocol):
 
 
 class MediaCacheRepository(Protocol):
+    async def get_provider_cache(self, asset_id: str) -> UploadedTemporaryMedia | None: ...
+
     async def save_provider_cache(
         self, asset_id: str, media_id: str, expires_at: datetime
     ) -> None: ...
@@ -38,11 +41,13 @@ class WeComTemporaryMediaAdapter:
         transport: WeComMediaTransport,
         cache: MediaCacheRepository,
         *,
+        profile_id: str = DEFAULT_PROFILE_ID,
         temporary_ttl_seconds: int = 3 * 24 * 60 * 60,
         expiry_skew_seconds: int = 120,
     ) -> None:
         self._transport = transport
         self._cache = cache
+        self._profile_id = profile_id
         self._ttl = temporary_ttl_seconds
         self._skew = expiry_skew_seconds
 
@@ -51,17 +56,25 @@ class WeComTemporaryMediaAdapter:
     ) -> UploadedTemporaryMedia:
         if len(content) > CHANNEL_MAX_BYTES:
             raise MediaTooLargeError(CHANNEL_MAX_BYTES)
-        provider_expires_at = asset.provider_expires_at
+        cached = None
+        get_cache = getattr(self._cache, "get_provider_cache", None)
+        if get_cache is not None:
+            cached = await get_cache(asset.id)
+        provider_media_id = cached.media_id if cached is not None else None
+        provider_expires_at = cached.expires_at if cached is not None else None
+        if self._profile_id == DEFAULT_PROFILE_ID and cached is None:
+            provider_media_id = asset.provider_media_id
+            provider_expires_at = asset.provider_expires_at
         # Compatibility for callers holding a legacy/in-memory ORM object;
         # persisted values are normalized by UTCDateTime on load.
         if provider_expires_at is not None:
             provider_expires_at = restore_utc(provider_expires_at)
         if (
-            asset.provider_media_id
+            provider_media_id
             and provider_expires_at
             and provider_expires_at > now + timedelta(seconds=self._skew)
         ):
-            return UploadedTemporaryMedia(asset.provider_media_id, provider_expires_at)
+            return UploadedTemporaryMedia(provider_media_id, provider_expires_at)
 
         media_type = "image" if asset.kind == "image" else "voice"
         extension = ".jpg" if asset.mime_type == "image/jpeg" else ".png"

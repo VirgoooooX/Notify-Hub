@@ -11,6 +11,7 @@ from app.config import Settings
 from app.domain.clock import Clock
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import Delivery, MpArticle, MpArticleStatus, Notification
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -70,6 +71,7 @@ class MPArticleLibraryService:
                     title = extracted_title[:64]
             article = MpArticle(
                 id=new_id("mpa"),
+                profile_id=message.profile_id or DEFAULT_PROFILE_ID,
                 status=status,
                 title=title,
                 author=self._settings.mp_author,
@@ -116,9 +118,12 @@ class MPArticleLibraryService:
         status: str | None = None,
         page: int = 1,
         page_size: int = 20,
+        profile_id: str | None = None,
     ) -> tuple[list[MpArticle], int]:
         async with self._factory() as session:
             base = select(MpArticle)
+            if profile_id is not None:
+                base = base.where(MpArticle.profile_id == profile_id)
             if status:
                 base = base.where(MpArticle.status == status)
             total = await session.scalar(select(func.count()).select_from(base.subquery()))
@@ -131,14 +136,22 @@ class MPArticleLibraryService:
             )
             return items, total or 0
 
-    async def get_article(self, article_id: str) -> MpArticle | None:
+    async def get_article(
+        self, article_id: str, *, profile_id: str | None = None
+    ) -> MpArticle | None:
         async with self._factory() as session:
-            return await session.get(MpArticle, article_id)
+            query = select(MpArticle).where(MpArticle.id == article_id)
+            if profile_id is not None:
+                query = query.where(MpArticle.profile_id == profile_id)
+            return await session.scalar(query)
 
-    async def mark_published(self, article_id: str) -> MpArticle:
+    async def mark_published(self, article_id: str, *, profile_id: str | None = None) -> MpArticle:
         now = self._clock.now()
         async with self._factory() as session, session.begin():
-            article = await session.get(MpArticle, article_id)
+            query = select(MpArticle).where(MpArticle.id == article_id)
+            if profile_id is not None:
+                query = query.where(MpArticle.profile_id == profile_id)
+            article = await session.scalar(query)
             if article is None:
                 raise AppError("article_not_found", "Article not found", 404)
             if article.status == MpArticleStatus.PUBLISHED.value:
@@ -158,10 +171,13 @@ class MPArticleLibraryService:
             article.updated_at = now
             return article
 
-    async def mark_ignored(self, article_id: str) -> MpArticle:
+    async def mark_ignored(self, article_id: str, *, profile_id: str | None = None) -> MpArticle:
         now = self._clock.now()
         async with self._factory() as session, session.begin():
-            article = await session.get(MpArticle, article_id)
+            query = select(MpArticle).where(MpArticle.id == article_id)
+            if profile_id is not None:
+                query = query.where(MpArticle.profile_id == profile_id)
+            article = await session.scalar(query)
             if article is None:
                 raise AppError("article_not_found", "Article not found", 404)
             if article.status == MpArticleStatus.IGNORED.value:
@@ -180,10 +196,13 @@ class MPArticleLibraryService:
             article.updated_at = now
             return article
 
-    async def restore(self, article_id: str) -> MpArticle:
+    async def restore(self, article_id: str, *, profile_id: str | None = None) -> MpArticle:
         now = self._clock.now()
         async with self._factory() as session, session.begin():
-            article = await session.get(MpArticle, article_id)
+            query = select(MpArticle).where(MpArticle.id == article_id)
+            if profile_id is not None:
+                query = query.where(MpArticle.profile_id == profile_id)
+            article = await session.scalar(query)
             if article is None:
                 raise AppError("article_not_found", "Article not found", 404)
             if article.status == MpArticleStatus.READY.value:

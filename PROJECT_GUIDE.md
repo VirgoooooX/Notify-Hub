@@ -10,6 +10,7 @@ Notify Hub 是面向个人、家庭和小型自托管环境的企业微信通知
 
 - 可靠事件接收、幂等和数据库投递队列；
 - 企业微信指定成员、受控广播、回调和菜单操作；
+- Application Profile 多应用隔离运行时（共享核心、数据库、Worker，Profile 级 Agent、成员和状态）；
 - Once、Interval、Cron、周期和持续催办提醒；
 - 受控可信插件、Codex X Monitor 和 Fabrizio HWG Monitor；
 - 图片、语音和签名媒体访问；

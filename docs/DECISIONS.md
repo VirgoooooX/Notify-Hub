@@ -671,3 +671,32 @@ ADR-029 在 Notify Hub 内嵌了微信公众号 Playwright 发布器，但随着
 - Browser Publisher 新增 `PUBLISHER_WECHAT_MP_APP_ID`、`PUBLISHER_WECHAT_MP_APP_SECRET`、`PUBLISHER_WECHAT_MP_API_BASE_URL` 和 `PUBLISHER_WECHAT_MP_AUTHOR`；
 - Notify Hub 的 `browser` 模式不读取 `NOTIFY_HUB_MP_APP_ID` / `NOTIFY_HUB_MP_APP_SECRET`，设置页只展示外部发布器节点和配置状态；
 - ADR-032 中“Notify Hub 创建官方草稿并传递 `platform_draft_id`”的过渡实现仅保留为历史兼容行为，新的任务链路不再使用它。
+
+---
+
+## ADR-034：Application Profile 共享运行时与 Profile 隔离
+
+**状态：已接受**
+
+### 决策
+
+Notify Hub 继续使用单数据库、单应用进程和单组 Worker，在共享的 Event → Notification → Delivery、Reminder、Plugin Runtime、Interaction 和渠道适配器之上增加 `ApplicationProfile` 作为业务通知命名空间。
+
+- 每个 Profile 使用稳定且唯一的 `key`，可以绑定一个企业微信 Agent；平台实例仍只管理一个企业微信企业（CorpID/API Base URL 保持平台级）；
+- `Event`、`Notification`、`Delivery`、`Reminder`、`ReminderOccurrence`、入站交互、会话、API Client 和 PluginRecord 持久化 Profile；Delivery 和 Occurrence 创建后冻结 Profile，重试与恢复不得重新路由；
+- Profile 能力使用显式开关控制，但不为不同 Profile 复制服务、Worker、Reminder Engine、Plugin Runtime 或 AI Gateway；
+- API Client、Plugin、系统事件和移动/Conversation 来源由平台绑定 Profile，外部 API 请求和 Plugin 不得自行提交或覆盖 Profile；管理员才可以修改绑定；
+- Profile Registry 按 Profile 懒加载独立的 WeCom Runtime、凭据上下文、Token Cache 和 Callback Crypto。配置缺失、禁用或 Profile 不存在时返回稳定配置错误，禁止隐式回退到默认 Profile；
+- 旧的 `NOTIFY_HUB_WECOM_*` ENV 只表示默认 `notify-hub` Profile。升级迁移自动创建该 Profile，并将旧数据、成员和交互状态回填到它；
+- 入站去重、Conversation Session、Profile User State 和广播成员解析均按 `(profile_id, ...)` 隔离；回复、菜单、卡片更新和 Retry 必须使用原始 Profile；
+- `profile_id` 仅用于命名空间和 Runtime 路由，消息渲染仍由共享 `ChannelMessage`/Adapter 完成。
+
+### 原因
+
+Family Health 等业务只需要持有绑定了 Profile 的 Notify Hub API Key，不应复制企业微信凭据、发送、重试、Reminder、交互或审计代码。Profile 冻结和数据库级唯一约束可以防止管理员改配置、进程重启或重试时发生跨应用发送与状态串扰。
+
+### 迁移与后果
+
+- 新增 `application_profiles`、`wecom_profile_configs`、`profile_members`、`profile_user_states` 和 Profile-aware media provider reference 表；旧核心表新增 Profile 字段并回填 `profile_notify_hub`；
+- 默认 Profile 的 WeCom Agent/Secret/Callback 优先读取旧 ENV；新增 Profile 的 Agent 元数据存数据库，Secret 继续使用 SecretStore；管理 API 只返回 configured 状态；
+- 首版不做 Multi-Corp、Multi-Tenant、多数据库、每 Profile 单独 Worker/容器或 Family Health 领域目录。

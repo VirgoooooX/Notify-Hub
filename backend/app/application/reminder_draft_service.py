@@ -20,6 +20,7 @@ from app.domain.reminder_drafts import (
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.reminder_draft_models import ReminderDraft
 from app.infrastructure.database.reminder_models import Reminder
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -38,6 +39,7 @@ class ReminderDraftCreate:
     created_by: str
     status: ReminderDraftStatus = ReminderDraftStatus.EDITING
     expires_at: datetime | None = None
+    profile_id: str = DEFAULT_PROFILE_ID
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +98,7 @@ class ReminderDraftService:
             raise ValueError("a draft with validation errors cannot await confirmation")
         draft = ReminderDraft(
             id=new_id("rdr"),
+            profile_id=command.profile_id,
             source_type=command.source_type.value,
             source_text=command.source_text,
             parsed_data=dict(command.parsed_data),
@@ -118,11 +121,12 @@ class ReminderDraftService:
         command: ReminderDraftUpdate,
         *,
         created_by: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> ReminderDraft:
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
-            draft = await self._get_owned(session, draft_id, created_by)
+            draft = await self._get_owned(session, draft_id, created_by, profile_id=profile_id)
             self._expire_if_due(draft, instant)
             if draft.status == ReminderDraftStatus.EXPIRED.value:
                 expired = True
@@ -162,11 +166,12 @@ class ReminderDraftService:
         draft_id: str,
         *,
         created_by: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> ReminderDraft:
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
-            draft = await self._get_owned(session, draft_id, created_by)
+            draft = await self._get_owned(session, draft_id, created_by, profile_id=profile_id)
             self._expire_if_due(draft, instant)
             expired = draft.status == ReminderDraftStatus.EXPIRED.value
             if not expired and draft.status != ReminderDraftStatus.AWAITING_CONFIRMATION.value:
@@ -183,12 +188,14 @@ class ReminderDraftService:
         command: ReminderCreate,
         *,
         created_by: str,
+        profile_id: str | None = None,
         now: datetime | None = None,
     ) -> Reminder:
         instant = _utc(now or self._clock.now())
         draft = await self.get_for_confirmation(
             draft_id,
             created_by=created_by,
+            profile_id=command.profile_id if profile_id is None else profile_id,
             now=instant,
         )
         if command.creator_person_id != draft.created_by:
@@ -196,7 +203,12 @@ class ReminderDraftService:
 
         reminder = await self._reminders.create(command, now=instant)
         async with self._sessions() as session, session.begin():
-            current = await self._get_owned(session, draft_id, created_by)
+            current = await self._get_owned(
+                session,
+                draft_id,
+                created_by,
+                profile_id=command.profile_id if profile_id is None else profile_id,
+            )
             if current.status != ReminderDraftStatus.AWAITING_CONFIRMATION.value:
                 raise InvalidReminderDraftTransition(
                     f"reminder draft {draft_id} is no longer awaiting confirmation"
@@ -215,11 +227,12 @@ class ReminderDraftService:
         draft_id: str,
         *,
         created_by: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> ReminderDraft:
         instant = _utc(now or self._clock.now())
         async with self._sessions() as session, session.begin():
-            draft = await self._get_owned(session, draft_id, created_by)
+            draft = await self._get_owned(session, draft_id, created_by, profile_id=profile_id)
             self._expire_if_due(draft, instant)
             expired = draft.status == ReminderDraftStatus.EXPIRED.value
             if not expired:
@@ -267,11 +280,15 @@ class ReminderDraftService:
         session: AsyncSession,
         draft_id: str,
         created_by: str,
+        *,
+        profile_id: str = DEFAULT_PROFILE_ID,
     ) -> ReminderDraft:
         draft = cast(ReminderDraft | None, await session.get(ReminderDraft, draft_id))
         if draft is None:
             raise ReminderDraftNotFound(draft_id)
         if draft.created_by != created_by:
+            raise ReminderDraftPermissionDenied(draft_id)
+        if draft.profile_id != profile_id:
             raise ReminderDraftPermissionDenied(draft_id)
         return draft
 

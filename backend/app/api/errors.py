@@ -1,5 +1,6 @@
 from typing import Any
 
+from app.profiles.errors import ProfileError
 from fastapi import FastAPI, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -31,6 +32,14 @@ def install_error_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=error_body(request, exc.code, exc.message, exc.details),
+        )
+
+    @app.exception_handler(ProfileError)
+    async def profile_error_handler(request: Request, exc: ProfileError) -> JSONResponse:
+        status_code = 404 if exc.code == "PROFILE_NOT_FOUND" else 409
+        return JSONResponse(
+            status_code=status_code,
+            content=error_body(request, exc.code.lower(), exc.message),
         )
 
     @app.exception_handler(RequestValidationError)

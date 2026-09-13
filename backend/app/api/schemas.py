@@ -41,6 +41,7 @@ class TokenPair(BaseModel):
 class ApiClientCreate(BaseModel):
     id: str | None = Field(default=None, pattern=r"^client_[A-Za-z0-9_-]+$")
     name: str = Field(min_length=1, max_length=200)
+    profile_id: str | None = Field(default=None, max_length=64)
     allowed_event_types: list[str] = Field(default_factory=list)
     allowed_recipient_ids: list[str] = Field(default_factory=list)
     allow_broadcast: bool = False
@@ -57,6 +58,7 @@ class ApiClientCreate(BaseModel):
 
 class ApiClientUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
+    profile_id: str | None = Field(default=None, max_length=64)
     allowed_event_types: list[str] | None = None
     allowed_recipient_ids: list[str] | None = None
     allow_broadcast: bool | None = None
@@ -92,7 +94,7 @@ class IdentityCreate(BaseModel):
 
 
 class EventCreate(BaseModel):
-    model_config = ConfigDict(str_strip_whitespace=True)
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     event_type: str = Field(min_length=1, max_length=100)
     event_key: str = Field(min_length=1, max_length=200)
     title: str = Field(default="", max_length=200)
@@ -127,6 +129,7 @@ class EventCreate(BaseModel):
 
 
 class NotificationCreate(BaseModel):
+    profile_id: str | None = Field(default=None, max_length=64)
     title: str = Field(default="", max_length=200)
     content: str = Field(default="", max_length=20000)
     message_type: Literal["text", "article", "image", "voice"] = "text"
@@ -139,5 +142,6 @@ class NotificationCreate(BaseModel):
 
 
 class WeComTestRequest(BaseModel):
+    profile_id: str | None = Field(default=None, max_length=64)
     recipient_id: str
     message_type: Literal["text", "article"] = "text"

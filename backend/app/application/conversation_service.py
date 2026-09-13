@@ -24,11 +24,15 @@ from app.domain.reminders import AckPolicy, ConversationState, ReminderError, Sc
 from app.infrastructure.database.ai_models import AIProfile
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import Person, WeComIdentity
+from app.infrastructure.database.profile_models import ProfileMember
 from app.infrastructure.database.reminder_models import (
     ConversationSession,
     Reminder,
     ReminderRecipient,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.errors import ProfileError
+from app.profiles.routing import ProfileRoutingService
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -181,6 +185,7 @@ class ConversationService:
         clock: Clock | None = None,
         session_ttl: timedelta = timedelta(minutes=10),
         default_timezone: str = "Asia/Shanghai",
+        routing: ProfileRoutingService | None = None,
     ) -> None:
         self._sessions = session_factory
         self._reminders = reminders
@@ -190,6 +195,7 @@ class ConversationService:
         self._clock = clock or SystemClock()
         self._ttl = session_ttl
         self._timezone = default_timezone
+        self._routing = routing
 
     def set_ai_profile(self, profile_id: str | None) -> None:
         self._ai_profile_id = profile_id
@@ -203,18 +209,24 @@ class ConversationService:
         *,
         sender_wecom_userid: str,
         text: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
         now: datetime | None = None,
     ) -> ConversationReply:
         # Platform settings are persisted state, not a startup snapshot.  Read
         # the timezone for each conversation request so a settings update takes
         # effect immediately for /今天 and natural-language reminder parsing.
+        if self._routing is not None:
+            try:
+                await self._routing.resolve(profile_id, capability="conversation_enabled")
+            except ProfileError:
+                return ConversationReply("forbidden", "当前应用未启用会话提醒能力。")
         self._timezone = await read_platform_timezone(self._sessions, self._timezone)
         instant = now or self._clock.now()
-        identity = await self._identity(sender_wecom_userid)
+        identity = await self._identity(sender_wecom_userid, profile_id)
         if identity is None:
             return ConversationReply("forbidden", "你的企业微信身份尚未关联，无法管理提醒。")
         command = text.strip()
-        session = await self._session(identity.id, instant)
+        session = await self._session(identity.id, profile_id, instant)
 
         if command in {"/帮助", "帮助"}:
             return ConversationReply(
@@ -222,26 +234,29 @@ class ConversationService:
                 "命令：/今天、/提醒 <时间和内容>、/取消 <ID>、/完成 <ID>、/稍后 <ID> <分钟>。",
             )
         if command.startswith("/今天"):
-            return await self._today(identity.person_id, instant)
+            return await self._today(identity.person_id, profile_id, instant)
         if command.startswith("/完成"):
-            return await self._change_owned(command, identity.person_id, "complete")
+            return await self._change_owned(command, identity.person_id, profile_id, "complete")
         if command.startswith("/取消") and len(command.split()) > 1:
-            return await self._change_owned(command, identity.person_id, "cancel")
+            return await self._change_owned(command, identity.person_id, profile_id, "cancel")
         if command.startswith("/稍后"):
-            return await self._snooze_owned(command, identity.person_id, instant)
+            return await self._snooze_owned(command, identity.person_id, profile_id, instant)
         if command in {"取消", "/取消"}:
             if session:
                 if session.draft_id and self._drafts:
                     with suppress(ReminderDraftError):
                         await self._drafts.cancel(
-                            session.draft_id, created_by=identity.person_id, now=instant
+                            session.draft_id,
+                            created_by=identity.person_id,
+                            profile_id=profile_id,
+                            now=instant,
                         )
                 await self._set_session(session, ConversationState.CANCELLED, {}, instant)
             return ConversationReply("cancelled", "已取消当前提醒草稿。")
 
         if session and session.state == ConversationState.AWAITING_CONFIRMATION.value:
             if command in {"确认", "是", "好的", "创建"}:
-                return await self._confirm(session, identity.person_id, instant)
+                return await self._confirm(session, identity.person_id, profile_id, instant)
             if command not in {"否", "不", "取消"}:
                 return ConversationReply(
                     "confirmation_required", "请回复“确认”创建，或回复“取消”。"
@@ -268,9 +283,11 @@ class ConversationService:
                 ReminderDraftStatus.EDITING,
                 ("ambiguous_time",),
                 instant,
+                profile_id,
             )
             await self._upsert_session(
                 identity.id,
+                profile_id,
                 ConversationState.AWAITING_TIME,
                 draft.as_json(),
                 instant,
@@ -287,9 +304,11 @@ class ConversationService:
             ReminderDraftStatus.AWAITING_CONFIRMATION,
             (),
             instant,
+            profile_id,
         )
         await self._upsert_session(
             identity.id,
+            profile_id,
             ConversationState.AWAITING_CONFIRMATION,
             draft.as_json(),
             instant,
@@ -302,7 +321,7 @@ class ConversationService:
         )
 
     async def _confirm(
-        self, session: ConversationSession, person_id: str, now: datetime
+        self, session: ConversationSession, person_id: str, profile_id: str, now: datetime
     ) -> ConversationReply:
         draft = session.draft
         scheduled_raw = draft.get("scheduled_at")
@@ -320,10 +339,15 @@ class ConversationService:
             recurrence_rule=draft.get("recurrence_rule"),
             require_ack=False,
             ack_policy=AckPolicy.ANY,
+            profile_id=profile_id,
         )
         if session.draft_id and self._drafts:
             reminder = await self._drafts.confirm(
-                session.draft_id, command, created_by=person_id, now=now
+                session.draft_id,
+                command,
+                created_by=person_id,
+                profile_id=profile_id,
+                now=now,
             )
         else:
             reminder = await self._reminders.create(command, now=now)
@@ -397,9 +421,11 @@ class ConversationService:
             logger.warning("reminder_ai_parse_failed", exc_info=True)
         return None
 
-    async def _identity(self, user_id: str) -> WeComIdentity | None:
+    async def _identity(
+        self, user_id: str, profile_id: str = DEFAULT_PROFILE_ID
+    ) -> WeComIdentity | None:
         async with self._sessions() as session:
-            return cast(
+            identity = cast(
                 WeComIdentity | None,
                 await session.scalar(
                     select(WeComIdentity)
@@ -411,6 +437,21 @@ class ConversationService:
                     )
                 ),
             )
+            if identity is None:
+                return None
+            member = await session.scalar(
+                select(ProfileMember).where(
+                    ProfileMember.profile_id == profile_id,
+                    ProfileMember.person_id == identity.person_id,
+                    ProfileMember.enabled.is_(True),
+                )
+            )
+            if member is not None:
+                return identity
+            has_members = await session.scalar(
+                select(ProfileMember.id).where(ProfileMember.profile_id == profile_id).limit(1)
+            )
+            return identity if profile_id == DEFAULT_PROFILE_ID and has_members is None else None
 
     async def _persist_draft(
         self,
@@ -421,6 +462,7 @@ class ConversationService:
         status: ReminderDraftStatus,
         validation_errors: tuple[str, ...],
         now: datetime,
+        profile_id: str,
     ) -> str | None:
         if self._drafts is None:
             return None
@@ -434,16 +476,20 @@ class ConversationService:
                 created_by=person_id,
                 status=status,
                 expires_at=now + self._ttl,
+                profile_id=profile_id,
             ),
             now=now,
         )
         return persisted.id
 
-    async def _session(self, identity_id: str, now: datetime) -> ConversationSession | None:
+    async def _session(
+        self, identity_id: str, profile_id: str, now: datetime
+    ) -> ConversationSession | None:
         async with self._sessions() as session, session.begin():
             item = await session.scalar(
                 select(ConversationSession).where(
-                    ConversationSession.wecom_identity_id == identity_id
+                    ConversationSession.wecom_identity_id == identity_id,
+                    ConversationSession.profile_id == profile_id,
                 )
             )
             if item and _as_utc(item.expires_at) <= _as_utc(now):
@@ -456,6 +502,7 @@ class ConversationService:
     async def _upsert_session(
         self,
         identity_id: str,
+        profile_id: str,
         state: ConversationState,
         draft: dict[str, Any],
         now: datetime,
@@ -465,12 +512,14 @@ class ConversationService:
         async with self._sessions() as session, session.begin():
             item = await session.scalar(
                 select(ConversationSession).where(
-                    ConversationSession.wecom_identity_id == identity_id
+                    ConversationSession.wecom_identity_id == identity_id,
+                    ConversationSession.profile_id == profile_id,
                 )
             )
             if item is None:
                 item = ConversationSession(
                     id=new_id("cvs"),
+                    profile_id=profile_id,
                     wecom_identity_id=identity_id,
                     state=state.value,
                     draft_id=draft_id,
@@ -496,9 +545,11 @@ class ConversationService:
         draft: dict[str, Any],
         now: datetime,
     ) -> None:
-        await self._upsert_session(item.wecom_identity_id, state, draft, now)
+        await self._upsert_session(item.wecom_identity_id, item.profile_id, state, draft, now)
 
-    async def _owned_reminder(self, reminder_id: str, person_id: str) -> Reminder | None:
+    async def _owned_reminder(
+        self, reminder_id: str, person_id: str, profile_id: str
+    ) -> Reminder | None:
         async with self._sessions() as session:
             return cast(
                 Reminder | None,
@@ -507,6 +558,7 @@ class ConversationService:
                     .outerjoin(ReminderRecipient, ReminderRecipient.reminder_id == Reminder.id)
                     .where(
                         Reminder.id == reminder_id,
+                        Reminder.profile_id == profile_id,
                         (
                             (Reminder.creator_person_id == person_id)
                             | (ReminderRecipient.person_id == person_id)
@@ -516,7 +568,7 @@ class ConversationService:
             )
 
     async def _change_owned(
-        self, command: str, person_id: str, operation: str
+        self, command: str, person_id: str, profile_id: str, operation: str
     ) -> ConversationReply:
         parts = command.split(maxsplit=1)
         if len(parts) != 2:
@@ -524,28 +576,33 @@ class ConversationService:
                 "invalid_command",
                 f"用法：/{'完成' if operation == 'complete' else '取消'} <提醒ID>",
             )
-        reminder = await self._owned_reminder(parts[1], person_id)
+        reminder = await self._owned_reminder(parts[1], person_id, profile_id)
         if reminder is None:
             return ConversationReply("not_found", "未找到你有权管理的提醒。")
-        await getattr(self._reminders, operation)(reminder.id)
+        await getattr(self._reminders, operation)(reminder.id, profile_id=profile_id)
         return ConversationReply(
             operation, "提醒已完成。" if operation == "complete" else "提醒已取消。", reminder.id
         )
 
-    async def _snooze_owned(self, command: str, person_id: str, now: datetime) -> ConversationReply:
+    async def _snooze_owned(
+        self, command: str, person_id: str, profile_id: str, now: datetime
+    ) -> ConversationReply:
         parts = command.split()
         if len(parts) not in {2, 3}:
             return ConversationReply("invalid_command", "用法：/稍后 <提醒ID> [分钟]")
         minutes = int(parts[2]) if len(parts) == 3 and parts[2].isdigit() else 10
-        reminder = await self._owned_reminder(parts[1], person_id)
+        reminder = await self._owned_reminder(parts[1], person_id, profile_id)
         if reminder is None:
             return ConversationReply("not_found", "未找到你有权管理的提醒。")
         await self._reminders.snooze(
-            reminder.id, until=now + timedelta(minutes=minutes), actor_person_id=person_id
+            reminder.id,
+            until=now + timedelta(minutes=minutes),
+            profile_id=profile_id,
+            actor_person_id=person_id,
         )
         return ConversationReply("snoozed", f"已延后 {minutes} 分钟。", reminder.id)
 
-    async def _today(self, person_id: str, now: datetime) -> ConversationReply:
+    async def _today(self, person_id: str, profile_id: str, now: datetime) -> ConversationReply:
         zone = ZoneInfo(self._timezone)
         local = now.astimezone(zone)
         start = datetime.combine(local.date(), time.min, zone).astimezone(UTC)
@@ -558,6 +615,7 @@ class ConversationService:
                     .where(
                         Reminder.next_run_at >= start,
                         Reminder.next_run_at < end,
+                        Reminder.profile_id == profile_id,
                         (
                             (Reminder.creator_person_id == person_id)
                             | (ReminderRecipient.person_id == person_id)

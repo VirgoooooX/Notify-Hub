@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { api } from '@/lib/api'
+import { api, query } from '@/lib/api'
 import type { Dashboard } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import LoadingState from '@/components/feedback/LoadingState.vue'
 import StatCard from '@/components/data/StatCard.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import TimelineList from '@/components/data/TimelineList.vue'
 import { useUiStore } from '@/stores/ui'
 import { formatInstant } from '@/lib/time'
@@ -15,7 +17,9 @@ import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profiles, loadProfiles } = useApplicationProfiles()
 const loading = ref(true)
+const profileFilter = ref('')
 const data = ref<Dashboard>({
   today_events: 0,
   succeeded_deliveries: 0,
@@ -25,16 +29,30 @@ const data = ref<Dashboard>({
   recent_errors: []
 })
 
-onMounted(async () => {
-  void settings.load()
+async function load() {
+  loading.value = true
   try {
-    data.value = await api.get<Dashboard>('/admin/dashboard')
+    data.value = await api.get<Dashboard>('/admin/dashboard' + query({ profile_id: profileFilter.value }))
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '概览加载失败', 'danger')
   } finally {
     loading.value = false
   }
+}
+
+onMounted(async () => {
+  void settings.load()
+  try {
+    await loadProfiles()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger')
+  }
+  await load()
 })
+
+function reloadForProfile() {
+  void load()
+}
 
 const stats = [
   ['today_events', '今日事件', '较昨日实时累计'],
@@ -54,6 +72,14 @@ const time = (v: string) => formatInstant(v, settings.timezone, {
 
 <template>
   <PageHeader title="运行概览" description="从事件接收到渠道投递，查看今天的系统脉搏。">
+    <AppSelect v-model="profileFilter" class="profile-select" @change="reloadForProfile">
+      <option value="">
+        全部 Profiles
+      </option>
+      <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+        {{ profile.name }} · {{ profile.key }}
+      </option>
+    </AppSelect>
     <RouterLink v-slot="{ navigate }" to="/notifications" custom>
       <AppButton variant="primary" @click="navigate">
         检查投递链路
@@ -155,6 +181,10 @@ const time = (v: string) => formatInstant(v, settings.timezone, {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.profile-select {
+  min-width: 190px;
 }
 
 .panel-title {

@@ -99,6 +99,7 @@ class RepeatInput(BaseModel):
 
 class ReminderInput(BaseModel):
     creator_person_id: str | None = None
+    profile_id: str | None = Field(default=None, max_length=64)
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(default="", max_length=20_000)
     content_type: Literal["text", "image", "article"] = "text"
@@ -168,6 +169,7 @@ def _view(reminder: Reminder) -> dict[str, object]:
     item = reminder
     return {
         "id": item.id,
+        "profile_id": item.profile_id,
         "creator_person_id": item.creator_person_id,
         "title": item.title,
         "content": item.content,
@@ -253,18 +255,10 @@ async def create_reminder(
     except ValueError as exc:
         raise AppError("invalid_timezone", str(exc), 422) from exc
     repeat = payload.repeat
+    profile_id = await request.app.state.profile_registry.resolve_id(payload.profile_id)
     recipient_ids = list(payload.recipients)
     if payload.broadcast:
-        async with request.app.state.session_factory() as session:
-            recipient_ids = list(
-                await session.scalars(
-                    select(Person.id)
-                    .join(WeComIdentity, WeComIdentity.person_id == Person.id)
-                    .where(Person.active.is_(True), WeComIdentity.active.is_(True))
-                    .distinct()
-                    .order_by(Person.id)
-                )
-            )
+        recipient_ids = await request.app.state.profile_routing.audience(profile_id)
         if not recipient_ids:
             raise AppError(
                 "broadcast_audience_empty",
@@ -298,6 +292,7 @@ async def create_reminder(
                 repeat_interval_seconds=repeat.interval_seconds if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat.stop_at if repeat else None,
+                profile_id=profile_id,
             )
         )
     except ReminderError as exc:
@@ -421,15 +416,20 @@ async def list_reminders(
     page: int = 1,
     page_size: int = 50,
     status_filter: str | None = Query(default=None, alias="status"),
+    profile_id: str | None = Query(default=None),
     _admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     page, page_size = max(page, 1), min(max(page_size, 1), 200)
+    resolved_profile_id = await request.app.state.profile_registry.resolve_id(profile_id)
     items = await request.app.state.reminder_service.list(
         offset=(page - 1) * page_size,
         limit=page_size,
         status=status_filter,
+        profile_id=resolved_profile_id,
     )
-    total = await request.app.state.reminder_service.count(status=status_filter)
+    total = await request.app.state.reminder_service.count(
+        status=status_filter, profile_id=resolved_profile_id
+    )
     return {
         "data": {
             "items": [_view(item) for item in items],
@@ -451,10 +451,18 @@ async def reminder_metrics(
 
 @router.get("/reminders/{reminder_id}")
 async def get_reminder(
-    reminder_id: str, request: Request, _admin: Admin = Depends(require_admin)
+    reminder_id: str,
+    request: Request,
+    profile_id: str | None = Query(default=None),
+    _admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     try:
-        item = await request.app.state.reminder_service.get(reminder_id)
+        resolved_profile_id = (
+            await request.app.state.profile_registry.resolve_id(profile_id) if profile_id else None
+        )
+        item = await request.app.state.reminder_service.get(
+            reminder_id, profile_id=resolved_profile_id
+        )
     except ReminderError as exc:
         raise _service_error(exc) from exc
     async with request.app.state.session_factory() as session:
@@ -581,14 +589,15 @@ async def update_reminder(
     request: Request,
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
+    try:
+        existing = await request.app.state.reminder_service.get(reminder_id)
+    except ReminderError as exc:
+        raise _service_error(exc) from exc
     schedule, repeat = payload.schedule, payload.repeat
     repeat_stop_at = repeat.stop_at if repeat else None
     timezone = schedule.timezone if schedule else None
     if timezone is None and (schedule is not None or repeat_stop_at is not None):
-        async with request.app.state.session_factory() as session:
-            timezone = await session.scalar(
-                select(Reminder.timezone).where(Reminder.id == reminder_id)
-            )
+        timezone = existing.timezone
     if not isinstance(timezone, str) and (schedule is not None or repeat_stop_at is not None):
         raise AppError("not_found", "Reminder not found", 404)
     if schedule is not None:
@@ -629,6 +638,7 @@ async def update_reminder(
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat_stop_at,
             ),
+            profile_id=existing.profile_id,
         )
     except ReminderError as exc:
         raise _service_error(exc) from exc
@@ -646,7 +656,10 @@ async def _transition(
     reminder_id: str, operation: str, request: Request, admin: Admin
 ) -> dict[str, object]:
     try:
-        item = await getattr(request.app.state.reminder_service, operation)(reminder_id)
+        existing = await request.app.state.reminder_service.get(reminder_id)
+        item = await getattr(request.app.state.reminder_service, operation)(
+            reminder_id, profile_id=existing.profile_id
+        )
     except ReminderError as exc:
         raise _service_error(exc) from exc
     await _audit_reminder(
@@ -691,7 +704,8 @@ async def delete_reminder(
     reminder_id: str, request: Request, admin: Admin = Depends(require_admin)
 ) -> Response:
     try:
-        await request.app.state.reminder_service.delete(reminder_id)
+        existing = await request.app.state.reminder_service.get(reminder_id)
+        await request.app.state.reminder_service.delete(reminder_id, profile_id=existing.profile_id)
     except ReminderError as exc:
         raise _service_error(exc) from exc
     await _audit_reminder(
@@ -711,7 +725,10 @@ async def snooze_reminder(
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     try:
-        item = await request.app.state.reminder_service.snooze(reminder_id, until=payload.until)
+        existing = await request.app.state.reminder_service.get(reminder_id)
+        item = await request.app.state.reminder_service.snooze(
+            reminder_id, until=payload.until, profile_id=existing.profile_id
+        )
     except ReminderError as exc:
         raise _service_error(exc) from exc
     await _audit_reminder(

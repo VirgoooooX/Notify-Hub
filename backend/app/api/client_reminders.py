@@ -95,6 +95,7 @@ class ClientReminderCreate(BaseModel):
 def _view(reminder: Reminder) -> dict[str, object]:
     return {
         "id": reminder.id,
+        "profile_id": reminder.profile_id,
         "title": reminder.title,
         "status": reminder.status,
         "schedule_type": reminder.schedule_type,
@@ -149,6 +150,7 @@ async def create_client_reminder(
                 repeat_interval_seconds=repeat.interval_seconds if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat.stop_at if repeat else None,
+                profile_id=client.profile_id,
             ),
             actor=ReminderActor("api_client", client.id),
             permissions=ReminderPermissions(

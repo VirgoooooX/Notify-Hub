@@ -210,6 +210,26 @@ curl --fail --silent http://127.0.0.1:8788/health/ready
 
 迁移后再次记录 `alembic current`，检查日志、核心表计数、外键、Worker 心跳，并执行一条测试通知。
 
+### 5.2.1 Application Profile 迁移（0018）
+
+`0018_application_profiles` 将同一套 Notify Hub 核心链路划分为多个 Application Profile。向前迁移会：
+
+- 创建 `application_profiles`、`wecom_profile_configs`、`profile_members`、`profile_user_states` 和 `media_provider_refs`；
+- 创建并设为默认的 `profile_notify_hub`（Key 为 `notify-hub`）；
+- 给 API Client、Event、Notification、Delivery、Reminder、Occurrence、回调、会话、插件和文章记录补齐 `profile_id`，旧记录归入默认 Profile；
+- 将既有 Person 和交互状态回填到默认 Profile。迁移不会把旧环境变量中的 Secret 写入数据库 SecretStore。
+
+发布前必须在数据库副本完成从 `0017_add_api_client_mp_browser_permission` 到 `0018_application_profiles` 的升级，并核对：
+
+```bash
+docker compose -f deploy/docker-compose.yml run --rm notify-hub migrate
+docker compose -f deploy/docker-compose.yml run --rm --entrypoint sh notify-hub -c 'cd /app && alembic current'
+```
+
+默认 Profile 继续兼容 `NOTIFY_HUB_WECOM_*`；新 Profile 的 Agent 元数据在 Profile 配置中填写，Secret、回调 Token 和 AES Key 通过后台 Profile 管理页写入加密 SecretStore。重启或恢复时必须使用原 `NOTIFY_HUB_SECRET_ENCRYPTION_KEY`，否则已保存的 Profile Secret 无法解密。启用新 Profile 前先配置其回调地址 `/channels/wecom/{profile_key}/callback`、成员 membership，并用后台“入队测试”确认 Delivery 使用了正确 Profile。
+
+0018 的 downgrade 会删除 Profile 表及旧核心表中的 Profile 列，并把复合唯一约束恢复为旧约束；这会丢失新增 Profile 配置、成员、媒体引用和 Profile 维度信息。因此生产回滚优先使用迁移前完整备份，只有在已停止应用、已保存故障现场、且发布后没有必须保留的 Profile 数据时，才允许执行 downgrade。
+
 ### 5.3 回滚
 
 生产默认回滚方案是“旧固定镜像 + 迁移前完整备份”，而不是直接执行破坏性 downgrade。

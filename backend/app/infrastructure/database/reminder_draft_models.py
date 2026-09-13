@@ -5,6 +5,7 @@ from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin
 from app.infrastructure.database.utc_datetime import UTCDateTime
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import JSON, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -16,6 +17,9 @@ class ReminderDraft(StringIdMixin, Base):
         Index("ix_reminder_drafts_expiry", "status", "expires_at"),
     )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     source_type: Mapped[str] = mapped_column(String(30), nullable=False)
     source_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     parsed_data: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)

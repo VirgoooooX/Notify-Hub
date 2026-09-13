@@ -21,18 +21,47 @@ class TokenCache:
     expires_at: object | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class WeComCredentials:
+    """Credentials for one WeCom Agent runtime.
+
+    CorpID and API base URL are platform-level values, while the Agent ID and
+    Secret identify the application profile's runtime.
+    """
+
+    corp_id: str
+    agent_id: int | None
+    secret: str
+    api_base_url: str
+    request_timeout_seconds: float = 10.0
+    token_refresh_skew_seconds: int = 120
+
+
 class WeComClient:
     def __init__(
         self,
-        settings: Settings,
+        credentials: WeComCredentials | Settings,
         clock: Clock,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._settings = settings
+        if isinstance(credentials, Settings):
+            credentials = WeComCredentials(
+                corp_id=credentials.wecom_corp_id or "",
+                agent_id=credentials.wecom_agent_id,
+                secret=(
+                    credentials.wecom_secret.get_secret_value()
+                    if credentials.wecom_secret is not None
+                    else ""
+                ),
+                api_base_url=credentials.wecom_api_base_url,
+                request_timeout_seconds=credentials.wecom_request_timeout_seconds,
+                token_refresh_skew_seconds=credentials.wecom_token_refresh_skew_seconds,
+            )
+        self._credentials = credentials
         self._clock = clock
-        timeout = httpx.Timeout(settings.wecom_request_timeout_seconds)
+        timeout = httpx.Timeout(credentials.request_timeout_seconds)
         self._http = http_client or httpx.AsyncClient(
-            base_url=settings.wecom_api_base_url, timeout=timeout
+            base_url=credentials.api_base_url, timeout=timeout
         )
         self._owns_client = http_client is None
         self._cache = TokenCache()
@@ -46,7 +75,7 @@ class WeComClient:
         if self._cache.value is None or self._cache.expires_at is None:
             return False
         return self._cache.expires_at > self._clock.now() + timedelta(  # type: ignore[operator]
-            seconds=self._settings.wecom_token_refresh_skew_seconds
+            seconds=self._credentials.token_refresh_skew_seconds
         )
 
     async def get_access_token(self, force: bool = False) -> str:
@@ -55,13 +84,13 @@ class WeComClient:
         async with self._lock:
             if not force and self._cache_valid():
                 return str(self._cache.value)
-            if not self._settings.wecom_corp_id or not self._settings.wecom_secret:
+            if not self._credentials.corp_id or not self._credentials.secret:
                 raise RuntimeError("WeCom credentials are not configured")
             response = await self._http.get(
                 "cgi-bin/gettoken",
                 params={
-                    "corpid": self._settings.wecom_corp_id,
-                    "corpsecret": self._settings.wecom_secret.get_secret_value(),
+                    "corpid": self._credentials.corp_id,
+                    "corpsecret": self._credentials.secret,
                 },
             )
             response.raise_for_status()
@@ -124,7 +153,7 @@ class WeComClient:
     async def create_menu(self, payload: dict[str, Any]) -> ChannelResult:
         """Publish the application menu, refreshing an expired token once."""
         try:
-            if self._settings.wecom_agent_id is None:
+            if self._credentials.agent_id is None:
                 raise RuntimeError("WeCom agent ID is not configured")
             token = await self.get_access_token()
             result = await self._post_menu(token, payload)
@@ -225,7 +254,7 @@ class WeComClient:
     async def _post_menu(self, token: str, payload: dict[str, Any]) -> ChannelResult:
         response = await self._http.post(
             "cgi-bin/menu/create",
-            params={"access_token": token, "agentid": self._settings.wecom_agent_id},
+            params={"access_token": token, "agentid": self._credentials.agent_id},
             json=payload,
         )
         response.raise_for_status()

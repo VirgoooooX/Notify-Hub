@@ -25,7 +25,9 @@ class InteractionWorker:
         reminders: ReminderService,
         conversations: ConversationService,
         emit_reply: Callable[[str, str, str], Awaitable[None]] | None = None,
+        emit_reply_profile: Callable[[str, str, str, str], Awaitable[None]] | None = None,
         update_card: Callable[[str, str], Awaitable[ChannelResult]] | None = None,
+        update_card_profile: Callable[[str, str, str], Awaitable[ChannelResult]] | None = None,
         menu_service: WeComMenuService | None = None,
         clock: Clock | None = None,
         worker_id: str = "interaction-main",
@@ -35,7 +37,9 @@ class InteractionWorker:
         self._conversations = conversations
         self._worker_id = worker_id
         self._emit_reply = emit_reply
+        self._emit_reply_profile = emit_reply_profile
         self._update_card = update_card
+        self._update_card_profile = update_card_profile
         self._menu_service = menu_service
         self._clock = clock or SystemClock()
 
@@ -114,17 +118,28 @@ class InteractionWorker:
             action_id = event.notification_action_id
             sender = event.sender_external_id
             response_code = event.response_code
+            profile_id = event.profile_id
         try:
             if action_id is None:
                 raise ReminderPermissionDenied("unknown or expired action token")
             result = await self._reminders.acknowledge_action_id(
-                action_id=action_id, sender_wecom_userid=sender, now=now
+                action_id=action_id,
+                sender_wecom_userid=sender,
+                now=now,
+                profile_id=profile_id,
             )
             status = "processed"
             outcome = result.result
-            if response_code and self._update_card is not None:
+            if response_code and (
+                self._update_card_profile is not None or self._update_card is not None
+            ):
                 try:
-                    card_result = await self._update_card(response_code, sender)
+                    if self._update_card_profile is not None:
+                        card_result = await self._update_card_profile(
+                            response_code, sender, profile_id
+                        )
+                    else:
+                        card_result = await self._update_card(response_code, sender)
                     if not card_result.success:
                         logger.warning(
                             "wecom_card_update_failed",
@@ -205,6 +220,7 @@ class InteractionWorker:
             event_key = message.event_payload.get("event_key")
             event_name = message.event_payload.get("event")
             has_action = message.event_payload.get("has_action") is True
+            profile_id = message.profile_id
             event_payload = dict(message.event_payload)
             event_payload_changed = False
         status, error = "processed", None
@@ -217,9 +233,14 @@ class InteractionWorker:
         ):
             try:
                 menu_reply = await self._menu_service.handle(
-                    sender, event_key, incoming_message_id=message_id
+                    sender,
+                    event_key,
+                    incoming_message_id=message_id,
+                    profile_id=profile_id,
                 )
-                if self._emit_reply is not None:
+                if self._emit_reply_profile is not None:
+                    await self._emit_reply_profile(sender, message_id, menu_reply.text, profile_id)
+                elif self._emit_reply is not None:
                     await self._emit_reply(sender, message_id, menu_reply.text)
             except Exception as exc:
                 attempts = int(event_payload.get("menu_reply_attempts") or 0) + 1
@@ -234,9 +255,16 @@ class InteractionWorker:
         elif text:
             try:
                 conversation_reply = await self._conversations.handle_text(
-                    sender_wecom_userid=sender, text=text, now=now
+                    sender_wecom_userid=sender,
+                    text=text,
+                    now=now,
+                    profile_id=profile_id,
                 )
-                if self._emit_reply is not None:
+                if self._emit_reply_profile is not None:
+                    await self._emit_reply_profile(
+                        sender, message_id, conversation_reply.text, profile_id
+                    )
+                elif self._emit_reply is not None:
                     await self._emit_reply(sender, message_id, conversation_reply.text)
             except Exception as exc:
                 status, error = "failed", type(exc).__name__

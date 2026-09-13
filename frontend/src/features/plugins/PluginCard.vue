@@ -1,20 +1,27 @@
 <script setup lang="ts">
-import type { Plugin } from '@/types'
+import type { ApplicationProfile, Plugin } from '@/types'
 import StatusBadge from '@/components/StatusBadge.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import AppButton from '@/components/ui/AppButton.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import { formatInstant } from '@/lib/time'
 import { useSettingsStore } from '@/stores/settings'
 
-defineProps<{
+withDefaults(defineProps<{
   item: Plugin
   running: boolean
-}>()
+  profiles?: ApplicationProfile[]
+  profileChanging?: boolean
+}>(), {
+  profiles: () => [],
+  profileChanging: false,
+})
 
 const emit = defineEmits<{
   (e: 'run', item: Plugin): void
   (e: 'configure', item: Plugin): void
   (e: 'toggle', item: Plugin): void
+  (e: 'bind-profile', item: Plugin, profileId: string): void
 }>()
 
 const settings = useSettingsStore()
@@ -69,6 +76,20 @@ const scheduleText = (item: Plugin) => {
         <strong :class="{ 'text-danger': item.consecutive_failures }">
           {{ item.consecutive_failures ?? 0 }}
         </strong>
+      </div>
+
+      <div class="meta-row profile-row">
+        <span>应用 Profile</span>
+        <AppSelect
+          :model-value="item.profile_id ?? ''"
+          :disabled="profileChanging"
+          class="profile-select"
+          @change="emit('bind-profile', item, $event)"
+        >
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}
+          </option>
+        </AppSelect>
       </div>
       
       <div
@@ -163,6 +184,14 @@ const scheduleText = (item: Plugin) => {
 
 .meta-row strong {
   font-weight: 500;
+}
+
+.profile-row {
+  align-items: flex-start;
+}
+
+.profile-select {
+  width: min(220px, 65%);
 }
 
 .schedule-value {

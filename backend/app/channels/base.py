@@ -14,6 +14,7 @@ class ChannelMessage:
     payload: dict[str, Any] = field(default_factory=dict)
     media_asset_id: str | None = None
     delivery_id: str | None = None
+    profile_id: str | None = None
 
 
 @dataclass(frozen=True)

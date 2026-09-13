@@ -3,12 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-from app.application.mobile_identity_service import MobileIdentityService
+from app.application.mobile_identity_service import MobileIdentityError, MobileIdentityService
 from app.application.reminder_service import (
     ReminderNotFound,
     ReminderPermissionDenied,
     ReminderService,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.errors import ProfileError
+from app.profiles.routing import ProfileRoutingService
 
 MENU_COMPLETE = "nh.reminders.complete_latest"
 MENU_SNOOZE_10 = "nh.reminders.snooze_10_latest"
@@ -69,15 +72,27 @@ class WeComMenuService:
         reminders: ReminderService,
         mobile_identity: MobileIdentityService | None = None,
         public_base_url: str | None = None,
+        routing: ProfileRoutingService | None = None,
     ) -> None:
         self._reminders = reminders
         self._mobile_identity = mobile_identity
         self._public_base_url = public_base_url.rstrip("/") if public_base_url else None
+        self._routing = routing
+
+    async def _capability_error(self, profile_id: str, capability: str) -> MenuResult | None:
+        if self._routing is None:
+            return None
+        try:
+            await self._routing.resolve(profile_id, capability=capability)
+        except ProfileError:
+            return MenuResult("forbidden", f"当前应用未启用{capability}能力。")
+        return None
 
     async def _mobile_link(
         self,
         sender_user_id: str,
         *,
+        profile_id: str,
         path: str,
         label: str,
         query: dict[str, str] | None = None,
@@ -87,10 +102,16 @@ class WeComMenuService:
                 "mobile_not_configured",
                 "移动提醒入口尚未配置，请管理员设置 NOTIFY_HUB_PUBLIC_BASE_URL。",
             )
-        identity = await self._mobile_identity.identity_for_user(sender_user_id)
+        try:
+            identity = await self._mobile_identity.identity_for_user(sender_user_id, profile_id)
+        except MobileIdentityError as exc:
+            return MenuResult("forbidden", str(exc))
         if identity is None:
             return MenuResult("forbidden", "你的企业微信身份尚未关联，无法查看提醒。")
-        parameters = {**(query or {}), "entry": self._mobile_identity.issue(identity.id)}
+        parameters = {
+            **(query or {}),
+            "entry": self._mobile_identity.issue(identity.id, profile_id),
+        }
         url = f"{self._public_base_url}{path}?{urlencode(parameters)}"
         return MenuResult("mobile_link", f"{label}\n\n{url}\n\n该链接为当前账号生成，请勿转发。")
 
@@ -100,7 +121,22 @@ class WeComMenuService:
         event_key: str,
         *,
         incoming_message_id: str | None = None,
+        profile_id: str = DEFAULT_PROFILE_ID,
     ) -> MenuResult:
+        blocked = await self._capability_error(profile_id, "menu_enabled")
+        if blocked is not None:
+            return blocked
+        mobile_keys = {
+            MENU_CREATE_ARTICLE,
+            MENU_CREATE_FULL,
+            MENU_LIST_AWAITING,
+            MENU_LIST_TODAY,
+            MENU_LIST_ALL,
+        }
+        if event_key in mobile_keys:
+            blocked = await self._capability_error(profile_id, "mobile_enabled")
+            if blocked is not None:
+                return blocked
         if event_key == MENU_CREATE_TEXT:
             return MenuResult(
                 "create_text",
@@ -109,6 +145,7 @@ class WeComMenuService:
         if event_key == MENU_CREATE_ARTICLE:
             return await self._mobile_link(
                 sender_user_id,
+                profile_id=profile_id,
                 path="/m/reminders/new",
                 query={"content": "article"},
                 label="点击打开图文提醒创建页：",
@@ -116,12 +153,14 @@ class WeComMenuService:
         if event_key == MENU_CREATE_FULL:
             return await self._mobile_link(
                 sender_user_id,
+                profile_id=profile_id,
                 path="/m/reminders/new",
                 label="点击打开完整提醒创建页：",
             )
         if event_key == MENU_LIST_AWAITING:
             return await self._mobile_link(
                 sender_user_id,
+                profile_id=profile_id,
                 path="/m/reminders/active",
                 query={"scope": "awaiting_ack"},
                 label="点击查看等待你完成的提醒：",
@@ -129,6 +168,7 @@ class WeComMenuService:
         if event_key == MENU_LIST_TODAY:
             return await self._mobile_link(
                 sender_user_id,
+                profile_id=profile_id,
                 path="/m/reminders/active",
                 query={"scope": "today"},
                 label="点击查看今天的提醒：",
@@ -136,6 +176,7 @@ class WeComMenuService:
         if event_key == MENU_LIST_ALL:
             return await self._mobile_link(
                 sender_user_id,
+                profile_id=profile_id,
                 path="/m/reminders/active",
                 query={"scope": "all"},
                 label="点击查看全部提醒：",
@@ -151,11 +192,15 @@ class WeComMenuService:
         operation = operations.get(event_key)
         if operation is None:
             return MenuResult("unknown_menu", "这个菜单项暂不受支持，请刷新企业微信菜单。")
+        blocked = await self._capability_error(profile_id, "interactive_enabled")
+        if blocked is not None:
+            return blocked
         try:
             result = await self._reminders.operate_latest_interactive(
                 sender_wecom_userid=sender_user_id,
                 operation=operation,
                 incoming_message_id=incoming_message_id,
+                profile_id=profile_id,
             )
         except ReminderPermissionDenied:
             return MenuResult("forbidden", "你的企业微信身份尚未关联，无法操作提醒。")

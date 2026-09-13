@@ -370,6 +370,17 @@ def test_production_rejects_weak_or_partial_secret_configuration() -> None:
             public_media_signing_key=strong,
             secret_encryption_key="",
         )
+    profile_only = Settings(
+        _env_file=None,
+        environment="production",
+        jwt_secret=strong,
+        public_media_signing_key=strong,
+        secret_encryption_key=strong,
+        wecom_corp_id="corp-only",
+        wecom_agent_id=None,
+        wecom_secret=None,
+    )
+    assert profile_only.wecom_corp_id == "corp-only"
     with pytest.raises(ValidationError, match="must be configured together"):
         Settings(
             _env_file=None,
@@ -378,7 +389,7 @@ def test_production_rejects_weak_or_partial_secret_configuration() -> None:
             public_media_signing_key=strong,
             secret_encryption_key=strong,
             wecom_corp_id="corp-only",
-            wecom_agent_id=None,
+            wecom_agent_id=1,
             wecom_secret=None,
         )
     with pytest.raises(ValidationError, match="callback Token"):

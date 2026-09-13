@@ -23,11 +23,13 @@ from app.infrastructure.database.models import (
     WeComIdentity,
     WorkerHeartbeat,
 )
+from app.infrastructure.database.profile_models import ApplicationProfile, ProfileUserState
 from app.infrastructure.database.reminder_models import (
     Reminder,
     ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -360,6 +362,7 @@ class DeliveryWorker:
                     payload=payload,
                     media_asset_id=notification.media_asset_id,
                     delivery_id=delivery_id,
+                    profile_id=delivery.profile_id,
                 ),
             )
 
@@ -398,16 +401,52 @@ class DeliveryWorker:
                     else:
                         identity_filter = None
                     if identity_filter is not None:
-                        await session.execute(
-                            update(WeComIdentity)
-                            .where(identity_filter, WeComIdentity.active.is_(True))
-                            .values(
-                                latest_interactive_occurrence_id=(
-                                    notification.reminder_occurrence_id
-                                ),
-                                updated_at=now,
+                        identities = list(
+                            await session.scalars(
+                                select(WeComIdentity).where(
+                                    identity_filter, WeComIdentity.active.is_(True)
+                                )
                             )
                         )
+                        for identity in identities:
+                            if delivery.profile_id == DEFAULT_PROFILE_ID:
+                                # Keep the legacy pointer only for the legacy/default
+                                # namespace; named Profiles use ProfileUserState.
+                                identity.latest_interactive_occurrence_id = (
+                                    notification.reminder_occurrence_id
+                                )
+                                identity.updated_at = now
+                            profile_exists = await session.scalar(
+                                select(ApplicationProfile.id).where(
+                                    ApplicationProfile.id == delivery.profile_id,
+                                    ApplicationProfile.enabled.is_(True),
+                                )
+                            )
+                            if profile_exists is not None:
+                                state = await session.scalar(
+                                    select(ProfileUserState).where(
+                                        ProfileUserState.profile_id == delivery.profile_id,
+                                        ProfileUserState.wecom_identity_id == identity.id,
+                                    )
+                                )
+                                if state is None:
+                                    session.add(
+                                        ProfileUserState(
+                                            id=new_id("pstate"),
+                                            profile_id=delivery.profile_id,
+                                            wecom_identity_id=identity.id,
+                                            latest_interactive_occurrence_id=(
+                                                notification.reminder_occurrence_id
+                                            ),
+                                            created_at=now,
+                                            updated_at=now,
+                                        )
+                                    )
+                                else:
+                                    state.latest_interactive_occurrence_id = (
+                                        notification.reminder_occurrence_id
+                                    )
+                                    state.updated_at = now
             elif result.retryable and delivery.attempt_count < delivery.max_attempts:
                 delivery.status = DeliveryStatus.RETRY_WAIT.value
                 index = min(delivery.attempt_count - 1, len(BACKOFF_SECONDS) - 1)

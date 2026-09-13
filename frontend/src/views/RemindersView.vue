@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { Pause, Pencil, Play, Trash2 } from 'lucide-vue-next'
 import { api, query } from '@/lib/api'
 import type { Page, Person, Reminder } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -26,6 +27,7 @@ import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profiles, defaultProfileId, profileLabel, loadProfiles } = useApplicationProfiles()
 const items = ref<Page<Reminder>>({
   items: [],
   page: 1,
@@ -34,6 +36,7 @@ const items = ref<Page<Reminder>>({
 })
 const page = ref(1)
 const status = ref('')
+const profileFilter = ref('')
 const show = ref(false)
 const { pending: busy, run: runCreate } = useAsyncAction()
 const broadcastAudienceCount = ref(0)
@@ -137,9 +140,23 @@ watch(
   }
 )
 
+watch(profileFilter, () => {
+  page.value = 1
+  void load()
+})
+
+watch(() => form.profile_id, () => {
+  void loadBroadcastAudience()
+})
+
 async function load() {
   try {
-    items.value = await api.get('/admin/reminders' + query({ page: page.value, page_size: 20, status: status.value }))
+    items.value = await api.get('/admin/reminders' + query({
+      page: page.value,
+      page_size: 20,
+      status: status.value,
+      profile_id: profileFilter.value
+    }))
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '提醒加载失败', 'danger')
   }
@@ -152,6 +169,7 @@ async function loadBroadcastAudience() {
     broadcastAudienceCount.value = people.filter(
       (person) =>
         person.enabled !== false &&
+        (!form.profile_id || person.profiles?.some((profile) => profile.id === form.profile_id && profile.enabled && profile.member_enabled)) &&
         person.wecom_identities?.some((identity) => identity.active !== false)
     ).length
   } catch {
@@ -171,6 +189,7 @@ async function create() {
     mediaPreviewUrl.value = ''
     timezoneEdited = false
     Object.assign(form, defaultReminderForm(settings.timezone))
+    form.profile_id = defaultProfileId.value
     await load()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '创建失败', 'danger')
@@ -232,8 +251,14 @@ async function removeReminder() {
 const canEdit = (item: Reminder) => ['active', 'awaiting_ack', 'paused'].includes(item.status)
 const canPause = (item: Reminder) => ['active', 'awaiting_ack'].includes(item.status)
 
-onMounted(() => {
+onMounted(async () => {
   void settings.load()
+  try {
+    await loadProfiles()
+    form.profile_id = defaultProfileId.value
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger')
+  }
   void Promise.all([load(), loadBroadcastAudience()])
 })
 
@@ -298,6 +323,14 @@ const contentLabel = (type?: string) => {
       <div v-if="!form.broadcast" class="field">
         <label>接收人 ID（逗号分隔）</label>
         <AppInput v-model="form.recipients" required />
+      </div>
+      <div class="field">
+        <label>应用 Profile</label>
+        <AppSelect v-model="form.profile_id">
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}{{ profile.is_default ? '（默认）' : '' }}
+          </option>
+        </AppSelect>
       </div>
       <div class="field audience-mode-field" :class="{ broadcast: form.broadcast }">
         <AppCheckbox v-model="form.broadcast">
@@ -534,6 +567,14 @@ const contentLabel = (type?: string) => {
             已取消
           </option>
         </AppSelect>
+        <AppSelect v-model="profileFilter" class="profile-select">
+          <option value="">
+            全部 Profiles
+          </option>
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}
+          </option>
+        </AppSelect>
       </template>
     </TableToolbar>
 
@@ -543,6 +584,7 @@ const contentLabel = (type?: string) => {
       <DataTable>
         <template #headers>
           <th>提醒</th>
+          <th>Profile</th>
           <th>调度</th>
           <th>送达与交互</th>
           <th>催办进度</th>
@@ -560,6 +602,9 @@ const contentLabel = (type?: string) => {
               </RouterLink>
               <span class="mono muted item-id">{{ item.id }}</span>
             </div>
+          </td>
+          <td>
+            <span class="profile-label">{{ profileLabel(item.profile_id) }}</span>
           </td>
           <td>
             <span class="mono">
@@ -848,6 +893,15 @@ const contentLabel = (type?: string) => {
   max-width: 145px;
 }
 
+.profile-select {
+  max-width: 190px;
+}
+
+.profile-label {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
 .reminder-cell {
   display: flex;
   flex-direction: column;
@@ -1057,7 +1111,7 @@ const contentLabel = (type?: string) => {
   .form-grid {
     grid-template-columns: 1fr;
   }
-  .status-select {
+  .status-select, .profile-select {
     max-width: 100%;
   }
 }

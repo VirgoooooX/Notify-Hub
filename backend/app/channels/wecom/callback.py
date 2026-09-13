@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.channels.wecom.crypto import WeComCrypto, WeComCryptoError
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from defusedxml import ElementTree
 
 
@@ -26,6 +27,7 @@ class IncomingCallback:
     response_code: str | None
     received_at: datetime
     dedupe_key: str
+    profile_id: str = DEFAULT_PROFILE_ID
 
 
 def _elements(xml: str) -> Mapping[str, str]:

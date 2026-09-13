@@ -5,6 +5,7 @@ from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin, TimestampMixin
 from app.infrastructure.database.utc_datetime import UTCDateTime
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import JSON, Boolean, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Mapped, mapped_column
 class PluginRecord(StringIdMixin, TimestampMixin, Base):
     __tablename__ = "plugins"
     __table_args__ = (Index("ix_plugins_schedule", "enabled", "next_run_at"),)
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     version: Mapped[str] = mapped_column(String(50), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '@/lib/api'
 import type { Reminder } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -19,6 +20,7 @@ import { useSettingsStore } from '@/stores/settings'
 const route = useRoute()
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profileLabel, loadProfiles } = useApplicationProfiles()
 const item = ref<Reminder>()
 const action = ref('')
 const busy = ref(false)
@@ -46,8 +48,13 @@ async function execute() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   void settings.load()
+  try {
+    await loadProfiles()
+  } catch {
+    // Keep the reminder trace available even if the profile catalogue is offline.
+  }
   void load()
 })
 
@@ -110,6 +117,8 @@ const contentLabel = (type?: string) => {
           {{ item.content }}
         </p>
         <DescriptionList>
+          <dt>应用 Profile</dt>
+          <dd>{{ profileLabel(item.profile_id) }}</dd>
           <dt>调度类型</dt>
           <dd>{{ scheduleLabel(item) }}</dd>
           <dt>时区</dt>

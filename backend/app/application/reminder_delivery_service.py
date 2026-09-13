@@ -23,25 +23,33 @@ class ReminderDeliveryService:
         self,
         reminder_id: str,
         *,
+        profile_id: str | None = None,
         occurrence_id: str | None = None,
         recipient_id: str | None = None,
     ) -> int:
         async with self._sessions() as session, session.begin():
             if occurrence_id is not None:
-                notification_ids = select(Notification.id).where(
+                notification_filter: builtins.list[Any] = [
                     Notification.reminder_occurrence_id == occurrence_id
-                )
+                ]
             else:
-                reminder_events: Select[tuple[str]] = select(Event.id).where(
-                    Event.source_type == "reminder", Event.source_id == reminder_id
-                )
-                notification_ids = select(Notification.id).where(
-                    Notification.event_id.in_(reminder_events)
-                )
+                event_filter: builtins.list[Any] = [
+                    Event.source_type == "reminder",
+                    Event.source_id == reminder_id,
+                ]
+                if profile_id is not None:
+                    event_filter.append(Event.profile_id == profile_id)
+                reminder_events: Select[tuple[str]] = select(Event.id).where(*event_filter)
+                notification_filter = [Notification.event_id.in_(reminder_events)]
+            if profile_id is not None:
+                notification_filter.append(Notification.profile_id == profile_id)
+            notification_ids = select(Notification.id).where(*notification_filter)
             delivery_filter: builtins.list[Any] = [
                 Delivery.notification_id.in_(notification_ids),
                 Delivery.status.in_(("pending", "retry_wait")),
             ]
+            if profile_id is not None:
+                delivery_filter.append(Delivery.profile_id == profile_id)
             if recipient_id is not None:
                 delivery_filter.append(Delivery.recipient_id == recipient_id)
             result = cast(

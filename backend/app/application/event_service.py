@@ -17,6 +17,9 @@ from app.infrastructure.database.models import (
     Notification,
     RecipientType,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.registry import ProfileRegistry
+from app.profiles.routing import ProfileRoutingService
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -29,9 +32,17 @@ class AcceptResult:
 
 
 class EventService:
-    def __init__(self, factory: async_sessionmaker[AsyncSession], clock: Clock) -> None:
+    def __init__(
+        self,
+        factory: async_sessionmaker[AsyncSession],
+        clock: Clock,
+        profiles: ProfileRegistry | None = None,
+        routing: ProfileRoutingService | None = None,
+    ) -> None:
         self._factory = factory
         self._clock = clock
+        self._profiles = profiles
+        self._routing = routing
 
     def _authorize(self, client: ApiClient, draft: EventCreate) -> None:
         if client.allowed_event_types and draft.event_type not in client.allowed_event_types:
@@ -61,13 +72,23 @@ class EventService:
 
     async def accept_api_event(self, client: ApiClient, draft: EventCreate) -> AcceptResult:
         self._authorize(client, draft)
-        key = (EventSource.API_CLIENT.value, client.id, draft.event_key)
+        profile_id = client.profile_id or DEFAULT_PROFILE_ID
+        if self._profiles is not None:
+            profile_id = await self._profiles.resolve_id(profile_id)
+        if self._routing is not None:
+            await self._routing.resolve(profile_id, capability="outbound_enabled")
+            if draft.broadcast:
+                await self._routing.resolve(profile_id, capability="broadcast_enabled")
+            else:
+                await self._routing.validate_recipients(profile_id, draft.recipients)
+        key = (profile_id, EventSource.API_CLIENT.value, client.id, draft.event_key)
         async with self._factory() as session:
             existing = await session.scalar(
                 select(Event).where(
-                    Event.source_type == key[0],
-                    Event.source_id == key[1],
-                    Event.event_key == key[2],
+                    Event.profile_id == key[0],
+                    Event.source_type == key[1],
+                    Event.source_id == key[2],
+                    Event.event_key == key[3],
                 )
             )
             if existing is not None:
@@ -75,8 +96,9 @@ class EventService:
             now = self._clock.now()
             event = Event(
                 id=new_id("evt"),
-                source_type=key[0],
-                source_id=key[1],
+                profile_id=profile_id,
+                source_type=key[1],
+                source_id=key[2],
                 event_type=draft.event_type,
                 event_key=draft.event_key,
                 title=draft.title,
@@ -93,6 +115,7 @@ class EventService:
             notification = Notification(
                 id=new_id("ntf"),
                 event=event,
+                profile_id=profile_id,
                 message_type=draft.message_type,
                 title=draft.title,
                 content=draft.content,
@@ -114,6 +137,7 @@ class EventService:
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
+                        profile_id=profile_id,
                         channel="wecom",
                         recipient_type=(
                             RecipientType.BROADCAST.value
@@ -145,9 +169,10 @@ class EventService:
                 await session.rollback()
                 existing = await session.scalar(
                     select(Event).where(
-                        Event.source_type == key[0],
-                        Event.source_id == key[1],
-                        Event.event_key == key[2],
+                        Event.profile_id == key[0],
+                        Event.source_type == key[1],
+                        Event.source_id == key[2],
+                        Event.event_key == key[3],
                     )
                 )
                 if existing is None:
@@ -178,8 +203,17 @@ class EventService:
         payload: dict[str, Any] | None = None,
         publish_to_mp: bool = False,
         publish_variants: list[dict[str, Any]] | None = None,
+        profile_id: str = DEFAULT_PROFILE_ID,
     ) -> AcceptResult:
         """Accept a trusted platform event through the same durable queue boundary."""
+        if self._profiles is not None:
+            profile_id = await self._profiles.resolve_id(profile_id)
+        if self._routing is not None:
+            await self._routing.resolve(profile_id, capability="outbound_enabled")
+            if broadcast:
+                await self._routing.resolve(profile_id, capability="broadcast_enabled")
+            elif recipients and recipients != ["@all"]:
+                await self._routing.validate_recipients(profile_id, recipients)
         effective_publish_variants = list(publish_variants or [])
         suppressed_publish_platforms: list[str] = []
         if any(
@@ -230,13 +264,14 @@ class EventService:
                 raise AppError(
                     "recipient_required", "At least one explicit recipient is required", 422
                 )
-        key = (source_type, source_id, event_key)
+        key = (profile_id, source_type, source_id, event_key)
         async with self._factory() as session:
             existing = await session.scalar(
                 select(Event).where(
-                    Event.source_type == key[0],
-                    Event.source_id == key[1],
-                    Event.event_key == key[2],
+                    Event.profile_id == key[0],
+                    Event.source_type == key[1],
+                    Event.source_id == key[2],
+                    Event.event_key == key[3],
                 )
             )
             if existing is not None:
@@ -244,6 +279,7 @@ class EventService:
             now = self._clock.now()
             event = Event(
                 id=new_id("evt"),
+                profile_id=profile_id,
                 source_type=source_type,
                 source_id=source_id,
                 event_type=event_type,
@@ -269,6 +305,7 @@ class EventService:
             notification = Notification(
                 id=new_id("ntf"),
                 event=event,
+                profile_id=profile_id,
                 reminder_id=reminder_id,
                 reminder_occurrence_id=reminder_occurrence_id,
                 message_type=message_type,
@@ -290,6 +327,7 @@ class EventService:
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
+                        profile_id=profile_id,
                         channel="mp_article",
                         recipient_type=RecipientType.PUBLISH.value,
                         recipient_id=None,
@@ -312,6 +350,7 @@ class EventService:
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
+                        profile_id=profile_id,
                         channel="xhs_article",
                         recipient_type=RecipientType.PUBLISH.value,
                         recipient_id=None,
@@ -338,6 +377,7 @@ class EventService:
                     Delivery(
                         id=new_id("dlv"),
                         notification=notification,
+                        profile_id=profile_id,
                         channel="wecom",
                         recipient_type=(
                             RecipientType.BROADCAST.value
@@ -366,9 +406,10 @@ class EventService:
                 await session.rollback()
                 existing = await session.scalar(
                     select(Event).where(
-                        Event.source_type == key[0],
-                        Event.source_id == key[1],
-                        Event.event_key == key[2],
+                        Event.profile_id == key[0],
+                        Event.source_type == key[1],
+                        Event.source_id == key[2],
+                        Event.event_key == key[3],
                     )
                 )
                 if existing is None:

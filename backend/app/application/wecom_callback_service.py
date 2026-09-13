@@ -10,6 +10,7 @@ from app.infrastructure.database.reminder_models import (
     InteractionEvent,
     NotificationAction,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -29,8 +30,10 @@ class WeComCallbackService:
         self._sessions = session_factory
 
     async def accept(self, callback: IncomingCallback) -> CallbackReceipt:
+        profile_id = callback.profile_id or DEFAULT_PROFILE_ID
         incoming = IncomingMessage(
             id=new_id("inm"),
+            profile_id=profile_id,
             channel="wecom",
             sender_external_id=callback.sender_external_id,
             provider_message_id=callback.provider_message_id,
@@ -56,11 +59,13 @@ class WeComCallbackService:
                     token_hash = hash_action_token(callback.action_token)
                     action_id = await session.scalar(
                         select(NotificationAction.id).where(
-                            NotificationAction.token_hash == token_hash
+                            NotificationAction.token_hash == token_hash,
+                            NotificationAction.profile_id == profile_id,
                         )
                     )
                     interaction = InteractionEvent(
                         id=new_id("int"),
+                        profile_id=profile_id,
                         channel="wecom",
                         dedupe_key=callback.dedupe_key,
                         sender_external_id=callback.sender_external_id,
@@ -82,12 +87,14 @@ class WeComCallbackService:
                     select(IncomingMessage).where(
                         IncomingMessage.channel == "wecom",
                         IncomingMessage.dedupe_key == callback.dedupe_key,
+                        IncomingMessage.profile_id == profile_id,
                     )
                 )
                 existing_interaction = await session.scalar(
                     select(InteractionEvent).where(
                         InteractionEvent.channel == "wecom",
                         InteractionEvent.dedupe_key == callback.dedupe_key,
+                        InteractionEvent.profile_id == profile_id,
                     )
                 )
                 if existing is None:

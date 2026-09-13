@@ -15,7 +15,8 @@ import {
   X,
   Bot,
   Cpu,
-  ShieldCheck
+  ShieldCheck,
+  Layers
 } from 'lucide-vue-next'
 import { useAuthStore } from '@/stores/auth'
 import { useUiStore } from '@/stores/ui'
@@ -86,7 +87,8 @@ const groups: NavGroup[] = [
     groupName: '访问管理',
     items: [
       { href: '/people', label: '接收人', icon: Users },
-      { href: '/api-clients', label: 'API Clients', icon: KeyRound }
+      { href: '/api-clients', label: 'API Clients', icon: KeyRound },
+      { href: '/profiles', label: '应用 Profiles', icon: Layers }
     ]
   },
   {

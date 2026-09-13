@@ -5,6 +5,7 @@ from typing import Any
 
 from app.infrastructure.database.base import Base, StringIdMixin
 from app.infrastructure.database.utc_datetime import UTCDateTime
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -22,6 +23,9 @@ class Reminder(StringIdMixin, Base):
     __tablename__ = "reminders"
     __table_args__ = (Index("ix_reminders_due", "status", "next_run_at"),)
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     creator_person_id: Mapped[str] = mapped_column(ForeignKey("people.id"), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -90,6 +94,12 @@ class ReminderOccurrence(StringIdMixin, Base):
         ),
     )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
+    profile_id_snapshot: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     reminder_id: Mapped[str] = mapped_column(
         ForeignKey("reminders.id", ondelete="CASCADE"), nullable=False
     )
@@ -150,9 +160,17 @@ class ReminderOccurrenceRecipient(StringIdMixin, Base):
 
 class ConversationSession(StringIdMixin, Base):
     __tablename__ = "conversation_sessions"
+    __table_args__ = (
+        UniqueConstraint(
+            "profile_id", "wecom_identity_id", name="uq_conversation_sessions_profile_identity"
+        ),
+    )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     wecom_identity_id: Mapped[str] = mapped_column(
-        ForeignKey("wecom_identities.id", ondelete="CASCADE"), unique=True, nullable=False
+        ForeignKey("wecom_identities.id", ondelete="CASCADE"), nullable=False
     )
     draft_id: Mapped[str | None] = mapped_column(
         ForeignKey("reminder_drafts.id", ondelete="SET NULL")
@@ -168,10 +186,13 @@ class ConversationSession(StringIdMixin, Base):
 class IncomingMessage(StringIdMixin, Base):
     __tablename__ = "incoming_messages"
     __table_args__ = (
-        UniqueConstraint("channel", "dedupe_key", name="uq_incoming_message_dedupe"),
+        UniqueConstraint("profile_id", "channel", "dedupe_key", name="uq_incoming_message_dedupe"),
         Index("ix_incoming_processing", "processing_status", "received_at"),
     )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     channel: Mapped[str] = mapped_column(String(30), nullable=False)
     sender_external_id: Mapped[str] = mapped_column(String(128), nullable=False)
     provider_message_id: Mapped[str | None] = mapped_column(String(200))
@@ -193,6 +214,9 @@ class NotificationAction(StringIdMixin, Base):
         Index("ix_notification_actions_reminder", "reminder_id", "recipient_id"),
     )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     reminder_id: Mapped[str] = mapped_column(
         ForeignKey("reminders.id", ondelete="CASCADE"), nullable=False
     )
@@ -218,9 +242,12 @@ class NotificationAction(StringIdMixin, Base):
 class InteractionEvent(StringIdMixin, Base):
     __tablename__ = "interaction_events"
     __table_args__ = (
-        UniqueConstraint("channel", "dedupe_key", name="uq_interaction_event_dedupe"),
+        UniqueConstraint("profile_id", "channel", "dedupe_key", name="uq_interaction_event_dedupe"),
     )
 
+    profile_id: Mapped[str] = mapped_column(
+        String(64), default=DEFAULT_PROFILE_ID, server_default=DEFAULT_PROFILE_ID, nullable=False
+    )
     channel: Mapped[str] = mapped_column(String(30), nullable=False)
     dedupe_key: Mapped[str] = mapped_column(String(64), nullable=False)
     sender_external_id: Mapped[str] = mapped_column(String(128), nullable=False)

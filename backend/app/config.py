@@ -209,12 +209,13 @@ class Settings(BaseSettings):
                     "production public media signing key must be at least 32 characters"
                 )
 
-        outbound_wecom = (
-            bool(self.wecom_corp_id and self.wecom_corp_id.strip()),
+        legacy_outbound_wecom = (
             self.wecom_agent_id is not None,
             bool(self.wecom_secret and self.wecom_secret.get_secret_value()),
         )
-        if any(outbound_wecom) and not all(outbound_wecom):
+        if any(legacy_outbound_wecom) and not (
+            bool(self.wecom_corp_id and self.wecom_corp_id.strip()) and all(legacy_outbound_wecom)
+        ):
             raise ValueError("WeCom Corp ID, Agent ID, and Secret must be configured together")
 
         callback_wecom = (

@@ -3,6 +3,7 @@ import { onMounted, ref, watch } from 'vue'
 import { Copy, ExternalLink, Eye, Newspaper, RotateCcw, Undo2 } from 'lucide-vue-next'
 import { api, query } from '@/lib/api'
 import type { MpArticle, MpArticleConfig, Page } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import PaginationBar from '@/components/PaginationBar.vue'
@@ -21,9 +22,11 @@ import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profiles, profileLabel, loadProfiles } = useApplicationProfiles()
 
 const page = ref(1)
 const status = ref('')
+const profileFilter = ref('')
 const loading = ref(false)
 const config = ref<MpArticleConfig | null>(null)
 const result = ref<Page<MpArticle>>({ items: [], page: 1, page_size: 20, total: 0 })
@@ -80,6 +83,7 @@ async function load() {
           page: page.value,
           page_size: 20,
           status: status.value,
+          profile_id: profileFilter.value,
         }),
     )
   } catch (e) {
@@ -97,7 +101,7 @@ async function loadConfig() {
   }
 }
 
-watch(status, () => {
+watch([status, profileFilter], () => {
   if (page.value === 1) {
     void load()
   } else {
@@ -197,8 +201,13 @@ function openMpEditor() {
 
 const time = (v: string) => formatInstant(v, settings.timezone)
 
-onMounted(() => {
+onMounted(async () => {
   void settings.load()
+  try {
+    await loadProfiles()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger')
+  }
   void loadConfig()
   void load()
 })
@@ -244,6 +253,14 @@ onMounted(() => {
             已忽略
           </option>
         </AppSelect>
+        <AppSelect v-model="profileFilter" class="profile-select" aria-label="文章 Profile 筛选">
+          <option value="">
+            全部 Profiles
+          </option>
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}
+          </option>
+        </AppSelect>
       </template>
     </TableToolbar>
 
@@ -260,6 +277,7 @@ onMounted(() => {
         <template #headers>
           <th>封面</th>
           <th>标题</th>
+          <th>Profile</th>
           <th>状态</th>
           <th>AI 摘要</th>
           <th>作者</th>
@@ -285,6 +303,9 @@ onMounted(() => {
               </button>
               <span v-if="item.source_url" class="source-hint">{{ item.source_url }}</span>
             </div>
+          </td>
+          <td>
+            <span class="profile-label">{{ profileLabel(item.profile_id) }}</span>
           </td>
           <td>
             <div class="status-cell">
@@ -409,6 +430,15 @@ onMounted(() => {
 
 .status-select {
   max-width: 150px;
+}
+
+.profile-select {
+  max-width: 190px;
+}
+
+.profile-label {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .cover-thumb {

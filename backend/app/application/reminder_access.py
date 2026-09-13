@@ -89,10 +89,12 @@ class ReminderAccessService:
         command_hash = self._command_hash(command, schedule_mode)
         async with lock:
             if idempotency_key is not None:
-                existing = await self._find_idempotent(actor, idempotency_key, command_hash)
+                existing = await self._find_idempotent(
+                    actor, idempotency_key, command_hash, command.profile_id
+                )
                 if existing is not None:
                     return ReminderCreationResult(existing, duplicate=True)
-            await self._enforce_quota(actor, permissions.max_active)
+            await self._enforce_quota(actor, permissions.max_active, command.profile_id)
             reminder = await self._reminders.create(command)
             async with self._sessions() as session, session.begin():
                 add_audit(
@@ -167,7 +169,7 @@ class ReminderAccessService:
             if duration > permissions.max_duration_seconds:
                 raise ReminderAccessDenied("reminder duration exceeds the permitted maximum")
 
-    async def _enforce_quota(self, actor: ReminderActor, maximum: int) -> None:
+    async def _enforce_quota(self, actor: ReminderActor, maximum: int, profile_id: str) -> None:
         if maximum < 1:
             raise ReminderQuotaExceeded("active reminder quota is zero")
         async with self._sessions() as session:
@@ -182,6 +184,7 @@ class ReminderAccessService:
                 .where(
                     AuditLog.actor_type == actor.actor_type,
                     AuditLog.actor_id == actor.actor_id,
+                    Reminder.profile_id == profile_id,
                     Reminder.status.in_(("active", "paused")),
                 )
             )
@@ -189,7 +192,11 @@ class ReminderAccessService:
             raise ReminderQuotaExceeded("active reminder quota exceeded")
 
     async def _find_idempotent(
-        self, actor: ReminderActor, idempotency_key: str, command_hash: str
+        self,
+        actor: ReminderActor,
+        idempotency_key: str,
+        command_hash: str,
+        profile_id: str,
     ) -> Reminder | None:
         async with self._sessions() as session:
             row = await session.scalar(
@@ -208,7 +215,12 @@ class ReminderAccessService:
                 raise ReminderIdempotencyConflict(
                     "idempotency key was already used for a different reminder"
                 )
-            reminder = await session.get(Reminder, row.resource_id)
+            reminder = await session.scalar(
+                select(Reminder).where(
+                    Reminder.id == row.resource_id,
+                    Reminder.profile_id == profile_id,
+                )
+            )
             if reminder is not None:
                 return reminder
         return None
@@ -216,6 +228,7 @@ class ReminderAccessService:
     @staticmethod
     def _command_hash(command: ReminderCreate, schedule_mode: str | None) -> str:
         payload = {
+            "profile_id": command.profile_id,
             "creator_person_id": command.creator_person_id,
             "title": command.title,
             "content": command.content,

@@ -11,6 +11,7 @@ from app.infrastructure.database.reminder_models import (
     ReminderOccurrenceRecipient,
     ReminderRecipient,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
@@ -33,9 +34,9 @@ class MobileReminderQueryService:
         self._sessions = session_factory
 
     @staticmethod
-    def _authorized(person_id: str) -> ColumnElement[bool]:
+    def _authorized(person_id: str, profile_id: str = DEFAULT_PROFILE_ID) -> ColumnElement[bool]:
         return or_(
-            Reminder.creator_person_id == person_id,
+            (Reminder.creator_person_id == person_id) & (Reminder.profile_id == profile_id),
             exists(
                 select(ReminderRecipient.id).where(
                     ReminderRecipient.reminder_id == Reminder.id,
@@ -51,8 +52,11 @@ class MobileReminderQueryService:
         scope: Literal["active", "awaiting_ack", "today", "all"],
         now: datetime,
         timezone: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
     ) -> list[Reminder]:
-        statement = select(Reminder).where(self._authorized(person_id))
+        statement = select(Reminder).where(
+            self._authorized(person_id, profile_id), Reminder.profile_id == profile_id
+        )
         if scope == "active":
             statement = statement.where(Reminder.status.in_(("active", "paused")))
         elif scope == "awaiting_ack":
@@ -66,6 +70,7 @@ class MobileReminderQueryService:
                     )
                     .where(
                         ReminderOccurrence.reminder_id == Reminder.id,
+                        ReminderOccurrence.profile_id_snapshot == profile_id,
                         ReminderOccurrenceRecipient.person_id == person_id,
                         ReminderOccurrenceRecipient.status == "pending",
                     )
@@ -82,6 +87,7 @@ class MobileReminderQueryService:
                     exists(
                         select(ReminderOccurrence.id).where(
                             ReminderOccurrence.reminder_id == Reminder.id,
+                            ReminderOccurrence.profile_id_snapshot == profile_id,
                             ReminderOccurrence.scheduled_for.between(start, end),
                         )
                     ),
@@ -92,12 +98,15 @@ class MobileReminderQueryService:
                 await session.scalars(statement.order_by(Reminder.next_run_at, Reminder.created_at))
             )
 
-    async def detail(self, reminder_id: str, person_id: str) -> MobileReminderDetail:
+    async def detail(
+        self, reminder_id: str, person_id: str, profile_id: str = DEFAULT_PROFILE_ID
+    ) -> MobileReminderDetail:
         async with self._sessions() as session:
             reminder = await session.scalar(
                 select(Reminder).where(
                     Reminder.id == reminder_id,
-                    self._authorized(person_id),
+                    Reminder.profile_id == profile_id,
+                    self._authorized(person_id, profile_id),
                 )
             )
             if reminder is None:
@@ -105,7 +114,10 @@ class MobileReminderQueryService:
             occurrences = list(
                 await session.scalars(
                     select(ReminderOccurrence)
-                    .where(ReminderOccurrence.reminder_id == reminder_id)
+                    .where(
+                        ReminderOccurrence.reminder_id == reminder_id,
+                        ReminderOccurrence.profile_id_snapshot == profile_id,
+                    )
                     .order_by(ReminderOccurrence.scheduled_for.desc())
                     .limit(20)
                 )

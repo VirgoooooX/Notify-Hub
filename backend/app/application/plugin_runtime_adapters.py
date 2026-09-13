@@ -21,6 +21,7 @@ from app.plugin_runtime.context import (
     StateStore,
     StateValue,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -128,11 +129,13 @@ class PluginReminderCreator:
         plugin_id: str,
         run_id: str,
         permissions: ReminderPermissions,
+        profile_id: str = DEFAULT_PROFILE_ID,
     ) -> None:
         self._access = access
         self._plugin_id = plugin_id
         self._run_id = run_id
         self._permissions = permissions
+        self._profile_id = profile_id
 
     async def create(self, draft: PluginReminderDraft) -> PluginReminderReceipt:
         if draft.timezone is None:
@@ -160,6 +163,7 @@ class PluginReminderCreator:
                 content_type=draft.content_type,
                 media_asset_id=draft.media_asset_id,
                 url=draft.url,
+                profile_id=self._profile_id,
             ),
             actor=ReminderActor("plugin", self._plugin_id),
             permissions=self._permissions,

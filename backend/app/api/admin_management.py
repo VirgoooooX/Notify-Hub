@@ -20,7 +20,8 @@ from app.infrastructure.database.models import (
     PlatformSetting,
 )
 from app.infrastructure.database.plugin_models import PluginRecord
-from fastapi import APIRouter, Depends, Request
+from app.profiles.errors import ProfileError
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 
@@ -63,7 +64,17 @@ async def _write_setting(request: Request, key: str, value: object) -> None:
 
 
 @router.get("/dashboard")
-async def dashboard(request: Request, _admin: Admin = Depends(require_admin)) -> dict[str, object]:
+async def dashboard(
+    request: Request,
+    profile_id: str | None = Query(default=None),
+    _admin: Admin = Depends(require_admin),
+) -> dict[str, object]:
+    try:
+        resolved_profile_id = (
+            await request.app.state.profile_registry.resolve_id(profile_id) if profile_id else None
+        )
+    except ProfileError:
+        raise
     timezone = ZoneInfo(
         await read_platform_timezone(
             request.app.state.session_factory, request.app.state.settings.app_timezone
@@ -72,27 +83,32 @@ async def dashboard(request: Request, _admin: Admin = Depends(require_admin)) ->
     now = request.app.state.clock.now().astimezone(timezone)
     day_start = datetime(now.year, now.month, now.day, tzinfo=timezone).astimezone(UTC)
     async with request.app.state.session_factory() as session:
-        today_events = await session.scalar(
-            select(func.count(Event.id)).where(Event.accepted_at >= day_start)
-        )
+        event_filters = [Event.accepted_at >= day_start]
+        delivery_filters = [Delivery.created_at >= day_start]
+        plugin_filters = [PluginRecord.status.in_(["failed", "degraded"])]
+        error_filters = [Delivery.status == DeliveryStatus.DEAD.value]
+        if resolved_profile_id:
+            event_filters.append(Event.profile_id == resolved_profile_id)
+            delivery_filters.append(Delivery.profile_id == resolved_profile_id)
+            plugin_filters.append(PluginRecord.profile_id == resolved_profile_id)
+            error_filters.append(Delivery.profile_id == resolved_profile_id)
+        today_events = await session.scalar(select(func.count(Event.id)).where(*event_filters))
         delivery_counts = dict(
             (
                 await session.execute(
                     select(Delivery.status, func.count(Delivery.id))
-                    .where(Delivery.created_at >= day_start)
+                    .where(*delivery_filters)
                     .group_by(Delivery.status)
                 )
             ).all()
         )
         failed_plugins = await session.scalar(
-            select(func.count(PluginRecord.id)).where(
-                PluginRecord.status.in_(["failed", "degraded"])
-            )
+            select(func.count(PluginRecord.id)).where(*plugin_filters)
         )
         errors = (
             await session.scalars(
                 select(Delivery)
-                .where(Delivery.status == DeliveryStatus.DEAD.value)
+                .where(*error_filters)
                 .order_by(Delivery.updated_at.desc())
                 .limit(10)
             )
@@ -107,6 +123,7 @@ async def dashboard(request: Request, _admin: Admin = Depends(require_admin)) ->
             "recent_errors": [
                 {
                     "id": item.id,
+                    "profile_id": item.profile_id,
                     "type": "delivery",
                     "message": item.last_error_message or item.last_error_code or "投递失败",
                     "occurred_at": item.updated_at,

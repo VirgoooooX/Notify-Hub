@@ -2,6 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '@/lib/api'
 import type { AIProfile, Plugin, Person, JsonValue, PluginDetailsResponse, PluginSchedule, PluginScheduleMode, PluginSecret } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
@@ -13,6 +14,7 @@ import { DEFAULT_TIMEZONE } from '@/lib/time'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profiles, loadProfiles } = useApplicationProfiles()
 const items = ref<Plugin[]>([])
 const people = ref<Person[]>([])
 const aiProfiles = ref<AIProfile[]>([])
@@ -23,6 +25,7 @@ const busy = ref(false)
 const initialScheduleSignature = ref('')
 const scheduleApiAvailable = ref(true)
 const currentDefaultSchedule = ref<PluginSchedule | null>(null)
+const changingProfile = ref('')
 
 const editForm = reactive({
   username: '',
@@ -117,6 +120,21 @@ async function loadAiProfiles() {
     aiProfiles.value = await api.get<AIProfile[]>('/admin/ai/profiles')
   } catch {
     aiProfiles.value = []
+  }
+}
+
+async function bindProfile(item: Plugin, profileId: string) {
+  if (!profileId || profileId === item.profile_id) return
+  changingProfile.value = item.id
+  try {
+    const updated = await api.put<Plugin>(`/admin/plugins/${item.id}/profile`, { profile_id: profileId })
+    const index = items.value.findIndex((candidate) => candidate.id === item.id)
+    if (index >= 0) items.value[index] = { ...items.value[index], ...updated }
+    ui.toast('插件 Profile 已更新', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : '插件 Profile 更新失败', 'danger')
+  } finally {
+    changingProfile.value = ''
   }
 }
 
@@ -263,6 +281,7 @@ async function saveConfig() {
 onMounted(() => {
   void settings.load()
   load()
+  loadProfiles().catch((e) => ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger'))
   loadPeople()
   loadAiProfiles()
 })
@@ -289,10 +308,13 @@ onMounted(() => {
       v-for="item in items"
       :key="item.id"
       :item="item"
+      :profiles="profiles"
+      :profile-changing="changingProfile === item.id"
       :running="running.has(item.id)"
       @run="run"
       @configure="configure"
       @toggle="target = item"
+      @bind-profile="bindProfile"
     />
   </section>
 

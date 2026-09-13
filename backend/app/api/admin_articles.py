@@ -6,6 +6,7 @@ from app.api.dependencies import require_article_actor
 from app.api.errors import AppError
 from app.application.audit import add_audit
 from app.infrastructure.database.models import Admin, ApiClient, MpArticle
+from app.profiles.errors import ProfileError
 from fastapi import APIRouter, Depends, Query, Request
 
 router = APIRouter(tags=["admin-articles"])
@@ -16,6 +17,7 @@ VALID_STATUSES = {"draft", "ready", "publishing", "published", "failed", "ignore
 def serialize_article(article: MpArticle) -> dict[str, Any]:
     return {
         "id": article.id,
+        "profile_id": article.profile_id,
         "status": article.status,
         "title": article.title,
         "author": article.author,
@@ -44,21 +46,44 @@ def serialize_article(article: MpArticle) -> dict[str, Any]:
 _serialize = serialize_article
 
 
+async def _actor_profile(
+    request: Request, actor: Admin | ApiClient, requested: str | None
+) -> str | None:
+    if isinstance(actor, ApiClient):
+        if requested is not None:
+            try:
+                requested = await request.app.state.profile_registry.resolve_id(requested)
+            except ProfileError as exc:
+                raise AppError(exc.code.lower(), exc.message, 409) from exc
+            if requested != actor.profile_id:
+                raise AppError("profile_forbidden", "API client is bound to another profile", 403)
+        return actor.profile_id
+    if requested is None:
+        return None
+    try:
+        return await request.app.state.profile_registry.resolve_id(requested)
+    except ProfileError as exc:
+        raise AppError(exc.code.lower(), exc.message, 409) from exc
+
+
 @router.get("/articles")
 async def list_articles(
     request: Request,
     _actor: Admin | ApiClient = Depends(require_article_actor),
     status: str | None = Query(default=None, max_length=20),
+    profile_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
 ) -> dict[str, object]:
     if status is not None and status not in VALID_STATUSES:
         raise AppError("invalid_status", "Unknown article status", 422)
     library = request.app.state.mp_article_library
+    effective_profile_id = await _actor_profile(request, _actor, profile_id)
     items, total = await library.list_articles(
         status=status,
         page=page,
         page_size=page_size,
+        profile_id=effective_profile_id,
     )
     return {
         "data": {
@@ -111,8 +136,12 @@ async def get_article(
     article_id: str,
     request: Request,
     _actor: Admin | ApiClient = Depends(require_article_actor),
+    profile_id: str | None = Query(default=None),
 ) -> dict[str, object]:
-    article = await request.app.state.mp_article_library.get_article(article_id)
+    effective_profile_id = await _actor_profile(request, _actor, profile_id)
+    article = await request.app.state.mp_article_library.get_article(
+        article_id, profile_id=effective_profile_id
+    )
     if article is None:
         raise AppError("article_not_found", "Article not found", 404)
     return {"data": _serialize(article), "request_id": request.state.request_id}
@@ -124,7 +153,10 @@ async def mark_published(
     request: Request,
     actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
-    article = await request.app.state.mp_article_library.mark_published(article_id)
+    effective_profile_id = await _actor_profile(request, actor, None)
+    article = await request.app.state.mp_article_library.mark_published(
+        article_id, profile_id=effective_profile_id
+    )
     await _audit(request, actor, article_id, "article.publish")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 
@@ -135,7 +167,10 @@ async def mark_ignored(
     request: Request,
     actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
-    article = await request.app.state.mp_article_library.mark_ignored(article_id)
+    effective_profile_id = await _actor_profile(request, actor, None)
+    article = await request.app.state.mp_article_library.mark_ignored(
+        article_id, profile_id=effective_profile_id
+    )
     await _audit(request, actor, article_id, "article.ignore")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 
@@ -146,7 +181,10 @@ async def restore_article(
     request: Request,
     actor: Admin | ApiClient = Depends(require_article_actor),
 ) -> dict[str, object]:
-    article = await request.app.state.mp_article_library.restore(article_id)
+    effective_profile_id = await _actor_profile(request, actor, None)
+    article = await request.app.state.mp_article_library.restore(
+        article_id, profile_id=effective_profile_id
+    )
     await _audit(request, actor, article_id, "article.restore")
     return {"data": _serialize(article), "request_id": request.state.request_id}
 

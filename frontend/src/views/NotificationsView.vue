@@ -2,6 +2,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { api, query } from '@/lib/api'
 import type { Notification, Page } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
@@ -18,9 +19,11 @@ import { useSettingsStore } from '@/stores/settings'
 
 const ui = useUiStore()
 const settings = useSettingsStore()
+const { profiles, profileLabel, loadProfiles } = useApplicationProfiles()
 const page = ref(1)
 const status = ref('')
 const keyword = ref('')
+const profileFilter = ref('')
 const loading = ref(false)
 const result = ref<Page<Notification>>({
   items: [],
@@ -38,7 +41,8 @@ async function load() {
           page: page.value,
           page_size: 20,
           status: status.value,
-          keyword: keyword.value
+          keyword: keyword.value,
+          profile_id: profileFilter.value
         })
     )
   } catch (e) {
@@ -49,14 +53,19 @@ async function load() {
 }
 
 let timer = 0
-watch([status, keyword], () => {
+watch([status, keyword, profileFilter], () => {
   page.value = 1
   clearTimeout(timer)
   timer = window.setTimeout(load, 250)
 })
 
-onMounted(() => {
+onMounted(async () => {
   void settings.load()
+  try {
+    await loadProfiles()
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger')
+  }
   void load()
 })
 
@@ -94,6 +103,14 @@ const time = (v: string) => formatInstant(v, settings.timezone)
             处理中
           </option>
         </AppSelect>
+        <AppSelect v-model="profileFilter" class="profile-select">
+          <option value="">
+            全部 Profiles
+          </option>
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}
+          </option>
+        </AppSelect>
       </template>
     </TableToolbar>
 
@@ -105,6 +122,7 @@ const time = (v: string) => formatInstant(v, settings.timezone)
       <DataTable>
         <template #headers>
           <th>通知</th>
+          <th>Profile</th>
           <th>消息类型</th>
           <th>优先级</th>
           <th>状态</th>
@@ -118,6 +136,9 @@ const time = (v: string) => formatInstant(v, settings.timezone)
               </RouterLink>
               <span class="mono muted item-id">{{ item.id }}</span>
             </div>
+          </td>
+          <td>
+            <span class="profile-label">{{ profileLabel(item.profile_id) }}</span>
           </td>
           <td>
             <span class="mono">{{ item.message_type }}</span>
@@ -153,6 +174,15 @@ const time = (v: string) => formatInstant(v, settings.timezone)
   max-width: 145px;
 }
 
+.profile-select {
+  max-width: 190px;
+}
+
+.profile-label {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+}
+
 .notification-cell {
   display: flex;
   flex-direction: column;
@@ -173,7 +203,7 @@ const time = (v: string) => formatInstant(v, settings.timezone)
 }
 
 @media (max-width: 600px) {
-  .search-input, .status-select {
+  .search-input, .status-select, .profile-select {
     max-width: 100%;
   }
 }

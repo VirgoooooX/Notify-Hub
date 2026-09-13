@@ -36,9 +36,16 @@ class WeComAdapter:
         settings: Settings,
         media: OutboundMedia | None = None,
         public_media_urls: PublicMediaUrlBuilder | None = None,
+        *,
+        agent_id: int | None = None,
+        broadcast_enabled: bool | None = None,
     ) -> None:
         self._client = client
         self._settings = settings
+        self._agent_id = settings.wecom_agent_id if agent_id is None else agent_id
+        self._broadcast_enabled = (
+            settings.allow_broadcast if broadcast_enabled is None else broadcast_enabled
+        )
         self._media = media
         self._public_media_urls = public_media_urls or PublicMediaUrlBuilder(
             settings.public_base_url,
@@ -47,14 +54,14 @@ class WeComAdapter:
 
     async def send(self, message: ChannelMessage) -> ChannelResult:
         if message.broadcast:
-            if not self._settings.allow_broadcast:
+            if not self._broadcast_enabled:
                 return ChannelResult(False, False, "BROADCAST_FORBIDDEN", "Broadcast is disabled")
             touser = "@all"
         else:
             if not message.recipients:
                 return ChannelResult(False, False, "RECIPIENT_INVALID", "Recipient is required")
             touser = "|".join(message.recipients)
-        if self._settings.wecom_agent_id is None:
+        if self._agent_id is None:
             return ChannelResult(False, False, "AUTH_INVALID", "WeCom agent ID is not configured")
         if message.message_type == "article":
             now = datetime.now(UTC)
@@ -76,7 +83,7 @@ class WeComAdapter:
             payload = {
                 "touser": touser,
                 "msgtype": "news",
-                "agentid": self._settings.wecom_agent_id,
+                "agentid": self._agent_id,
                 "news": {
                     "articles": [
                         {
@@ -100,7 +107,7 @@ class WeComAdapter:
             payload = {
                 "touser": touser,
                 "msgtype": "template_card",
-                "agentid": self._settings.wecom_agent_id,
+                "agentid": self._agent_id,
                 "template_card": {
                     "card_type": "button_interaction",
                     "task_id": task_id,
@@ -127,7 +134,7 @@ class WeComAdapter:
                 {
                     "touser": touser,
                     "msgtype": message.message_type,
-                    "agentid": self._settings.wecom_agent_id,
+                    "agentid": self._agent_id,
                     message.message_type: {"media_id": media_id},
                     "enable_duplicate_check": 1,
                 }
@@ -143,7 +150,7 @@ class WeComAdapter:
                     {
                         "touser": touser,
                         "msgtype": "text",
-                        "agentid": self._settings.wecom_agent_id,
+                        "agentid": self._agent_id,
                         "text": {"content": chunk},
                         "enable_duplicate_check": 1,
                     }
@@ -158,7 +165,7 @@ class WeComAdapter:
                 {
                     "touser": touser,
                     "msgtype": "text",
-                    "agentid": self._settings.wecom_agent_id,
+                    "agentid": self._agent_id,
                     "text": {"content": chunk},
                     "enable_duplicate_check": 1,
                 }

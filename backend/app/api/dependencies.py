@@ -6,6 +6,7 @@ import jwt
 from app.api.errors import AppError
 from app.infrastructure.database.models import Admin, ApiClient
 from app.infrastructure.security.tokens import decode_access_token, hash_token
+from app.profiles.errors import ProfileError
 from fastapi import Header, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,6 +82,7 @@ async def _resolve_article_actor(
             client = await session.scalar(select(ApiClient).where(ApiClient.key_hash == key_hash))
             if client is None or client.revoked_at is not None:
                 raise AppError("unauthorized", "API key is invalid or revoked", 401)
+            await _ensure_client_profile(request, client)
             limiter = request.app.state.api_limiter
             allowed = await limiter.allow(client.id, client.rate_limit_per_minute, 60)
             if not allowed:
@@ -117,8 +119,19 @@ async def require_api_client(
         client = await session.scalar(select(ApiClient).where(ApiClient.key_hash == key_hash))
         if client is None or client.revoked_at is not None:
             raise AppError("unauthorized", "API key is invalid or revoked", 401)
+        await _ensure_client_profile(request, client)
         limiter = request.app.state.api_limiter
         allowed = await limiter.allow(client.id, client.rate_limit_per_minute, 60)
         if not allowed:
             raise AppError("rate_limited", "API client rate limit exceeded", 429)
         return cast(ApiClient, client)
+
+
+async def _ensure_client_profile(request: Request, client: ApiClient) -> None:
+    registry = getattr(request.app.state, "profile_registry", None)
+    if registry is None:
+        return
+    try:
+        await registry.resolve(client.profile_id)
+    except ProfileError as exc:
+        raise AppError(exc.code.lower(), exc.message, 409) from exc

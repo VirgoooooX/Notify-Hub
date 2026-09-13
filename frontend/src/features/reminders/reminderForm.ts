@@ -7,6 +7,7 @@ import {
 
 export function defaultReminderForm(timezone = DEFAULT_TIMEZONE) {
   return {
+    profile_id: '',
     title: '',
     content: '',
     content_type: 'text',
@@ -39,6 +40,7 @@ export function reminderCreatePayload(form: ReturnType<typeof defaultReminderFor
   const scheduledAt = form.at || undefined
   const stopAt = form.stop_at || undefined
   return {
+    profile_id: form.profile_id || undefined,
     title: form.title,
     content: form.content,
     content_type: form.content_type,

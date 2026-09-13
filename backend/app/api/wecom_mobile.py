@@ -20,6 +20,8 @@ from app.infrastructure.database.reminder_models import (
 )
 from app.media.errors import MediaError
 from app.media.validation import MediaKind
+from app.profiles.constants import DEFAULT_PROFILE_ID
+from app.profiles.errors import ProfileError
 from fastapi import APIRouter, Depends, File, Header, Query, Request, UploadFile, status
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,6 +76,7 @@ class MobileReminderInput(BaseModel):
 def _summary(reminder: Reminder) -> dict[str, object]:
     return {
         "id": reminder.id,
+        "profile_id": reminder.profile_id,
         "title": reminder.title,
         "content": reminder.content,
         "content_type": reminder.content_type,
@@ -128,9 +131,17 @@ async def wecom_menu_payload(
 async def publish_wecom_menu(
     request: Request, admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
-    if request.app.state.settings.wecom_agent_id is None:
-        raise AppError("wecom_not_configured", "WeCom application is not configured", 409)
-    payload = build_wecom_menu_payload()
+    compatibility_client = getattr(request.app.state, "wecom_client", None)
+    profile_id = DEFAULT_PROFILE_ID
+    try:
+        publication = await request.app.state.wecom_menu_publication_service.publish(
+            profile_id,
+            client_override=compatibility_client,
+        )
+    except ProfileError as exc:
+        raise AppError(exc.code.lower(), exc.message, 409) from exc
+    agent_id = publication.agent_id or request.app.state.settings.wecom_agent_id
+    payload = publication.payload
     async with request.app.state.session_factory() as session, session.begin():
         add_audit(
             session,
@@ -139,10 +150,11 @@ async def publish_wecom_menu(
             actor_id=admin.id,
             action="wecom.menu.publish.requested",
             resource_type="wecom_menu",
-            resource_id=str(request.app.state.settings.wecom_agent_id),
+            resource_id=str(agent_id or profile_id),
+            details={"profile_id": profile_id},
             request_id=request.state.request_id,
         )
-    result = await request.app.state.wecom_client.create_menu(payload)
+    result = publication.result
     async with request.app.state.session_factory() as session, session.begin():
         add_audit(
             session,
@@ -151,8 +163,12 @@ async def publish_wecom_menu(
             actor_id=admin.id,
             action="wecom.menu.publish",
             resource_type="wecom_menu",
-            resource_id=str(request.app.state.settings.wecom_agent_id),
-            details={"success": result.success, "error_code": result.error_code},
+            resource_id=str(agent_id or profile_id),
+            details={
+                "profile_id": profile_id,
+                "success": result.success,
+                "error_code": result.error_code,
+            },
             request_id=request.state.request_id,
         )
     if not result.success:
@@ -179,6 +195,7 @@ async def mobile_session(
         "data": {
             "person_id": member.person_id,
             "display_name": member.display_name,
+            "profile_id": member.profile_id,
             "timezone": timezone,
         },
         "request_id": request.state.request_id,
@@ -193,6 +210,7 @@ async def mobile_reminders(
 ) -> dict[str, object]:
     items = await request.app.state.mobile_reminder_query_service.list(
         member.person_id,
+        profile_id=member.profile_id,
         scope=scope,
         now=request.app.state.clock.now(),
         timezone=await read_platform_timezone(
@@ -213,7 +231,7 @@ async def mobile_reminder_detail(
 ) -> dict[str, object]:
     try:
         result = await request.app.state.mobile_reminder_query_service.detail(
-            reminder_id, member.person_id
+            reminder_id, member.person_id, member.profile_id
         )
     except MobileReminderNotFound as exc:
         raise AppError("reminder_not_found", "Reminder was not found", 404) from exc
@@ -243,6 +261,7 @@ async def create_mobile_reminder(
         reminder = await request.app.state.reminder_service.create(
             ReminderCreate(
                 creator_person_id=member.person_id,
+                profile_id=member.profile_id,
                 title=payload.title,
                 content=payload.content,
                 content_type=payload.content_type,

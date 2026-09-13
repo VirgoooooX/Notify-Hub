@@ -26,7 +26,9 @@ from app.infrastructure.database.models import (
     Person,
     WeComIdentity,
 )
+from app.infrastructure.database.profile_models import ApplicationProfile, ProfileMember
 from app.infrastructure.security.tokens import create_api_key, hash_token
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from fastapi import APIRouter, Depends, Query, Request, status
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import selectinload
@@ -58,6 +60,7 @@ async def create_notification(
             image_url=str(payload.image_url) if payload.image_url else None,
             media_asset_id=payload.media_asset_id,
             require_ack=payload.require_ack,
+            profile_id=payload.profile_id or DEFAULT_PROFILE_ID,
         )
     )
     return {
@@ -77,6 +80,7 @@ async def test_wecom_channel(
             message_type=payload.message_type,
             recipients=[payload.recipient_id],
             event_type="system.channel_test",
+            profile_id=payload.profile_id or DEFAULT_PROFILE_ID,
         )
     )
     return {
@@ -88,6 +92,7 @@ async def test_wecom_channel(
 def client_view(client: ApiClient) -> dict[str, object]:
     return {
         "id": client.id,
+        "profile_id": client.profile_id,
         "name": client.name,
         "key_prefix": client.key_prefix,
         "allowed_event_types": client.allowed_event_types,
@@ -113,9 +118,11 @@ async def create_client(
     payload: ApiClientCreate, request: Request, admin: Admin = Depends(require_admin)
 ) -> dict[str, object]:
     now = request.app.state.clock.now()
+    profile_id = await request.app.state.profile_registry.resolve_id(payload.profile_id)
     key = create_api_key()
     client = ApiClient(
         id=payload.id or new_id("client"),
+        profile_id=profile_id,
         name=payload.name,
         key_prefix=key[:12],
         key_hash=hash_token(key),
@@ -155,12 +162,18 @@ async def create_client(
 
 @router.get("/api-clients")
 async def list_clients(
-    request: Request, _admin: Admin = Depends(require_admin)
+    request: Request,
+    profile_id: str | None = Query(default=None),
+    _admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
+    resolved_profile_id = (
+        await request.app.state.profile_registry.resolve_id(profile_id) if profile_id else None
+    )
     async with request.app.state.session_factory() as session:
-        clients = (
-            await session.scalars(select(ApiClient).order_by(ApiClient.created_at.desc()))
-        ).all()
+        query = select(ApiClient)
+        if resolved_profile_id:
+            query = query.where(ApiClient.profile_id == resolved_profile_id)
+        clients = (await session.scalars(query.order_by(ApiClient.created_at.desc()))).all()
     return {"data": [client_view(item) for item in clients], "request_id": request.state.request_id}
 
 
@@ -171,11 +184,23 @@ async def update_client(
     request: Request,
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
+    updates = payload.model_dump(exclude_unset=True)
+    resolved_profile_id: str | None = None
+    if "profile_id" in updates:
+        if updates["profile_id"] is None:
+            raise AppError("validation_error", "profile_id cannot be null", 422)
+        resolved_profile_id = await request.app.state.profile_registry.resolve_id(
+            str(updates["profile_id"])
+        )
+        updates["profile_id"] = resolved_profile_id
     async with request.app.state.session_factory() as session, session.begin():
         client = await session.get(ApiClient, client_id)
         if client is None:
             raise AppError("not_found", "API client not found", 404)
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        profile_changed = (
+            resolved_profile_id is not None and client.profile_id != resolved_profile_id
+        )
+        for key, value in updates.items():
             setattr(client, key, value)
         client.updated_at = request.app.state.clock.now()
         add_audit(
@@ -188,6 +213,18 @@ async def update_client(
             resource_id=client.id,
             request_id=request.state.request_id,
         )
+        if profile_changed:
+            add_audit(
+                session,
+                request.app.state.clock,
+                actor_type="admin",
+                actor_id=admin.id,
+                action="api_client.profile_changed",
+                resource_type="api_client",
+                resource_id=client.id,
+                details={"profile_id": client.profile_id},
+                request_id=request.state.request_id,
+            )
     return {"data": client_view(client), "request_id": request.state.request_id}
 
 
@@ -247,15 +284,20 @@ async def list_events(
     source_id: str | None = None,
     event_type: str | None = None,
     event_status: str | None = None,
+    profile_id: str | None = None,
     _admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     page, page_size = max(page, 1), min(max(page_size, 1), 100)
+    resolved_profile_id = (
+        await request.app.state.profile_registry.resolve_id(profile_id) if profile_id else None
+    )
     query = select(Event)
     count_query = select(func.count(Event.id))
     for criterion in (
         Event.source_id == source_id if source_id else None,
         Event.event_type == event_type if event_type else None,
         Event.status == event_status if event_status else None,
+        Event.profile_id == resolved_profile_id if resolved_profile_id else None,
     ):
         if criterion is not None:
             query, count_query = query.where(criterion), count_query.where(criterion)
@@ -273,6 +315,7 @@ async def list_events(
             "items": [
                 {
                     "id": e.id,
+                    "profile_id": e.profile_id,
                     "source_type": e.source_type,
                     "source_id": e.source_id,
                     "event_type": e.event_type,
@@ -299,9 +342,13 @@ async def list_notifications(
     page_size: int = 20,
     status_filter: str | None = Query(default=None, alias="status"),
     keyword: str | None = None,
+    profile_id: str | None = None,
     _admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     page, page_size = max(page, 1), min(max(page_size, 1), 100)
+    resolved_profile_id = (
+        await request.app.state.profile_registry.resolve_id(profile_id) if profile_id else None
+    )
     query = select(Notification).options(selectinload(Notification.deliveries))
     count_query = select(func.count(Notification.id))
     if status_filter:
@@ -314,6 +361,9 @@ async def list_notifications(
             | Notification.content.ilike(pattern)
             | Notification.event_id.ilike(pattern)
         )
+        query, count_query = query.where(criterion), count_query.where(criterion)
+    if resolved_profile_id:
+        criterion = Notification.profile_id == resolved_profile_id
         query, count_query = query.where(criterion), count_query.where(criterion)
     async with request.app.state.session_factory() as session:
         total = await session.scalar(count_query)
@@ -337,6 +387,7 @@ async def list_notifications(
             "items": [
                 {
                     "id": n.id,
+                    "profile_id": n.profile_id,
                     "event_id": n.event_id,
                     "message_type": n.message_type,
                     "title": n.title,
@@ -369,6 +420,7 @@ async def get_notification(
             raise AppError("not_found", "Notification not found", 404)
         data = {
             "id": notification.id,
+            "profile_id": notification.profile_id,
             "event_id": notification.event_id,
             "title": notification.title,
             "content": notification.content,
@@ -387,6 +439,7 @@ async def get_notification(
             "deliveries": [
                 {
                     "id": d.id,
+                    "profile_id": d.profile_id,
                     "recipient_id": d.recipient_id,
                     "status": d.status,
                     "attempt_count": d.attempt_count,
@@ -538,6 +591,28 @@ async def list_people(
         people = (
             await session.scalars(select(Person).options(selectinload(Person.identities)))
         ).all()
+        profiles_by_person: dict[str, list[dict[str, object]]] = {
+            person.id: [] for person in people
+        }
+        if profiles_by_person:
+            memberships = (
+                await session.execute(
+                    select(ProfileMember, ApplicationProfile)
+                    .join(ApplicationProfile, ApplicationProfile.id == ProfileMember.profile_id)
+                    .where(ProfileMember.person_id.in_(profiles_by_person))
+                    .order_by(ApplicationProfile.key)
+                )
+            ).all()
+            for membership, profile in memberships:
+                profiles_by_person[membership.person_id].append(
+                    {
+                        "id": profile.id,
+                        "key": profile.key,
+                        "name": profile.name,
+                        "enabled": profile.enabled,
+                        "member_enabled": membership.enabled,
+                    }
+                )
         data = [
             {
                 "id": p.id,
@@ -549,6 +624,7 @@ async def list_people(
                 "wecom_identities": [
                     {"id": i.id, "user_id": i.user_id, "active": i.active} for i in p.identities
                 ],
+                "profiles": profiles_by_person[p.id],
             }
             for p in people
         ]

@@ -7,15 +7,22 @@ from pathlib import Path
 from app.application.event_service import EventService
 from app.application.reminder_service import EventAcceptance, ReminderEventDraft
 from app.infrastructure.database.models import WeComIdentity
+from app.infrastructure.database.plugin_models import PluginRecord
 from app.infrastructure.security.secret_store import SecretStore
 from app.plugin_runtime.base import EventDraft, EventReceipt
+from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 class PluginEventEmitterAdapter:
-    def __init__(self, events: EventService) -> None:
+    def __init__(
+        self,
+        events: EventService,
+        sessions: async_sessionmaker[AsyncSession] | None = None,
+    ) -> None:
         self._events = events
+        self._sessions = sessions
 
     async def emit(self, plugin_id: str, event: EventDraft) -> EventReceipt:
         variants_payload = (
@@ -23,6 +30,15 @@ class PluginEventEmitterAdapter:
             if event.publish_variants
             else None
         )
+        profile_id = DEFAULT_PROFILE_ID
+        if self._sessions is not None:
+            async with self._sessions() as session:
+                profile_id = (
+                    await session.scalar(
+                        select(PluginRecord.profile_id).where(PluginRecord.id == plugin_id)
+                    )
+                    or DEFAULT_PROFILE_ID
+                )
         result = await self._events.accept_internal_event(
             source_type="plugin",
             source_id=plugin_id,
@@ -40,6 +56,7 @@ class PluginEventEmitterAdapter:
             payload=event.payload,
             publish_to_mp=event.publish_to_mp,
             publish_variants=variants_payload,
+            profile_id=profile_id,
         )
         return EventReceipt(
             event_id=result.event_id,
@@ -69,6 +86,7 @@ class ReminderEventEmitterAdapter:
             url=draft.url,
             media_asset_id=draft.media_asset_id,
             payload=draft.payload,
+            profile_id=draft.profile_id,
         )
         return EventAcceptance(
             event_id=result.event_id,
@@ -136,7 +154,13 @@ class ConversationReplyEmitterAdapter:
         self._sessions = sessions
         self._events = events
 
-    async def __call__(self, sender_userid: str, message_id: str, text: str) -> None:
+    async def __call__(
+        self,
+        sender_userid: str,
+        message_id: str,
+        text: str,
+        profile_id: str = DEFAULT_PROFILE_ID,
+    ) -> None:
         async with self._sessions() as session:
             person_id = await session.scalar(
                 select(WeComIdentity.person_id).where(
@@ -154,4 +178,5 @@ class ConversationReplyEmitterAdapter:
             title="Notify Hub",
             content=text,
             recipients=[person_id],
+            profile_id=profile_id,
         )

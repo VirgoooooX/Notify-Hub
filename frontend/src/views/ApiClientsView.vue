@@ -2,12 +2,14 @@
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '@/lib/api'
 import type { ApiClient } from '@/types'
+import { useApplicationProfiles } from '@/composables/useApplicationProfiles'
 import PageHeader from '@/components/PageHeader.vue'
 import StatusBadge from '@/components/StatusBadge.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import AppButton from '@/components/ui/AppButton.vue'
 import AppInput from '@/components/ui/AppInput.vue'
+import AppSelect from '@/components/ui/AppSelect.vue'
 import AppCheckbox from '@/components/ui/AppCheckbox.vue'
 import AppCard from '@/components/ui/AppCard.vue'
 import SecretRevealPanel from '@/components/ui/SecretRevealPanel.vue'
@@ -15,15 +17,18 @@ import DataTable from '@/components/data/DataTable.vue'
 import { useUiStore } from '@/stores/ui'
 
 const ui = useUiStore()
+const { profiles, defaultProfileId, profileLabel, loadProfiles } = useApplicationProfiles()
 const items = ref<ApiClient[]>([])
 const show = ref(false)
 const secret = ref('')
 const target = ref<ApiClient>()
 const action = ref<'rotate' | 'revoke'>('revoke')
 const busy = ref(false)
+const changingProfile = ref('')
 
 const form = reactive({
   name: '',
+  profile_id: '',
   allowed_event_types: '',
   allowed_recipient_ids: '',
   rate_limit_per_minute: 60,
@@ -45,11 +50,27 @@ async function load() {
   }
 }
 
+async function changeProfile(item: ApiClient, profileId: string) {
+  if (!profileId || profileId === item.profile_id) return
+  changingProfile.value = item.id
+  try {
+    const updated = await api.patch<ApiClient>(`/admin/api-clients/${item.id}`, { profile_id: profileId })
+    const index = items.value.findIndex((candidate) => candidate.id === item.id)
+    if (index >= 0) items.value[index] = updated
+    ui.toast('Client Profile 已更新', 'success')
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Client Profile 更新失败', 'danger')
+  } finally {
+    changingProfile.value = ''
+  }
+}
+
 async function create() {
   busy.value = true
   try {
     const data = await api.post<ApiClient & { api_key: string }>('/admin/api-clients', {
       name: form.name,
+      profile_id: form.profile_id || defaultProfileId.value || undefined,
       allowed_event_types: form.allowed_event_types
         .split(',')
         .map((v) => v.trim())
@@ -71,6 +92,7 @@ async function create() {
     show.value = false
     // Reset form fields
     form.name = ''
+    form.profile_id = defaultProfileId.value
     form.allowed_event_types = ''
     form.allowed_recipient_ids = ''
     form.rate_limit_per_minute = 60
@@ -115,7 +137,15 @@ async function confirm() {
   }
 }
 
-onMounted(load)
+onMounted(async () => {
+  try {
+    await loadProfiles()
+    form.profile_id = defaultProfileId.value
+  } catch (e) {
+    ui.toast(e instanceof Error ? e.message : 'Profile 加载失败', 'danger')
+  }
+  await load()
+})
 </script>
 
 <template>
@@ -139,6 +169,14 @@ onMounted(load)
       </h3>
     </template>
     <form class="create-form" @submit.prevent="create">
+      <div class="field">
+        <label>绑定应用 Profile</label>
+        <AppSelect v-model="form.profile_id">
+          <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+            {{ profile.name }} · {{ profile.key }}{{ profile.is_default ? '（默认）' : '' }}
+          </option>
+        </AppSelect>
+      </div>
       <div class="field">
         <label>名称</label>
         <AppInput v-model="form.name" required />
@@ -194,6 +232,7 @@ onMounted(load)
       <DataTable>
         <template #headers>
           <th>名称</th>
+          <th>Profile</th>
           <th>Key 前缀</th>
           <th>事件权限</th>
           <th>限流</th>
@@ -206,6 +245,18 @@ onMounted(load)
               <strong class="client-name">{{ item.name }}</strong>
               <span class="mono muted item-id">{{ item.id }}</span>
             </div>
+          </td>
+          <td>
+            <AppSelect
+              :model-value="item.profile_id ?? ''"
+              :disabled="changingProfile === item.id"
+              @change="changeProfile(item, $event)"
+            >
+              <option v-for="profile in profiles" :key="profile.id" :value="profile.id">
+                {{ profile.name }} · {{ profile.key }}
+              </option>
+            </AppSelect>
+            <span class="profile-id mono muted">{{ profileLabel(item.profile_id) }}</span>
           </td>
           <td>
             <span class="mono">{{ item.key_prefix }}••••</span>
@@ -315,6 +366,12 @@ onMounted(load)
 
 .item-id {
   font-size: 11px;
+}
+
+.profile-id {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
 }
 
 .allowed-types {
