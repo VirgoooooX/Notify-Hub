@@ -33,6 +33,7 @@ from app.infrastructure.database.reminder_models import (
     Reminder,
     ReminderOccurrence,
 )
+from app.profiles.constants import DEFAULT_PROFILE_ID, DEFAULT_PROFILE_KEY
 from app.profiles.errors import ProfileError, ProfileNotFound
 from app.profiles.registry import ProfileRegistry
 from app.profiles.types import DEFAULT_CAPABILITIES, ProfileCapabilities, ProfileMetadata
@@ -45,7 +46,6 @@ class ProfileCreate:
     key: str
     name: str
     enabled: bool = True
-    is_default: bool = False
     capabilities: dict[str, bool] | None = None
     agent_id: int | None = None
     wecom_secret: str | None = None
@@ -57,7 +57,6 @@ class ProfileCreate:
 class ProfileUpdate:
     name: str | None = None
     enabled: bool | None = None
-    is_default: bool | None = None
     capabilities: dict[str, bool] | None = None
 
 
@@ -90,14 +89,14 @@ class ApplicationProfileService:
     async def create(self, command: ProfileCreate) -> ProfileMetadata:
         key = command.key.strip()
         name = command.name.strip()
+        if key in {DEFAULT_PROFILE_ID, DEFAULT_PROFILE_KEY}:
+            raise ProfileError("notify-hub is reserved as the system default profile")
         if not KEY_PATTERN.fullmatch(key):
             raise ProfileError("profile key must be a lowercase kebab-case identifier")
         if not name:
             raise ProfileError("profile name is required")
         if command.agent_id is not None and command.agent_id < 1:
             raise ProfileError("WeCom Agent ID must be positive")
-        if command.is_default and not command.enabled:
-            raise ProfileError("the default profile must be enabled")
         now = self._clock.now()
         capabilities = ProfileCapabilities.from_mapping(
             {**DEFAULT_CAPABILITIES, **(command.capabilities or {})}
@@ -107,7 +106,7 @@ class ApplicationProfileService:
             key=key,
             name=name,
             enabled=command.enabled,
-            is_default=command.is_default,
+            is_default=False,
             capabilities=capabilities.as_dict(),
             created_at=now,
             updated_at=now,
@@ -117,12 +116,6 @@ class ApplicationProfileService:
                 select(ApplicationProfile.id).where(ApplicationProfile.key == key)
             ):
                 raise ProfileError("profile key is already in use")
-            if command.is_default:
-                await session.execute(
-                    ApplicationProfile.__table__.update()
-                    .where(ApplicationProfile.is_default.is_(True))
-                    .values(is_default=False, updated_at=now)
-                )
             session.add(profile)
             if command.agent_id is not None or any(
                 value is not None for value in (command.callback_token, command.callback_aes_key)
@@ -149,27 +142,24 @@ class ApplicationProfileService:
         now = self._clock.now()
         async with self._sessions() as session, session.begin():
             profile = await self._get(session, profile_id)
-            if command.enabled is False and profile.is_default:
+            is_system_default = profile.id == DEFAULT_PROFILE_ID
+            if command.enabled is False and is_system_default:
                 raise ProfileError("the default profile cannot be disabled")
-            if command.is_default is False and profile.is_default:
-                raise ProfileError("the default profile cannot be unset")
-            if command.is_default and command.enabled is False:
-                raise ProfileError("the default profile must be enabled")
-            if command.is_default and command.enabled is None and not profile.enabled:
-                raise ProfileError("the default profile must be enabled")
             if command.name is not None:
                 if not command.name.strip():
                     raise ProfileError("profile name is required")
                 profile.name = command.name.strip()
             if command.enabled is not None:
                 profile.enabled = command.enabled
-            if command.is_default:
+            if is_system_default:
                 await session.execute(
                     ApplicationProfile.__table__.update()
                     .where(ApplicationProfile.id != profile.id)
                     .values(is_default=False, updated_at=now)
                 )
                 profile.is_default = True
+            else:
+                profile.is_default = False
             if command.capabilities is not None:
                 profile.capabilities = ProfileCapabilities.from_mapping(
                     {**profile.capabilities, **command.capabilities}
@@ -183,7 +173,7 @@ class ApplicationProfileService:
     async def delete(self, profile_id: str) -> None:
         async with self._sessions() as session, session.begin():
             profile = await self._get(session, profile_id)
-            if profile.is_default:
+            if profile.id == DEFAULT_PROFILE_ID:
                 raise ProfileError("the default profile cannot be deleted")
             dependent_tables = (
                 ApiClient,

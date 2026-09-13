@@ -19,6 +19,7 @@ async def api(tmp_path: Path) -> AsyncIterator[tuple[httpx.AsyncClient, object]]
     app = create_app(settings)
     async with app.state.engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+    await app.state.profile_registry.ensure_default_profile()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client, app

@@ -41,7 +41,6 @@ class ProfileCreateInput(BaseModel):
     key: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     enabled: bool = True
-    is_default: bool = False
     capabilities: ProfileCapabilitiesInput | None = None
     agent_id: int | None = Field(default=None, ge=1)
     wecom_secret: SecretStr | None = None
@@ -54,7 +53,6 @@ class ProfileUpdateInput(BaseModel):
 
     name: str | None = Field(default=None, min_length=1, max_length=200)
     enabled: bool | None = None
-    is_default: bool | None = None
     capabilities: ProfileCapabilitiesInput | None = None
 
 
@@ -169,7 +167,6 @@ async def create_profile(
         key=body.key,
         name=body.name,
         enabled=body.enabled,
-        is_default=body.is_default,
         capabilities=_capabilities(body.capabilities),
         agent_id=body.agent_id,
         wecom_secret=(
@@ -222,7 +219,6 @@ async def update_profile(
             ProfileUpdate(
                 name=body.name,
                 enabled=body.enabled,
-                is_default=body.is_default,
                 capabilities=_capabilities(body.capabilities),
             ),
         )

@@ -12,12 +12,14 @@ from typing import Any
 import httpx
 import pytest
 from app.application.conversation_service import ConversationState
+from app.application.reminder_service import ReminderCreate
 from app.application.wecom_callback_service import WeComCallbackService
 from app.application.wecom_media_service import DatabaseMediaCacheRepository
-from app.channels.base import ChannelMessage
+from app.channels.base import ChannelMessage, FakeChannel
 from app.channels.wecom.callback import IncomingCallback
 from app.config import Settings
 from app.domain.clock import SystemClock
+from app.domain.reminders import AckPolicy, ScheduleType
 from app.infrastructure.database.media_models import MediaAsset
 from app.infrastructure.database.models import (
     Delivery,
@@ -31,9 +33,15 @@ from app.infrastructure.database.profile_models import (
     ApplicationProfile,
     MediaProviderRef,
     ProfileMember,
+    ProfileUserState,
     WeComProfileConfig,
 )
-from app.infrastructure.database.reminder_models import ConversationSession, IncomingMessage
+from app.infrastructure.database.reminder_models import (
+    ConversationSession,
+    IncomingMessage,
+    ReminderOccurrence,
+    ReminderOccurrenceRecipient,
+)
 from app.profiles.constants import DEFAULT_PROFILE_ID, DEFAULT_PROFILE_KEY
 from app.profiles.errors import ProfileDisabled, ProfileSecretMissing
 from app.profiles.registry import ProfileRegistry
@@ -220,6 +228,388 @@ async def test_profile_api_membership_and_records_are_isolated(
         json={"enabled": False},
     )
     assert default_blocked.status_code == 409
+
+
+@pytest.mark.integration
+async def test_notify_hub_is_the_only_system_default_profile(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    client, app = api
+    await app.state.profile_registry.ensure_default_profile()
+    access = await initialize_and_login(client)
+    headers = {"Authorization": f"Bearer {access}"}
+
+    created = await client.post(
+        "/api/v1/admin/profiles",
+        headers=headers,
+        json={"key": "fixed-default-test", "name": "Fixed Default Test"},
+    )
+    assert created.status_code == 201, created.text
+    profile_id = created.json()["data"]["id"]
+    assert created.json()["data"]["is_default"] is False
+
+    create_attempt = await client.post(
+        "/api/v1/admin/profiles",
+        headers=headers,
+        json={"key": "invalid-default-create", "name": "Invalid", "is_default": True},
+    )
+    update_attempt = await client.patch(
+        f"/api/v1/admin/profiles/{profile_id}",
+        headers=headers,
+        json={"is_default": True},
+    )
+    assert create_attempt.status_code == update_attempt.status_code == 422
+
+    async with app.state.session_factory() as session, session.begin():
+        default = await session.get(ApplicationProfile, DEFAULT_PROFILE_ID)
+        custom = await session.get(ApplicationProfile, profile_id)
+        assert default is not None and custom is not None
+        default.is_default = False
+        custom.is_default = True
+
+    assert (await app.state.profile_registry.default_profile()).id == DEFAULT_PROFILE_ID
+    await app.state.profile_registry.ensure_default_profile()
+    async with app.state.session_factory() as session:
+        result = await session.execute(
+            select(ApplicationProfile.id, ApplicationProfile.is_default).where(
+                ApplicationProfile.id.in_([DEFAULT_PROFILE_ID, profile_id])
+            )
+        )
+        flags = dict(result.all())
+    assert flags == {DEFAULT_PROFILE_ID: True, profile_id: False}
+
+
+@pytest.mark.integration
+async def test_interactive_reminder_requires_profile_interactive_capability(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    client, app = api
+    await app.state.profile_registry.ensure_default_profile()
+    access = await initialize_and_login(client)
+    headers = {"Authorization": f"Bearer {access}"}
+    person = await client.post(
+        "/api/v1/admin/people",
+        headers=headers,
+        json={"id": "person_interactive_capability", "display_name": "Capability User"},
+    )
+    assert person.status_code == 201, person.text
+    profile = await client.post(
+        "/api/v1/admin/profiles",
+        headers=headers,
+        json={
+            "key": "capability-disabled",
+            "name": "Capability Disabled",
+            "capabilities": {"interactive_enabled": False},
+        },
+    )
+    assert profile.status_code == 201, profile.text
+    profile_id = profile.json()["data"]["id"]
+    membership = await client.put(
+        f"/api/v1/admin/profiles/{profile_id}/members/person_interactive_capability",
+        headers=headers,
+        json={"enabled": True},
+    )
+    assert membership.status_code == 200, membership.text
+    schedule_at = (datetime.now(UTC) + timedelta(hours=1)).replace(microsecond=0).isoformat()
+    base = {
+        "creator_person_id": "person_interactive_capability",
+        "title": "Capability reminder",
+        "content": "Check capability",
+        "profile_id": profile_id,
+        "recipients": ["person_interactive_capability"],
+        "schedule": {"type": "once", "at": schedule_at},
+    }
+    ordinary = await client.post("/api/v1/admin/reminders", headers=headers, json=base)
+    assert ordinary.status_code == 201, ordinary.text
+    blocked_create = await client.post(
+        "/api/v1/admin/reminders",
+        headers=headers,
+        json={**base, "require_ack": True},
+    )
+    assert blocked_create.status_code == 409
+    assert blocked_create.json()["error"]["code"] == "profile_capability_disabled"
+
+    blocked_update = await client.patch(
+        f"/api/v1/admin/reminders/{ordinary.json()['data']['id']}",
+        headers=headers,
+        json={"require_ack": True},
+    )
+    assert blocked_update.status_code == 409
+    assert blocked_update.json()["error"]["code"] == "profile_capability_disabled"
+
+    enabled = await client.post(
+        "/api/v1/admin/reminders",
+        headers=headers,
+        json={
+            **base,
+            "profile_id": DEFAULT_PROFILE_ID,
+            "require_ack": True,
+        },
+    )
+    assert enabled.status_code == 201, enabled.text
+
+
+@pytest.mark.integration
+async def test_disabled_profile_is_excluded_from_due_reminder_claim(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    _client, app = api
+    profile_id = "profile_disabled_scheduler"
+    person_id = "person_disabled_scheduler"
+    await _add_profile(app, profile_id, "disabled-scheduler")
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with app.state.session_factory() as session, session.begin():
+        session.add(
+            Person(
+                id=person_id,
+                display_name="Disabled Scheduler",
+                active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            ProfileMember(
+                id="member_disabled_scheduler",
+                profile_id=profile_id,
+                person_id=person_id,
+                enabled=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    reminder = await app.state.reminder_service.create(
+        ReminderCreate(
+            creator_person_id=person_id,
+            title="Disabled profile reminder",
+            content="Must wait until enabled",
+            schedule_type=ScheduleType.ONCE,
+            timezone="UTC",
+            recipient_ids=(person_id,),
+            scheduled_at=now,
+            profile_id=profile_id,
+        ),
+        now=now,
+    )
+    async with app.state.session_factory() as session, session.begin():
+        profile = await session.get(ApplicationProfile, profile_id)
+        assert profile is not None
+        profile.enabled = False
+    assert await app.state.reminder_service.claim_due(worker_id="disabled-worker", now=now) == []
+    async with app.state.session_factory() as session:
+        stored = await session.get(type(reminder), reminder.id)
+        assert stored is not None and stored.claimed_by is None
+
+    async with app.state.session_factory() as session, session.begin():
+        profile = await session.get(ApplicationProfile, profile_id)
+        assert profile is not None
+        profile.enabled = True
+    assert await app.state.reminder_service.claim_due(worker_id="reenabled-worker", now=now) == [
+        reminder.id
+    ]
+
+
+@pytest.mark.integration
+async def test_profile_broadcast_audience_deduplicates_persons(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    _client, app = api
+    profile_id = "profile_broadcast_dedupe"
+    person_id = "person_broadcast_dedupe"
+    now = datetime.now(UTC)
+    await _add_profile(app, profile_id, "broadcast-dedupe")
+    async with app.state.session_factory() as session, session.begin():
+        session.add(
+            Person(
+                id=person_id,
+                display_name="Broadcast Dedupe",
+                active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add_all(
+            [
+                WeComIdentity(
+                    id="identity_broadcast_one",
+                    person_id=person_id,
+                    user_id="broadcast-user-one",
+                    active=True,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                WeComIdentity(
+                    id="identity_broadcast_two",
+                    person_id=person_id,
+                    user_id="broadcast-user-two",
+                    active=True,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                ProfileMember(
+                    id="member_broadcast_dedupe",
+                    profile_id=profile_id,
+                    person_id=person_id,
+                    enabled=True,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+    assert await app.state.profile_routing.audience(profile_id) == [person_id]
+
+
+@pytest.mark.integration
+async def test_interactive_reminders_keep_profile_local_latest_state(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    _client, app = api
+    family_profile_id = "profile_family_health"
+    person_id = "person_dual_profile"
+    user_id = "dual-profile-user"
+    now = datetime.now(UTC).replace(microsecond=0)
+    await _add_profile(app, family_profile_id, "family-health")
+    async with app.state.session_factory() as session, session.begin():
+        session.add(
+            Person(
+                id=person_id,
+                display_name="Dual Profile User",
+                active=True,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            WeComIdentity(
+                id="identity_dual_profile",
+                person_id=person_id,
+                user_id=user_id,
+                active=True,
+                latest_interactive_occurrence_id=None,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add_all(
+            [
+                ProfileMember(
+                    id="member_dual_notify_hub",
+                    profile_id=DEFAULT_PROFILE_ID,
+                    person_id=person_id,
+                    enabled=True,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                ProfileMember(
+                    id="member_dual_family_health",
+                    profile_id=family_profile_id,
+                    person_id=person_id,
+                    enabled=True,
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+
+    service = app.state.reminder_service
+    reminders = [
+        await service.create(
+            ReminderCreate(
+                creator_person_id=person_id,
+                title=f"Interactive {profile_id}",
+                content=f"Content {profile_id}",
+                schedule_type=ScheduleType.ONCE,
+                timezone="UTC",
+                recipient_ids=(person_id,),
+                scheduled_at=now,
+                require_ack=True,
+                ack_policy=AckPolicy.ANY,
+                repeat_interval_seconds=300,
+                max_reminders=3,
+                profile_id=profile_id,
+            ),
+            now=now,
+        )
+        for profile_id in (DEFAULT_PROFILE_ID, family_profile_id)
+    ]
+    worker_id = "dual-profile-reminder-worker"
+    claimed = await service.claim_due(worker_id=worker_id, now=now)
+    assert set(claimed) == {reminder.id for reminder in reminders}
+    for reminder_id in claimed:
+        await service.trigger_claimed(reminder_id, worker_id=worker_id, now=now)
+    due = await service.claim_due_recipients(worker_id=worker_id, now=now)
+    assert len(due) == 2
+    for recipient_id in due:
+        acceptance = await service.notify_recipient(recipient_id, worker_id=worker_id, now=now)
+        assert acceptance is not None and acceptance.accepted
+
+    channel = FakeChannel()
+    delivery_worker = DeliveryWorker(
+        app.state.session_factory,
+        channel,
+        app.state.clock,
+        "dual-profile-delivery-worker",
+    )
+    assert await delivery_worker.process_one()
+    assert await delivery_worker.process_one()
+    assert {message.profile_id for message in channel.messages} == {
+        DEFAULT_PROFILE_ID,
+        family_profile_id,
+    }
+
+    async with app.state.session_factory() as session:
+        occurrences = list(
+            await session.scalars(
+                select(ReminderOccurrence)
+                .where(ReminderOccurrence.reminder_id.in_([item.id for item in reminders]))
+                .order_by(ReminderOccurrence.profile_id_snapshot)
+            )
+        )
+        states = {
+            state.profile_id: state.latest_interactive_occurrence_id
+            for state in await session.scalars(
+                select(ProfileUserState).where(
+                    ProfileUserState.wecom_identity_id == "identity_dual_profile"
+                )
+            )
+        }
+    occurrence_by_profile = {item.profile_id_snapshot: item for item in occurrences}
+    assert set(occurrence_by_profile) == {DEFAULT_PROFILE_ID, family_profile_id}
+    assert states == {
+        DEFAULT_PROFILE_ID: occurrence_by_profile[DEFAULT_PROFILE_ID].id,
+        family_profile_id: occurrence_by_profile[family_profile_id].id,
+    }
+
+    completed_a = await service.operate_latest_interactive(
+        sender_wecom_userid=user_id,
+        operation="complete",
+        profile_id=DEFAULT_PROFILE_ID,
+        now=now + timedelta(minutes=1),
+    )
+    assert completed_a.occurrence_id == occurrence_by_profile[DEFAULT_PROFILE_ID].id
+    async with app.state.session_factory() as session:
+        first = await session.scalar(
+            select(ReminderOccurrenceRecipient).where(
+                ReminderOccurrenceRecipient.occurrence_id
+                == occurrence_by_profile[DEFAULT_PROFILE_ID].id
+            )
+        )
+        second = await session.scalar(
+            select(ReminderOccurrenceRecipient).where(
+                ReminderOccurrenceRecipient.occurrence_id
+                == occurrence_by_profile[family_profile_id].id
+            )
+        )
+    assert first is not None and first.status == "acknowledged"
+    assert second is not None and second.status == "pending"
+
+    completed_b = await service.operate_latest_interactive(
+        sender_wecom_userid=user_id,
+        operation="complete",
+        profile_id=family_profile_id,
+        now=now + timedelta(minutes=2),
+    )
+    assert completed_b.occurrence_id == occurrence_by_profile[family_profile_id].id
 
 
 class MemoryProfileSecrets:

@@ -224,6 +224,8 @@ class ReminderService:
                 command = replace(command, profile_id=profile_id)
         if self._routing is not None:
             await self._routing.resolve(command.profile_id, capability="outbound_enabled")
+            if command.require_ack:
+                await self._routing.resolve(command.profile_id, capability="interactive_enabled")
             if command.broadcast:
                 await self._routing.resolve(command.profile_id, capability="broadcast_enabled")
             else:
@@ -498,6 +500,11 @@ class ReminderService:
             require_ack = (
                 reminder.require_ack if command.require_ack is None else command.require_ack
             )
+            if self._routing is not None and require_ack:
+                await self._routing.resolve(
+                    reminder.profile_id,
+                    capability="interactive_enabled",
+                )
             if command.require_ack is not None or any(
                 value is not None
                 for value in (
@@ -727,7 +734,9 @@ class ReminderService:
         async with self._sessions() as session, session.begin():
             candidates = await session.scalars(
                 select(Reminder.id)
+                .join(ApplicationProfile, ApplicationProfile.id == Reminder.profile_id)
                 .where(
+                    ApplicationProfile.enabled.is_(True),
                     Reminder.status == ReminderStatus.ACTIVE.value,
                     Reminder.next_run_at <= instant,
                     (Reminder.claim_expires_at.is_(None) | (Reminder.claim_expires_at < instant)),
@@ -741,6 +750,11 @@ class ReminderService:
                     await session.execute(
                         update(Reminder)
                         .where(
+                            Reminder.profile_id.in_(
+                                select(ApplicationProfile.id).where(
+                                    ApplicationProfile.enabled.is_(True)
+                                )
+                            ),
                             Reminder.id == reminder_id,
                             Reminder.status == ReminderStatus.ACTIVE.value,
                             Reminder.next_run_at <= instant,
@@ -1404,10 +1418,13 @@ class ReminderService:
                 )
             )
             if member is None:
-                profile_exists = await session.scalar(
-                    select(ApplicationProfile.id).where(ApplicationProfile.id == profile_id)
+                profile_member_exists = await session.scalar(
+                    select(ProfileMember.id).where(ProfileMember.profile_id == profile_id).limit(1)
                 )
-                if profile_exists is not None or profile_id != DEFAULT_PROFILE_ID:
+                # The legacy default namespace may have no membership rows in
+                # direct-create deployments. Once any default membership exists,
+                # enforce the same per-profile membership boundary as named profiles.
+                if profile_member_exists is not None or profile_id != DEFAULT_PROFILE_ID:
                     raise ReminderPermissionDenied("sender is not a member of this profile")
 
             incoming: IncomingMessage | None = None
@@ -1436,12 +1453,10 @@ class ReminderService:
             latest_occurrence_id = (
                 state.latest_interactive_occurrence_id if state is not None else None
             )
-            if state is None:
-                profile_exists = await session.scalar(
-                    select(ApplicationProfile.id).where(ApplicationProfile.id == profile_id)
-                )
-                if profile_exists is None and profile_id == DEFAULT_PROFILE_ID:
-                    latest_occurrence_id = identity.latest_interactive_occurrence_id
+            if state is None and profile_id == DEFAULT_PROFILE_ID:
+                # Legacy Notify Hub deliveries stored the pointer on the
+                # WeComIdentity row before ProfileUserState existed.
+                latest_occurrence_id = identity.latest_interactive_occurrence_id
             if latest_occurrence_id is None:
                 raise ReminderNotFound("no interactive reminder has been delivered")
 

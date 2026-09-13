@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.channels.base import ChannelMessage, ChannelResult, NotificationChannel
@@ -82,14 +82,15 @@ class ProfileRegistry:
                     updated_at=now,
                 )
                 session.add(row)
-            elif not row.is_default:
-                await session.execute(
-                    ApplicationProfile.__table__.update()
-                    .where(ApplicationProfile.id != DEFAULT_PROFILE_ID)
-                    .values(is_default=False, updated_at=now)
-                )
+            else:
+                row.enabled = True
                 row.is_default = True
                 row.updated_at = now
+            await session.execute(
+                ApplicationProfile.__table__.update()
+                .where(ApplicationProfile.id != DEFAULT_PROFILE_ID)
+                .values(is_default=False, updated_at=now)
+            )
             return self._metadata(row)
 
     def set_media_factory(self, media_factory: MediaFactory | None) -> None:
@@ -102,7 +103,9 @@ class ProfileRegistry:
     async def list_profiles(self, *, include_disabled: bool = True) -> list[ProfileMetadata]:
         async with self._sessions() as session:
             statement = select(ApplicationProfile).order_by(
-                ApplicationProfile.is_default.desc(), ApplicationProfile.name, ApplicationProfile.id
+                case((ApplicationProfile.id == DEFAULT_PROFILE_ID, 0), else_=1),
+                ApplicationProfile.name,
+                ApplicationProfile.id,
             )
             if not include_disabled:
                 statement = statement.where(ApplicationProfile.enabled.is_(True))
@@ -130,11 +133,7 @@ class ProfileRegistry:
 
     async def default_profile(self) -> ProfileMetadata:
         async with self._sessions() as session:
-            row = await session.scalar(
-                select(ApplicationProfile)
-                .where(ApplicationProfile.is_default.is_(True))
-                .order_by(ApplicationProfile.id)
-            )
+            row = await session.get(ApplicationProfile, DEFAULT_PROFILE_ID)
             if row is not None:
                 return self._active_metadata(row)
         return self._default_metadata()
@@ -277,7 +276,7 @@ class ProfileRegistry:
             key=row.key,
             name=row.name,
             enabled=bool(row.enabled),
-            is_default=bool(row.is_default),
+            is_default=row.id == DEFAULT_PROFILE_ID,
             capabilities=ProfileCapabilities.from_mapping(row.capabilities),
             created_at=row.created_at,
             updated_at=row.updated_at,

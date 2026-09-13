@@ -81,6 +81,7 @@ class ProfileRoutingService:
                         Person.active.is_(True),
                         WeComIdentity.active.is_(True),
                     )
+                    .distinct()
                     .order_by(ProfileMember.person_id)
                 )
             )

@@ -18,7 +18,7 @@ export function useApplicationProfiles() {
   }
 
   const defaultProfileId = computed(() => {
-    return profiles.value.find((profile) => profile.is_default)?.id ?? profiles.value[0]?.id ?? ''
+    return profiles.value.find((profile) => profile.key === 'notify-hub')?.id ?? ''
   })
 
   function profileLabel(profileId?: string | null) {

@@ -49,7 +49,6 @@ const capabilityOptions: Array<{ key: ProfileCapabilityName; label: string }> = 
 const editForm = reactive({
   name: '',
   enabled: true,
-  is_default: false,
   capabilities: {} as Record<ProfileCapabilityName, boolean>,
   agent_id: '' as string | number,
   wecom_enabled: true,
@@ -131,7 +130,6 @@ function openEditor(profile: ApplicationProfile) {
   Object.assign(editForm, {
     name: profile.name,
     enabled: profile.enabled,
-    is_default: profile.is_default,
     capabilities: { ...profile.capabilities },
     agent_id: profile.wecom?.agent_id ?? '',
     wecom_enabled: profile.wecom?.enabled ?? true,
@@ -150,7 +148,6 @@ async function saveProfile() {
     await api.patch(`/admin/profiles/${selected.value.id}`, {
       name: editForm.name.trim(),
       enabled: editForm.enabled,
-      is_default: editForm.is_default,
       capabilities: editForm.capabilities
     })
     if (editForm.agent_id || selected.value.wecom?.agent_id_configured || editForm.wecom_secret || editForm.callback_token || editForm.callback_aes_key) {
@@ -181,20 +178,6 @@ async function toggle(profile: ApplicationProfile) {
     await load()
   } catch (e) {
     ui.toast(e instanceof Error ? e.message : '状态更新失败', 'danger')
-  } finally {
-    busy.value = false
-  }
-}
-
-async function setDefault(profile: ApplicationProfile) {
-  if (profile.is_default) return
-  busy.value = true
-  try {
-    await api.patch(`/admin/profiles/${profile.id}`, { is_default: true })
-    ui.toast('默认 Profile 已切换', 'success')
-    await load()
-  } catch (e) {
-    ui.toast(e instanceof Error ? e.message : '默认 Profile 更新失败', 'danger')
   } finally {
     busy.value = false
   }
@@ -327,7 +310,7 @@ onMounted(load)
             <div><h3>{{ profile.name }}</h3><span class="mono muted">{{ profile.key }} · {{ profile.id }}</span></div>
           </div>
           <div class="header-badges">
-            <StatusBadge :status="profile.enabled ? 'active' : 'disabled'" /><span v-if="profile.is_default" class="default-tag">DEFAULT</span>
+            <StatusBadge :status="profile.enabled ? 'active' : 'disabled'" /><span v-if="profile.is_default" class="default-tag">系统默认</span>
           </div>
         </div>
       </template>
@@ -356,9 +339,6 @@ onMounted(load)
           <AppButton size="sm" @click="openMembers(profile)">
             <ExternalLink :size="13" />成员
           </AppButton>
-          <AppButton size="sm" :disabled="profile.is_default || busy" @click="setDefault(profile)">
-            {{ profile.is_default ? '默认 Profile' : '设为默认' }}
-          </AppButton>
           <AppButton size="sm" :disabled="profile.is_default || busy" @click="toggle(profile)">
             {{ profile.enabled ? '停用' : '启用' }}
           </AppButton>
@@ -381,8 +361,6 @@ onMounted(load)
       <div class="inline-fields">
         <AppCheckbox v-model="editForm.enabled">
           Profile 启用
-        </AppCheckbox><AppCheckbox v-model="editForm.is_default" :disabled="!editForm.enabled">
-          设为默认
         </AppCheckbox>
       </div>
       <div class="section-title">
