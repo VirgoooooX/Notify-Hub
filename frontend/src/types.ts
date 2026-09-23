@@ -27,10 +27,10 @@ export interface PluginScheduleFormState {
 }
 export interface Plugin{id:string;profile_id?:string;name:string;version?:string;description?:string;status:Status;enabled:boolean;schedule?:PluginSchedule;schedule_inherits_default?:boolean;last_run_at?:UtcInstant;next_run_at?:UtcInstant;consecutive_failures?:number;manifest?:{default_schedule?:PluginSchedule;permissions?:{ai_profiles?:string[];ai_capabilities?:AICapability[]}};secrets?:Array<{name:string;configured:boolean;source?:string;updated_at?:UtcInstant}>}
 export interface AIProvider{id:string;name:string;preset:string;protocol:string;base_url:string;enabled:boolean;allow_private_network:boolean;timeout_seconds:number;max_retries:number;verify_tls:boolean;structured_output_mode:string;api_key_configured:boolean;created_at:UtcInstant;updated_at:UtcInstant}
-export interface AIProviderModel{id:string;provider_id:string;model_id:string;available:boolean;enabled:boolean;created_at:UtcInstant;updated_at:UtcInstant}
+export interface AIProviderModel{id:string;provider_id:string;model_id:string;available:boolean;enabled:boolean;supported_reasoning_levels?:string[]|null;default_reasoning_level?:string|null;created_at:UtcInstant;updated_at:UtcInstant}
 export type AICapability = 'classify' | 'extract' | 'summarize'
 export type AIOutputLanguage = 'auto' | 'zh-CN' | 'en'
-export type AIReasoningEffort = 'provider_default' | 'low' | 'medium' | 'high'
+export type AIReasoningEffort = string
 export type AIVerbosity = 'concise' | 'standard' | 'detailed'
 export interface AIProfile{id:string;name:string;description:string;capability:AICapability;provider_id:string;model:string;temperature:number;max_output_tokens:number;response_format:string;timeout_seconds:number;output_language:AIOutputLanguage;reasoning_effort:AIReasoningEffort;verbosity:AIVerbosity;include_reason:boolean;max_reason_characters:number;system_instructions:string;cache_ttl_seconds:number;daily_request_limit?:number;daily_token_limit?:number;enabled:boolean;revision:number;created_at:UtcInstant;updated_at:UtcInstant}
 export interface AIInvocation{id:string;profile_id:string;plugin_id?:string;plugin_run_id?:string;use_case:string;input_hash:string;cache_hit:boolean;status:Status;latency_ms?:number;input_tokens?:number;output_tokens?:number;error_code?:string;created_at:UtcInstant}

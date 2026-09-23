@@ -156,6 +156,7 @@ Provider、API Key、模型目录、Profile、缓存、预算和调用日志属�
 - 外部内容视为不可信数据，模型无工具、通知或配置写权限。
 - 结构化输出必须通过 Pydantic 校验；不得从任意自然语言猜测业务结论。
 - Provider URL 受 HTTPS、SSRF、DNS、实际连接地址和重定向限制。
+- 模型同步可读取 Provider 提供的逐模型思考等级；已声明等级时，Profile 只允许选择该模型支持的值，调用前再次校验。未显式选择时沿用 Provider 默认值。
 - API Key 使用 SecretStore；日志和 Invocation 不保存正文、Prompt、Authorization 或原始响应。
 - AI 是建议层；事件幂等、是否发送和 checkpoint 由确定性代码负责。
 - AI 不可用时核心平台和纯规则插件继续工作；需要 AI 决策的监控默认 fail closed。

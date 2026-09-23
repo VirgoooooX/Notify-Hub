@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
@@ -251,9 +251,29 @@ class AIControlService:
             return [self._provider_model_view(row) for row in rows]
 
     async def sync_provider_models(
-        self, provider_id: str, model_ids: list[str]
+        self, provider_id: str, model_ids: Sequence[str | Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
-        cleaned = sorted({model_id.strip() for model_id in model_ids if model_id.strip()})
+        catalog: dict[str, tuple[list[str] | None, str | None]] = {}
+        for item in model_ids:
+            if isinstance(item, str):
+                model_id = item.strip()
+                levels = None
+                default = None
+            else:
+                model_id = str(item.get("model_id") or "").strip()
+                levels = item.get("supported_reasoning_levels")
+                default = item.get("default_reasoning_level")
+                if levels is not None and (
+                    not isinstance(levels, list)
+                    or len(levels) > 16
+                    or any(not isinstance(level, str) for level in levels)
+                ):
+                    raise ValueError("provider reasoning levels are invalid")
+                if default is not None and not isinstance(default, str):
+                    raise ValueError("provider default reasoning level is invalid")
+            if model_id:
+                catalog[model_id] = (levels, default)
+        cleaned = sorted(catalog)
         if len(cleaned) > 5000 or any(len(model_id) > 300 for model_id in cleaned):
             raise ValueError("provider model list is invalid")
         discovered = set(cleaned)
@@ -272,9 +292,14 @@ class AIControlService:
                 row.available = row.model_id in discovered
                 if not row.available:
                     row.enabled = False
+                else:
+                    row.supported_reasoning_levels, row.default_reasoning_level = catalog[
+                        row.model_id
+                    ]
                 row.updated_at = now
             for model_id in cleaned:
                 if model_id not in existing:
+                    levels, default = catalog[model_id]
                     session.add(
                         AIProviderModel(
                             id=new_id("aimodel"),
@@ -282,6 +307,8 @@ class AIControlService:
                             model_id=model_id,
                             available=True,
                             enabled=False,
+                            supported_reasoning_levels=levels,
+                            default_reasoning_level=default,
                             created_at=now,
                             updated_at=now,
                         )
@@ -329,7 +356,10 @@ class AIControlService:
             provider = await session.get(AIProvider, provider_id)
             if provider is None or provider.deleted_at is not None:
                 raise AIResourceNotFoundError(provider_id)
-            await self._ensure_model_allowed(session, provider_id, str(values["model"]))
+            model = await self._ensure_model_allowed(session, provider_id, str(values["model"]))
+            self._ensure_reasoning_effort_supported(
+                model, str(values.get("reasoning_effort") or "provider_default")
+            )
             profile_id = str(values.get("id") or new_id("aiprof"))
             if await session.get(AIProfile, profile_id) is not None:
                 raise AIResourceConflictError("AI profile id already exists")
@@ -373,7 +403,10 @@ class AIControlService:
                     raise AIResourceNotFoundError(str(provider_id))
             next_provider_id = str(provider_id or row.provider_id)
             next_model = str(values.get("model", row.model))
-            await self._ensure_model_allowed(session, next_provider_id, next_model)
+            model = await self._ensure_model_allowed(session, next_provider_id, next_model)
+            self._ensure_reasoning_effort_supported(
+                model, str(values.get("reasoning_effort", row.reasoning_effort))
+            )
             changed = any(getattr(row, name) != value for name, value in values.items())
             for name, value in values.items():
                 setattr(row, name, value)
@@ -457,7 +490,9 @@ class AIControlService:
         }
 
     @staticmethod
-    async def _ensure_model_allowed(session: AsyncSession, provider_id: str, model_id: str) -> None:
+    async def _ensure_model_allowed(
+        session: AsyncSession, provider_id: str, model_id: str
+    ) -> AIProviderModel:
         row = await session.scalar(
             select(AIProviderModel).where(
                 AIProviderModel.provider_id == provider_id,
@@ -470,6 +505,17 @@ class AIControlService:
             raise AIModelNotAllowedError(
                 "AI model must be discovered and explicitly enabled for this provider"
             )
+        return row
+
+    @staticmethod
+    def _ensure_reasoning_effort_supported(model: AIProviderModel, effort: str) -> None:
+        if effort == "provider_default":
+            return
+        levels = model.supported_reasoning_levels
+        if (levels is None and effort not in {"low", "medium", "high"}) or (
+            levels is not None and effort not in levels
+        ):
+            raise AIModelNotAllowedError("reasoning effort is not supported by this model")
 
     @staticmethod
     def _provider_model_view(row: AIProviderModel) -> dict[str, Any]:
@@ -479,6 +525,8 @@ class AIControlService:
             "model_id": row.model_id,
             "available": row.available,
             "enabled": row.enabled,
+            "supported_reasoning_levels": row.supported_reasoning_levels,
+            "default_reasoning_level": row.default_reasoning_level,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }

@@ -205,8 +205,21 @@ async def test_ai_provider_models_sync_and_allowlist_api(
     provider_id = created.json()["data"]["id"]
     monkeypatch.setattr(
         app.state.ai_service,
-        "list_models",
-        AsyncMock(return_value=["model-b", "model-a"]),
+        "list_model_catalog",
+        AsyncMock(
+            return_value=[
+                {
+                    "model_id": "model-b",
+                    "supported_reasoning_levels": ["low", "high", "ultra"],
+                    "default_reasoning_level": "low",
+                },
+                {
+                    "model_id": "model-a",
+                    "supported_reasoning_levels": [],
+                    "default_reasoning_level": None,
+                },
+            ]
+        ),
     )
     synced = await client.post(
         f"/api/v1/admin/ai/providers/{provider_id}/models/sync", headers=headers
@@ -217,6 +230,11 @@ async def test_ai_provider_models_sync_and_allowlist_api(
         "model-b",
     ]
     assert not any(item["enabled"] for item in synced.json()["data"]["models"])
+    assert synced.json()["data"]["models"][1]["supported_reasoning_levels"] == [
+        "low",
+        "high",
+        "ultra",
+    ]
 
     allowed = await client.put(
         f"/api/v1/admin/ai/providers/{provider_id}/models/allowed",
@@ -228,7 +246,33 @@ async def test_ai_provider_models_sync_and_allowlist_api(
     assert by_id["model-b"]["enabled"] is True
     assert by_id["model-a"]["enabled"] is False
 
-    app.state.ai_service.list_models.return_value = ["model-a"]
+    unsupported = await client.post(
+        "/api/v1/admin/ai/profiles",
+        headers=headers,
+        json={
+            "name": "Unsupported",
+            "provider_id": provider_id,
+            "model": "model-b",
+            "reasoning_effort": "medium",
+        },
+    )
+    assert unsupported.status_code == 422
+    supported = await client.post(
+        "/api/v1/admin/ai/profiles",
+        headers=headers,
+        json={
+            "name": "Supported",
+            "provider_id": provider_id,
+            "model": "model-b",
+            "reasoning_effort": "ultra",
+        },
+    )
+    assert supported.status_code == 201
+    assert supported.json()["data"]["reasoning_effort"] == "ultra"
+
+    app.state.ai_service.list_model_catalog.return_value = [
+        {"model_id": "model-a", "supported_reasoning_levels": [], "default_reasoning_level": None}
+    ]
     refreshed = await client.post(
         f"/api/v1/admin/ai/providers/{provider_id}/models/sync", headers=headers
     )

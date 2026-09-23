@@ -89,6 +89,12 @@ class AIService:
         self._provider_client = provider_client or OpenAICompatibleClient()
 
     async def list_models(self, provider_id: str) -> list[str]:
+        catalog = await self.list_model_catalog(provider_id, include_metadata=False)
+        return [model["model_id"] for model in catalog]
+
+    async def list_model_catalog(
+        self, provider_id: str, *, include_metadata: bool = True
+    ) -> list[dict[str, Any]]:
         async with self._factory() as session:
             provider = await session.get(AIProvider, provider_id)
             if provider is None or provider.deleted_at is not None:
@@ -102,7 +108,9 @@ class AIService:
             else None
         )
         try:
-            return await self._provider_client.list_models(provider, api_key=api_key)
+            return await self._provider_client.list_model_catalog(
+                provider, api_key=api_key, include_metadata=include_metadata
+            )
         except AIProviderError as exc:
             raise AIGatewayError(exc.code, str(exc), retryable=exc.retryable) from exc
 
@@ -147,7 +155,7 @@ class AIService:
             raise AIGatewayError("ai_invalid_request", "classification labels must be unique")
         if not instruction.strip() or len(instruction) > 10000 or len(use_case) > 100:
             raise AIGatewayError("ai_invalid_request", "classification request is invalid")
-        profile_row, provider = await self._load_configuration(profile, "classify")
+        profile_row, provider, model = await self._load_configuration(profile, "classify")
         input_hashes = {
             item.id: classification_item_hash(item, instruction, cleaned_labels) for item in items
         }
@@ -181,6 +189,7 @@ class AIService:
                 instruction,
                 cleaned_labels,
                 api_key,
+                reasoning_capable=bool(model.supported_reasoning_levels),
             )
             generated = [
                 AIClassificationResult.model_validate(apply_reason_policy(item, profile_row))
@@ -350,7 +359,7 @@ class AIService:
     ) -> StructuredResult:
         if not use_case or len(use_case) > 100:
             raise AIGatewayError("ai_invalid_request", "AI use case is invalid")
-        profile, provider = await self._load_configuration(profile_id, capability)
+        profile, provider, model = await self._load_configuration(profile_id, capability)
         input_hash = structured_hash(content, instruction, options)
         cached = await self._load_single_cached(profile, prompt_version, input_hash, result_type)
         if cached is not None:
@@ -384,6 +393,7 @@ class AIService:
                 schema,
                 result_type,
                 api_key,
+                reasoning_capable=bool(model.supported_reasoning_levels),
             )
             result = result_type.model_validate(apply_reason_policy(result, profile))
             await self._store_single_success(
@@ -413,7 +423,7 @@ class AIService:
 
     async def _load_configuration(
         self, profile_id: str, required_capability: str
-    ) -> tuple[AIProfile, AIProvider]:
+    ) -> tuple[AIProfile, AIProvider, AIProviderModel]:
         async with self._factory() as session:
             profile = await session.get(AIProfile, profile_id)
             if profile is None or profile.deleted_at is not None:
@@ -431,7 +441,7 @@ class AIService:
             if not provider.enabled:
                 raise AIGatewayError("ai_provider_disabled", "AI provider is disabled")
             allowed_model = await session.scalar(
-                select(AIProviderModel.id).where(
+                select(AIProviderModel).where(
                     AIProviderModel.provider_id == provider.id,
                     AIProviderModel.model_id == profile.model,
                     AIProviderModel.available.is_(True),
@@ -443,9 +453,19 @@ class AIService:
                     "ai_model_not_allowed",
                     "AI profile model is not enabled for this provider",
                 )
+            levels = allowed_model.supported_reasoning_levels
+            if profile.reasoning_effort != "provider_default" and (
+                (levels is None and profile.reasoning_effort not in {"low", "medium", "high"})
+                or (levels is not None and profile.reasoning_effort not in levels)
+            ):
+                raise AIGatewayError(
+                    "ai_reasoning_effort_not_supported",
+                    "AI profile reasoning effort is not supported by this model",
+                )
             session.expunge(profile)
             session.expunge(provider)
-            return profile, provider
+            session.expunge(allowed_model)
+            return profile, provider, allowed_model
 
     async def _load_cached(
         self, profile: AIProfile, input_hashes: dict[str, str]
@@ -571,6 +591,8 @@ class AIService:
         instruction: str,
         labels: list[str],
         api_key: str | None,
+        *,
+        reasoning_capable: bool,
     ) -> tuple[list[AIClassificationResult], int | None, int | None]:
         modes = structured_modes(provider.structured_output_mode, profile.response_format)
         last_error: AIProviderError | None = None
@@ -586,6 +608,8 @@ class AIService:
                         messages=messages,
                         temperature=profile.temperature,
                         max_output_tokens=profile.max_output_tokens,
+                        reasoning_effort=profile.reasoning_effort,
+                        reasoning_capable=reasoning_capable,
                         response_format=response_format_value,
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )
@@ -655,6 +679,8 @@ class AIService:
         schema: dict[str, Any],
         result_type: type[StructuredResult],
         api_key: str | None,
+        *,
+        reasoning_capable: bool,
     ) -> tuple[StructuredResult, int | None, int | None]:
         modes = structured_modes(provider.structured_output_mode, profile.response_format)
         last_error: AIProviderError | None = None
@@ -696,6 +722,8 @@ class AIService:
                         messages=messages,
                         temperature=profile.temperature,
                         max_output_tokens=profile.max_output_tokens,
+                        reasoning_effort=profile.reasoning_effort,
+                        reasoning_capable=reasoning_capable,
                         response_format=response_format_value,
                         timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
                     )

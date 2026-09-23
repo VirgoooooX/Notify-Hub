@@ -73,7 +73,7 @@ describe('AIProfilesView', () => {
         if (path.endsWith('/admin/ai/providers/aip_test/models')) {
           return json({
             models: [
-              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true },
+              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true, supported_reasoning_levels: ['low', 'xhigh', 'ultra'], default_reasoning_level: 'low' },
               { id: 'blocked', provider_id: 'aip_test', model_id: 'model-blocked', available: true, enabled: false },
             ],
           })
@@ -96,6 +96,10 @@ describe('AIProfilesView', () => {
     const modelOptions = wrapper.find('#ai-profile-model').findAll('option').map((item) => item.text())
     expect(modelOptions).toContain('model-allowed')
     expect(modelOptions).not.toContain('model-blocked')
+    await wrapper.find('#ai-profile-model').setValue('model-allowed')
+    const reasoningOptions = wrapper.find('#profile-reasoning').findAll('option').map((item) => item.attributes('value'))
+    expect(reasoningOptions).toEqual(['provider_default', 'low', 'xhigh', 'ultra'])
+    expect(wrapper.find('#profile-reasoning').text()).toContain('Provider 默认（低）')
 
     wrapper.unmount()
   })

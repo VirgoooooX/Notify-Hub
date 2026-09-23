@@ -41,7 +41,7 @@ const form = reactive(defaultAIProviderForm())
 
 const keyForm = reactive({ value: '' })
 const modelProvider = computed(() => items.value.find((item: AIProvider) => item.id === modelTarget.value))
-const availableCount = computed(() => models.value.filter((model: AIProviderModel) => model.available).length)
+const availableModels = computed(() => models.value.filter((model: AIProviderModel) => model.available))
 
 watch(
   () => form.preset,
@@ -184,7 +184,7 @@ async function syncModels() {
         `/admin/ai/providers/${modelTarget.value}/models/sync`,
       ),
     )
-    ui.toast(`同步完成，发现 ${availableCount.value} 个当前可用模型`, 'success')
+    ui.toast(`同步完成，发现 ${availableModels.value.length} 个当前可用模型`, 'success')
   } catch (error) {
     ui.toast(error instanceof Error ? error.message : '模型同步失败', 'danger')
   } finally {
@@ -397,14 +397,13 @@ onMounted(load)
       正在读取模型清单…
     </div>
     
-    <AppAlert v-else-if="!models.length" variant="warning">
-      尚未发现模型。请先确认 Provider 凭据和连接测试正常，然后点击“从远端同步”。
+    <AppAlert v-else-if="!availableModels.length" variant="warning">
+      当前没有远端可用模型。请确认 Provider 凭据和连接测试正常，然后点击“从远端同步”。
     </AppAlert>
 
     <template v-else>
       <div class="model-summary" aria-live="polite">
-        <span><strong>{{ models.length }}</strong> 个已发现</span>
-        <span><strong>{{ availableCount }}</strong> 个远端可用</span>
+        <span><strong>{{ availableModels.length }}</strong> 个远端可用</span>
         <span><strong>{{ selectedModelIds.length }}</strong> 个已选择</span>
       </div>
 
@@ -413,22 +412,19 @@ onMounted(load)
           允许 AI Profile 使用的模型
         </legend>
         <label
-          v-for="model in models"
+          v-for="model in availableModels"
           :key="model.id"
           class="model-option"
-          :class="{ 'model-option--unavailable': !model.available }"
         >
           <input
             v-model="selectedModelIds"
             type="checkbox"
             :value="model.model_id"
-            :disabled="!model.available"
           >
           <span class="model-option__id mono">{{ model.model_id }}</span>
-          <span v-if="model.available" class="model-option__state">
+          <span class="model-option__state">
             {{ model.enabled ? '已允许' : '待授权' }}
           </span>
-          <span v-else class="model-option__state text-danger">远端已不可用</span>
         </label>
       </fieldset>
 
@@ -650,12 +646,6 @@ onMounted(load)
 
 .model-option:hover {
   background-color: var(--surface-hover);
-}
-
-.model-option--unavailable {
-  background-color: var(--color-neutral-100);
-  color: var(--text-secondary);
-  cursor: not-allowed;
 }
 
 .model-option__id {

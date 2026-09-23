@@ -35,7 +35,7 @@ AIProtocol = Literal["openai_chat_completions", "openai_responses"]
 StructuredMode = Literal["auto", "json_schema", "json_object", "prompt_json"]
 AICapability = Literal["classify", "extract", "summarize"]
 OutputLanguage = Literal["auto", "zh-CN", "en"]
-ReasoningEffort = Literal["provider_default", "low", "medium", "high"]
+ReasoningEffort = str
 Verbosity = Literal["concise", "standard", "detailed"]
 
 
@@ -109,7 +109,9 @@ class AIProfileCreate(BaseModel):
     max_output_tokens: int = Field(default=160, ge=1, le=100000)
     response_format: StructuredMode = "auto"
     output_language: OutputLanguage = "auto"
-    reasoning_effort: ReasoningEffort = "provider_default"
+    reasoning_effort: ReasoningEffort = Field(
+        default="provider_default", pattern=r"^[a-z][a-z0-9_-]{0,29}$"
+    )
     verbosity: Verbosity = "standard"
     include_reason: bool = True
     max_reason_characters: int = Field(default=200, ge=0, le=1000)
@@ -133,7 +135,9 @@ class AIProfileUpdate(BaseModel):
     max_output_tokens: int | None = Field(default=None, ge=1, le=100000)
     response_format: StructuredMode | None = None
     output_language: OutputLanguage | None = None
-    reasoning_effort: ReasoningEffort | None = None
+    reasoning_effort: ReasoningEffort | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_-]{0,29}$"
+    )
     verbosity: Verbosity | None = None
     include_reason: bool | None = None
     max_reason_characters: int | None = Field(default=None, ge=0, le=1000)
@@ -314,7 +318,7 @@ async def list_provider_models(provider_id: str, request: Request) -> DataRespon
 @router.post("/providers/{provider_id}/models/sync")
 async def sync_provider_models(provider_id: str, request: Request) -> DataResponse:
     try:
-        discovered = await _gateway(request).list_models(provider_id)
+        discovered = await _gateway(request).list_model_catalog(provider_id)
         models = await _service(request).sync_provider_models(provider_id, discovered)
     except AIGatewayError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=exc.code) from exc

@@ -51,6 +51,8 @@ class AIProviderModel(StringIdMixin, TimestampMixin, Base):
     model_id: Mapped[str] = mapped_column(String(300), nullable=False)
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    supported_reasoning_levels: Mapped[list[str] | None] = mapped_column(JSON)
+    default_reasoning_level: Mapped[str | None] = mapped_column(String(30))
 
 
 class AIProfile(StringIdMixin, TimestampMixin, Base):

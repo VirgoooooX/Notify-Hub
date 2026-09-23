@@ -363,6 +363,10 @@ async def test_ai_profile_policy_is_applied_and_capability_is_enforced(tmp_path:
         nonlocal calls
         calls += 1
         payload = json.loads(request.content)
+        assert payload["reasoning_effort"] == "low"
+        assert payload["max_completion_tokens"] == 160
+        assert "temperature" not in payload
+        assert "max_tokens" not in payload
         system_prompts.append(payload["messages"][0]["content"])
         schema = payload["response_format"]["json_schema"]["schema"]
         result_schema = schema["properties"]["results"]["items"]
@@ -476,11 +480,165 @@ async def test_ai_provider_lists_models_without_exposing_response_body(tmp_path:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.url.path.endswith("/models")
+        assert "client_version" not in request.url.params
         return httpx.Response(200, json={"data": [{"id": "model-b"}, {"id": "model-a"}]})
 
     service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
     assert await service.list_models("aip_test") == ["model-a", "model-b"]
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ai_provider_reads_cpa_model_reasoning_levels(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "client_version" not in request.url.params:
+            return httpx.Response(
+                200,
+                json={
+                    "data": [{"id": "gpt-6-sol"}, {"id": "claude-sonnet"}, {"id": "standard-only"}]
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "models": [
+                    {
+                        "slug": "gpt-6-sol",
+                        "default_reasoning_level": "medium",
+                        "supported_reasoning_levels": [
+                            {"effort": "low"},
+                            {"effort": "medium"},
+                            {"effort": "ultra"},
+                        ],
+                    },
+                    {"slug": "claude-sonnet", "supported_reasoning_levels": None},
+                ]
+            },
+        )
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    assert await service.list_model_catalog("aip_test") == [
+        {
+            "model_id": "claude-sonnet",
+            "supported_reasoning_levels": [],
+            "default_reasoning_level": None,
+        },
+        {
+            "model_id": "gpt-6-sol",
+            "supported_reasoning_levels": ["low", "medium", "ultra"],
+            "default_reasoning_level": "medium",
+        },
+        {
+            "model_id": "standard-only",
+            "supported_reasoning_levels": None,
+            "default_reasoning_level": None,
+        },
+    ]
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_ai_provider_falls_back_when_catalog_query_is_unsupported(tmp_path: Path) -> None:
+    requests: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        is_catalog = "client_version" in request.url.params
+        requests.append(is_catalog)
+        if is_catalog:
+            return httpx.Response(400)
+        return httpx.Response(200, json={"data": [{"id": "plain-model"}]})
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    assert await service.list_model_catalog("aip_test") == [
+        {
+            "model_id": "plain-model",
+            "supported_reasoning_levels": None,
+            "default_reasoning_level": None,
+        }
+    ]
+    assert requests == [False, True]
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_rejects_reasoning_level_removed_by_sync(tmp_path: Path) -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("unsupported reasoning level must be rejected before an HTTP request")
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    control = AIControlService(factory)
+    await control.sync_provider_models(
+        "aip_test",
+        [
+            {
+                "model_id": "test-model",
+                "supported_reasoning_levels": ["low", "ultra"],
+                "default_reasoning_level": "low",
+            }
+        ],
+    )
+    await control.update_profile("test_classifier", {"reasoning_effort": "ultra"})
+    await control.sync_provider_models(
+        "aip_test",
+        [
+            {
+                "model_id": "test-model",
+                "supported_reasoning_levels": ["low"],
+                "default_reasoning_level": "low",
+            }
+        ],
+    )
+    with pytest.raises(AIGatewayError) as exc_info:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id="test_plugin",
+            plugin_run_id="run-1",
+            use_case="reasoning_level_removed",
+            content="candidate",
+            instruction="Classify candidate.",
+            labels=["notify", "ignore"],
+        )
+    assert exc_info.value.code == "ai_reasoning_effort_not_supported"
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_uses_reasoning_token_limit_with_provider_default(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["max_completion_tokens"] == 160
+        assert "reasoning_effort" not in payload
+        assert "temperature" not in payload
+        assert "max_tokens" not in payload
+        return _success_response(request)
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    control = AIControlService(factory)
+    await control.sync_provider_models(
+        "aip_test",
+        [
+            {
+                "model_id": "test-model",
+                "supported_reasoning_levels": ["low", "high"],
+                "default_reasoning_level": "low",
+            }
+        ],
+    )
+    result = await service.classify(
+        profile="test_classifier",
+        plugin_id="test_plugin",
+        plugin_run_id="run-1",
+        use_case="provider_default_reasoning",
+        content="candidate",
+        instruction="Classify candidate.",
+        labels=["notify", "ignore"],
+    )
+    assert result.label == "notify"
+    await client.aclose()
+    await factory.kw["bind"].dispose()
 
 
 @pytest.mark.asyncio

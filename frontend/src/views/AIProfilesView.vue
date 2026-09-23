@@ -41,9 +41,15 @@ const languageLabels: Record<AIOutputLanguage, string> = {
 }
 const reasoningLabels: Record<AIReasoningEffort, string> = {
   provider_default: 'Provider 默认',
+  none: '无',
+  minimal: '极低',
   low: '低',
   medium: '中',
   high: '高',
+  xhigh: '极高',
+  max: '最大',
+  ultra: 'Ultra',
+  auto: '自动',
 }
 const verbosityLabels: Record<AIVerbosity, string> = {
   concise: '简洁',
@@ -69,6 +75,19 @@ const form = reactive(defaultAIProfileForm())
 const allowedModels = computed(() =>
   providerModels.value.filter((model) => model.available && model.enabled),
 )
+const selectedModel = computed(() =>
+  providerModels.value.find((model) => model.model_id === form.model),
+)
+const reasoningOptions = computed(() => [
+  'provider_default',
+  ...(selectedModel.value?.supported_reasoning_levels ?? ['low', 'medium', 'high']),
+])
+
+watch([() => form.model, providerModels, modelsLoading], () => {
+  if (!modelsLoading.value && !reasoningOptions.value.includes(form.reasoning_effort)) {
+    form.reasoning_effort = 'provider_default'
+  }
+})
 
 const deleteDescription = computed(() => {
   const name = deleteTarget.value?.name ?? '这个 Profile'
@@ -349,6 +368,7 @@ onMounted(() => {
               min="1"
               max="100000"
             >
+            <span v-if="selectedModel?.supported_reasoning_levels?.length" class="muted font-xs">思考模型的上限也包含内部思考 Token；较高等级可能需要提高此值。</span>
           </div>
           <div class="field">
             <label for="profile-timeout">调用超时（秒）</label>
@@ -401,19 +421,12 @@ onMounted(() => {
           <div class="field">
             <label for="profile-reasoning">推理强度</label>
             <select id="profile-reasoning" v-model="form.reasoning_effort" class="select">
-              <option value="provider_default">
-                Provider 默认
-              </option>
-              <option value="low">
-                低
-              </option>
-              <option value="medium">
-                中
-              </option>
-              <option value="high">
-                高
+              <option v-for="effort in reasoningOptions" :key="effort" :value="effort">
+                {{ reasoningLabels[effort] ?? effort }}{{ effort === 'provider_default' && selectedModel?.default_reasoning_level ? `（${reasoningLabels[selectedModel.default_reasoning_level] ?? selectedModel.default_reasoning_level}）` : '' }}
               </option>
             </select>
+            <span v-if="selectedModel?.supported_reasoning_levels?.length === 0" class="muted font-xs">Provider 未提供此模型可调的思考等级，将使用默认模式。</span>
+            <span v-if="selectedModel?.supported_reasoning_levels === null || selectedModel?.supported_reasoning_levels === undefined" class="muted font-xs">Provider 未声明此模型的思考等级，仅提供常用等级供选择。</span>
           </div>
           <div class="field">
             <label for="profile-verbosity">详细程度</label>
@@ -563,7 +576,7 @@ onMounted(() => {
           <td>
             <div class="policy-detail-cell">
               <span>{{ languageLabels[item.output_language] }} · {{ verbosityLabels[item.verbosity] }}</span>
-              <span class="muted font-xs">推理 {{ reasoningLabels[item.reasoning_effort] }} · {{ item.include_reason ? `理由 ≤ ${item.max_reason_characters} 字` : '无理由' }}</span>
+              <span class="muted font-xs">推理 {{ reasoningLabels[item.reasoning_effort] ?? item.reasoning_effort }} · {{ item.include_reason ? `理由 ≤ ${item.max_reason_characters} 字` : '无理由' }}</span>
             </div>
           </td>
           <td>

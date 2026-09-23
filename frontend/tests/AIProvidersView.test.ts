@@ -35,6 +35,51 @@ afterEach(() => {
 })
 
 describe('AIProvidersView', () => {
+  it('shows only remotely available models and handles an empty sync result', async () => {
+    setApiFetcher(
+      vi.fn(async (input, init) => {
+        const path = String(input)
+        if (path.endsWith('/admin/ai/providers')) return json([provider])
+        if (path.endsWith('/models') && init?.method !== 'POST') {
+          return json({
+            models: [
+              { id: 'active', model_id: 'active-model', available: true, enabled: true },
+              { id: 'retired', model_id: 'retired-model', available: false, enabled: false },
+            ],
+          })
+        }
+        if (path.endsWith('/models/sync')) {
+          return json({
+            models: [
+              { id: 'active', model_id: 'active-model', available: false, enabled: false },
+              { id: 'retired', model_id: 'retired-model', available: false, enabled: false },
+            ],
+          })
+        }
+        throw new Error(`unexpected request: ${path}`)
+      }) as typeof fetch,
+    )
+
+    const wrapper = mount(AIProvidersView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    const configure = wrapper.findAll('.provider-actions button').find((button) => button.text() === '同步 / 配置模型')
+    await configure?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.model-option')).toHaveLength(1)
+    expect(wrapper.get('.model-option').text()).toContain('active-model')
+    expect(wrapper.text()).not.toContain('retired-model')
+    expect(wrapper.get('.model-summary').text()).toContain('1 个远端可用')
+
+    const sync = wrapper.findAll('.model-control__actions button').find((button) => button.text() === '从远端同步')
+    await sync?.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('.model-option')).toHaveLength(0)
+    expect(wrapper.text()).toContain('当前没有远端可用模型')
+    wrapper.unmount()
+  })
+
   it('updates an existing Provider without sending an API key', async () => {
     const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = []
     setApiFetcher(
