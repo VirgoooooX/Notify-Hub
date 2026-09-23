@@ -30,7 +30,7 @@ async def _default_profile_crypto(request: Request) -> WeComCrypto:
         raise AppError(exc.code.lower(), exc.message, 409) from exc
     try:
         crypto = await request.app.state.profile_registry.callback_crypto(profile.id)
-        return crypto
+        return cast(WeComCrypto, crypto)
     except ProfileError as exc:
         compatibility_crypto = getattr(request.app.state, "wecom_callback_crypto", None)
         if compatibility_crypto is not None:

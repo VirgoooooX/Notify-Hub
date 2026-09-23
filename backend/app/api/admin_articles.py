@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from app.api.dependencies import require_article_actor
 from app.api.errors import AppError
@@ -61,7 +61,7 @@ async def _actor_profile(
     if requested is None:
         return None
     try:
-        return await request.app.state.profile_registry.resolve_id(requested)
+        return cast(str, await request.app.state.profile_registry.resolve_id(requested))
     except ProfileError as exc:
         raise AppError(exc.code.lower(), exc.message, 409) from exc
 

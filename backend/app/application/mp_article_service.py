@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from app.api.errors import AppError
 from app.channels.base import ChannelMessage
@@ -143,7 +143,7 @@ class MPArticleLibraryService:
             query = select(MpArticle).where(MpArticle.id == article_id)
             if profile_id is not None:
                 query = query.where(MpArticle.profile_id == profile_id)
-            return await session.scalar(query)
+            return cast(MpArticle | None, await session.scalar(query))
 
     async def mark_published(self, article_id: str, *, profile_id: str | None = None) -> MpArticle:
         now = self._clock.now()

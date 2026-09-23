@@ -1812,13 +1812,13 @@ class ReminderService:
         if occurrence_id is not None:
             cancelled = await self._cancel_pending_deliveries(
                 reminder_id,
-                profile_id=reminder.profile_id,
+                profile_id=profile_id,
                 occurrence_id=occurrence_id,
                 recipient_id=None if completed else cancel_recipient_id,
             )
         else:
             cancelled = (
-                await self._cancel_pending_deliveries(reminder_id, profile_id=reminder.profile_id)
+                await self._cancel_pending_deliveries(reminder_id, profile_id=profile_id)
                 if completed
                 else 0
             )

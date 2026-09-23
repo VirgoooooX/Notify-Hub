@@ -45,6 +45,7 @@ from app.infrastructure.database.reminder_models import (
 from app.profiles.constants import DEFAULT_PROFILE_ID, DEFAULT_PROFILE_KEY
 from app.profiles.errors import ProfileDisabled, ProfileSecretMissing
 from app.profiles.registry import ProfileRegistry
+from app.profiles.service import WeComProfileUpdate
 from app.profiles.types import DEFAULT_CAPABILITIES
 from app.workers.delivery_worker import DeliveryWorker
 from sqlalchemy import func, inspect, select, text
@@ -771,6 +772,25 @@ async def test_callback_only_profile_does_not_require_agent_or_outbound_secret(
         assert crypto is not None
     finally:
         await registry.close()
+
+
+@pytest.mark.integration
+async def test_wecom_configuration_inherits_profile_callback_capability(
+    api: tuple[httpx.AsyncClient, Any],
+) -> None:
+    _client, app = api
+    await _add_profile(
+        app,
+        "profile_callback_default",
+        "callback-default",
+        capabilities={**DEFAULT_CAPABILITIES, "callback_enabled": True},
+    )
+
+    configured = await app.state.application_profile_service.configure_wecom(
+        "profile_callback_default", WeComProfileUpdate(agent_id=42)
+    )
+
+    assert configured["callback_enabled"] is True
 
 
 @pytest.mark.integration

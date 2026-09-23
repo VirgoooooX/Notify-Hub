@@ -139,6 +139,7 @@ class InteractionWorker:
                             response_code, sender, profile_id
                         )
                     else:
+                        assert self._update_card is not None
                         card_result = await self._update_card(response_code, sender)
                     if not card_result.success:
                         logger.warning(

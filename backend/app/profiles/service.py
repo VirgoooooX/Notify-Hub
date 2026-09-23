@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.clock import Clock, SystemClock
@@ -153,7 +154,7 @@ class ApplicationProfileService:
                 profile.enabled = command.enabled
             if is_system_default:
                 await session.execute(
-                    ApplicationProfile.__table__.update()
+                    update(ApplicationProfile)
                     .where(ApplicationProfile.id != profile.id)
                     .values(is_default=False, updated_at=now)
                 )
@@ -234,7 +235,7 @@ class ApplicationProfileService:
                     agent_id=command.agent_id,
                     enabled=profile.enabled,
                     callback_enabled=(
-                        profile.capabilities.callback_enabled
+                        ProfileCapabilities.from_mapping(profile.capabilities).callback_enabled
                         if command.callback_enabled is None
                         else command.callback_enabled
                     ),
@@ -252,7 +253,7 @@ class ApplicationProfileService:
                 if command.callback_enabled is not None:
                     config.callback_enabled = command.callback_enabled
                 config.updated_at = now
-            configured = {
+            configured: dict[str, object] = {
                 "agent_id_configured": config.agent_id is not None,
                 "enabled": bool(config.enabled),
                 "callback_enabled": bool(config.callback_enabled),
@@ -303,7 +304,7 @@ class ApplicationProfileService:
                     ProfileMember.person_id == person_id,
                 )
             )
-            return bool(result.rowcount)
+            return bool(cast(CursorResult[Any], result).rowcount)
 
     async def members(
         self, profile_id: str, *, enabled_only: bool = False

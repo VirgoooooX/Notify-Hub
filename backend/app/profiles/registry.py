@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import case, select
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.channels.base import ChannelMessage, ChannelResult, NotificationChannel
@@ -67,7 +67,7 @@ class ProfileRegistry:
             row = await session.get(ApplicationProfile, DEFAULT_PROFILE_ID)
             if row is None:
                 await session.execute(
-                    ApplicationProfile.__table__.update()
+                    update(ApplicationProfile)
                     .where(ApplicationProfile.is_default.is_(True))
                     .values(is_default=False, updated_at=now)
                 )
@@ -87,7 +87,7 @@ class ProfileRegistry:
                 row.is_default = True
                 row.updated_at = now
             await session.execute(
-                ApplicationProfile.__table__.update()
+                update(ApplicationProfile)
                 .where(ApplicationProfile.id != DEFAULT_PROFILE_ID)
                 .values(is_default=False, updated_at=now)
             )
@@ -256,7 +256,7 @@ class ProfileRegistry:
             WeComCredentials(
                 corp_id=corp_id,
                 agent_id=agent_id,
-                secret=secret,
+                secret=secret or "",
                 api_base_url=self._settings.wecom_api_base_url,
                 request_timeout_seconds=self._settings.wecom_request_timeout_seconds,
                 token_refresh_skew_seconds=self._settings.wecom_token_refresh_skew_seconds,
@@ -267,7 +267,10 @@ class ProfileRegistry:
     async def _secret(self, name: str, profile_id: str) -> str | None:
         if self._secret_store is None:
             return None
-        return await self._secret_store.get("application_profile", profile_id, name)
+        return cast(
+            str | None,
+            await self._secret_store.get("application_profile", profile_id, name),
+        )
 
     @staticmethod
     def _metadata(row: ApplicationProfile) -> ProfileMetadata:

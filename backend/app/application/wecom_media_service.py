@@ -36,7 +36,7 @@ class DatabaseMediaCacheRepository:
                     MediaProviderRef.channel == self._channel,
                 )
             )
-            if reference is not None:
+            if reference is not None and reference.expires_at is not None:
                 return UploadedTemporaryMedia(reference.provider_media_id, reference.expires_at)
             if self._profile_id != DEFAULT_PROFILE_ID:
                 return None
