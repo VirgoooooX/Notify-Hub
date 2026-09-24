@@ -282,6 +282,74 @@ async def test_ai_provider_models_sync_and_allowlist_api(
 
 
 @pytest.mark.asyncio
+async def test_ai_provider_model_metadata_sync_preserves_allowlist(
+    api: tuple[httpx.AsyncClient, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client, app = api
+    headers = await _admin_headers(client)
+    created = await client.post(
+        "/api/v1/admin/ai/providers",
+        headers=headers,
+        json={
+            "id": "aip_metadata_sync",
+            "name": "Metadata sync",
+            "preset": "custom",
+            "base_url": "https://provider.example.test/v1",
+        },
+    )
+    provider_id = created.json()["data"]["id"]
+    levels = ["low", "medium", "high", "xhigh", "max", "ultra"]
+    monkeypatch.setattr(
+        app.state.ai_service,
+        "list_model_catalog",
+        AsyncMock(
+            return_value=[
+                {
+                    "model_id": "gpt-6-luna",
+                    "supported_reasoning_levels": None,
+                    "default_reasoning_level": None,
+                }
+            ]
+        ),
+    )
+    synced = await client.post(
+        f"/api/v1/admin/ai/providers/{provider_id}/models/sync", headers=headers
+    )
+    assert synced.status_code == 200
+    allowed = await client.put(
+        f"/api/v1/admin/ai/providers/{provider_id}/models/allowed",
+        headers=headers,
+        json={"model_ids": ["gpt-6-luna"]},
+    )
+    assert allowed.status_code == 200
+
+    app.state.ai_service.list_model_catalog.return_value = [
+        {
+            "model_id": "gpt-6-luna",
+            "supported_reasoning_levels": levels,
+            "default_reasoning_level": "medium",
+        },
+        {
+            "model_id": "new-remote-model",
+            "supported_reasoning_levels": ["low"],
+            "default_reasoning_level": "low",
+        },
+    ]
+    refreshed = await client.post(
+        f"/api/v1/admin/ai/providers/{provider_id}/models/metadata/sync", headers=headers
+    )
+
+    assert refreshed.status_code == 200
+    models = refreshed.json()["data"]["models"]
+    assert len(models) == 1
+    assert models[0]["model_id"] == "gpt-6-luna"
+    assert models[0]["available"] is True
+    assert models[0]["enabled"] is True
+    assert models[0]["supported_reasoning_levels"] == levels
+    assert models[0]["default_reasoning_level"] == "medium"
+
+
+@pytest.mark.asyncio
 async def test_ai_profile_delete_is_soft_and_blocks_active_plugin(
     api: tuple[httpx.AsyncClient, object],
 ) -> None:

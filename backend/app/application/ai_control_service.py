@@ -253,29 +253,8 @@ class AIControlService:
     async def sync_provider_models(
         self, provider_id: str, model_ids: Sequence[str | Mapping[str, Any]]
     ) -> list[dict[str, Any]]:
-        catalog: dict[str, tuple[list[str] | None, str | None]] = {}
-        for item in model_ids:
-            if isinstance(item, str):
-                model_id = item.strip()
-                levels = None
-                default = None
-            else:
-                model_id = str(item.get("model_id") or "").strip()
-                levels = item.get("supported_reasoning_levels")
-                default = item.get("default_reasoning_level")
-                if levels is not None and (
-                    not isinstance(levels, list)
-                    or len(levels) > 16
-                    or any(not isinstance(level, str) for level in levels)
-                ):
-                    raise ValueError("provider reasoning levels are invalid")
-                if default is not None and not isinstance(default, str):
-                    raise ValueError("provider default reasoning level is invalid")
-            if model_id:
-                catalog[model_id] = (levels, default)
+        catalog = self._normalize_model_catalog(model_ids)
         cleaned = sorted(catalog)
-        if len(cleaned) > 5000 or any(len(model_id) > 300 for model_id in cleaned):
-            raise ValueError("provider model list is invalid")
         discovered = set(cleaned)
         now = self._clock()
         async with self._factory() as session, session.begin():
@@ -314,6 +293,56 @@ class AIControlService:
                         )
                     )
         return await self.list_provider_models(provider_id)
+
+    async def sync_provider_model_metadata(
+        self, provider_id: str, model_ids: Sequence[str | Mapping[str, Any]]
+    ) -> list[dict[str, Any]]:
+        catalog = self._normalize_model_catalog(
+            [item for item in model_ids if not isinstance(item, str)]
+        )
+        now = self._clock()
+        async with self._factory() as session, session.begin():
+            provider = await session.get(AIProvider, provider_id)
+            if provider is None or provider.deleted_at is not None:
+                raise AIResourceNotFoundError(provider_id)
+            rows = await session.scalars(
+                select(AIProviderModel).where(
+                    AIProviderModel.provider_id == provider_id,
+                    AIProviderModel.model_id.in_(catalog),
+                )
+            )
+            for row in rows:
+                row.supported_reasoning_levels, row.default_reasoning_level = catalog[row.model_id]
+                row.updated_at = now
+        return await self.list_provider_models(provider_id)
+
+    @staticmethod
+    def _normalize_model_catalog(
+        model_ids: Sequence[str | Mapping[str, Any]],
+    ) -> dict[str, tuple[list[str] | None, str | None]]:
+        catalog: dict[str, tuple[list[str] | None, str | None]] = {}
+        for item in model_ids:
+            if isinstance(item, str):
+                model_id = item.strip()
+                levels = None
+                default = None
+            else:
+                model_id = str(item.get("model_id") or "").strip()
+                levels = item.get("supported_reasoning_levels")
+                default = item.get("default_reasoning_level")
+                if levels is not None and (
+                    not isinstance(levels, list)
+                    or len(levels) > 16
+                    or any(not isinstance(level, str) for level in levels)
+                ):
+                    raise ValueError("provider reasoning levels are invalid")
+                if default is not None and not isinstance(default, str):
+                    raise ValueError("provider default reasoning level is invalid")
+            if model_id:
+                catalog[model_id] = (levels, default)
+        if len(catalog) > 5000 or any(len(model_id) > 300 for model_id in catalog):
+            raise ValueError("provider model list is invalid")
+        return catalog
 
     async def set_allowed_models(
         self, provider_id: str, model_ids: list[str]

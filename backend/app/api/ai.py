@@ -328,6 +328,19 @@ async def sync_provider_models(provider_id: str, request: Request) -> DataRespon
     return DataResponse(data={"models": models})
 
 
+@router.post("/providers/{provider_id}/models/metadata/sync")
+async def sync_provider_model_metadata(provider_id: str, request: Request) -> DataResponse:
+    try:
+        discovered = await _gateway(request).list_model_catalog(provider_id)
+        models = await _service(request).sync_provider_model_metadata(provider_id, discovered)
+    except AIGatewayError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=exc.code) from exc
+    except (AIResourceNotFoundError, ValueError) as exc:
+        raise _translate_error(exc) from exc
+    await _audit(request, "ai.provider.models.metadata.sync", "ai_provider", provider_id)
+    return DataResponse(data={"models": models})
+
+
 @router.put("/providers/{provider_id}/models/allowed")
 async def set_allowed_provider_models(
     provider_id: str, body: AllowedModelsInput, request: Request

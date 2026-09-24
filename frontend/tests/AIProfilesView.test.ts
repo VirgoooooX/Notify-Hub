@@ -104,6 +104,95 @@ describe('AIProfilesView', () => {
     wrapper.unmount()
   })
 
+  it('refreshes missing model reasoning metadata and shows Provider levels', async () => {
+    const requests: Array<{ path: string; method: string }> = []
+    const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
+    setApiFetcher(
+      vi.fn(async (input, init) => {
+        const path = String(input)
+        const method = init?.method ?? 'GET'
+        requests.push({ path, method })
+        if (path.endsWith('/admin/ai/profiles')) return json([profile])
+        if (path.endsWith('/admin/ai/providers')) {
+          return json([
+            {
+              id: 'aip_test',
+              name: 'Test Provider',
+              preset: 'custom',
+              protocol: 'openai_chat_completions',
+              base_url: 'https://example.com/v1',
+              enabled: true,
+              allow_private_network: false,
+              timeout_seconds: 30,
+              max_retries: 2,
+              verify_tls: true,
+              structured_output_mode: 'auto',
+              api_key_configured: true,
+              created_at: '2026-07-15T00:00:00Z',
+              updated_at: '2026-07-15T00:00:00Z',
+            },
+          ])
+        }
+        if (path.includes('/admin/ai/invocations')) return json([])
+        if (path.endsWith('/admin/ai/providers/aip_test/models')) {
+          return json({
+            models: [
+              {
+                id: 'gpt-6-luna',
+                provider_id: 'aip_test',
+                model_id: 'gpt-6-luna',
+                available: true,
+                enabled: true,
+                supported_reasoning_levels: null,
+                default_reasoning_level: null,
+              },
+            ],
+          })
+        }
+        if (
+          method === 'POST' &&
+          path.endsWith('/admin/ai/providers/aip_test/models/metadata/sync')
+        ) {
+          return json({
+            models: [
+              {
+                id: 'gpt-6-luna',
+                provider_id: 'aip_test',
+                model_id: 'gpt-6-luna',
+                available: true,
+                enabled: true,
+                supported_reasoning_levels: levels,
+                default_reasoning_level: 'medium',
+              },
+            ],
+          })
+        }
+        throw new Error(`unexpected request: ${method} ${path}`)
+      }) as typeof fetch,
+    )
+
+    const wrapper = mount(AIProfilesView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    await wrapper.get('button.btn--primary').trigger('click')
+    await flushPromises()
+    await wrapper.get('#ai-profile-model').setValue('gpt-6-luna')
+
+    const reasoningSelect = wrapper.find('#profile-reasoning')
+    expect(reasoningSelect.findAll('option').map((item) => item.attributes('value'))).toEqual([
+      'provider_default',
+      ...levels,
+    ])
+    expect(reasoningSelect.text()).toContain('极高')
+    expect(reasoningSelect.text()).toContain('最大')
+    expect(reasoningSelect.text()).toContain('Ultra')
+    expect(requests).toContainEqual({
+      path: '/api/v1/admin/ai/providers/aip_test/models/metadata/sync',
+      method: 'POST',
+    })
+
+    wrapper.unmount()
+  })
+
   it('confirms deletion and keeps the history warning visible', async () => {
     const requests: Array<{ path: string; method: string }> = []
     setApiFetcher(
@@ -215,7 +304,7 @@ describe('AIProfilesView', () => {
         if (path.endsWith('/admin/ai/providers/aip_test/models')) {
           return json({
             models: [
-              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true },
+              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true, supported_reasoning_levels: ['low'], default_reasoning_level: 'low' },
             ],
           })
         }

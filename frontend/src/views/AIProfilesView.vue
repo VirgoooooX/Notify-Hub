@@ -71,6 +71,7 @@ const deleteTarget = ref<AIProfile>()
 const { pending: deleteBusy, run: runDelete } = useAsyncAction()
 
 const form = reactive(defaultAIProfileForm())
+let providerModelsLoadRevision = 0
 
 const allowedModels = computed(() =>
   providerModels.value.filter((model) => model.available && model.enabled),
@@ -95,6 +96,7 @@ const deleteDescription = computed(() => {
 })
 
 async function loadProviderModels(providerId: string) {
+  const loadRevision = ++providerModelsLoadRevision
   const requestedProviderId = providerId
   providerModels.value = []
   modelsLoading.value = Boolean(providerId)
@@ -106,17 +108,57 @@ async function loadProviderModels(providerId: string) {
     const result = await api.get<{ models: AIProviderModel[] }>(
       `/admin/ai/providers/${providerId}/models`,
     )
-    if (form.provider_id !== requestedProviderId) return
+    if (
+      form.provider_id !== requestedProviderId ||
+      loadRevision !== providerModelsLoadRevision
+    ) return
     providerModels.value = result.models
     if (!allowedModels.value.some((model) => model.model_id === form.model)) {
       form.model = ''
     }
+    if (
+      show.value &&
+      result.models.some(
+        (model) => model.available && model.enabled && model.supported_reasoning_levels == null,
+      )
+    ) {
+      try {
+        const refreshed = await api.post<{ models: AIProviderModel[] }>(
+          `/admin/ai/providers/${providerId}/models/metadata/sync`,
+        )
+        if (
+          form.provider_id === requestedProviderId &&
+          loadRevision === providerModelsLoadRevision
+        ) {
+          providerModels.value = refreshed.models
+        }
+      } catch (error) {
+        if (
+          show.value &&
+          form.provider_id === requestedProviderId &&
+          loadRevision === providerModelsLoadRevision
+        ) {
+          ui.toast(
+            error instanceof Error
+              ? `推理等级读取失败：${error.message}`
+              : '推理等级读取失败，请检查 Provider 连接后重试',
+            'danger',
+          )
+        }
+      }
+    }
   } catch (error) {
-    if (form.provider_id !== requestedProviderId) return
+    if (
+      form.provider_id !== requestedProviderId ||
+      loadRevision !== providerModelsLoadRevision
+    ) return
     form.model = ''
     ui.toast(error instanceof Error ? error.message : 'Provider 模型加载失败', 'danger')
   } finally {
-    if (form.provider_id === requestedProviderId) {
+    if (
+      form.provider_id === requestedProviderId &&
+      loadRevision === providerModelsLoadRevision
+    ) {
       modelsLoading.value = false
     }
   }
@@ -420,13 +462,18 @@ onMounted(() => {
           </div>
           <div class="field">
             <label for="profile-reasoning">推理强度</label>
-            <select id="profile-reasoning" v-model="form.reasoning_effort" class="select">
+            <select
+              id="profile-reasoning"
+              v-model="form.reasoning_effort"
+              class="select"
+              :disabled="modelsLoading"
+            >
               <option v-for="effort in reasoningOptions" :key="effort" :value="effort">
                 {{ reasoningLabels[effort] ?? effort }}{{ effort === 'provider_default' && selectedModel?.default_reasoning_level ? `（${reasoningLabels[selectedModel.default_reasoning_level] ?? selectedModel.default_reasoning_level}）` : '' }}
               </option>
             </select>
             <span v-if="selectedModel?.supported_reasoning_levels?.length === 0" class="muted font-xs">Provider 未提供此模型可调的思考等级，将使用默认模式。</span>
-            <span v-if="selectedModel?.supported_reasoning_levels === null || selectedModel?.supported_reasoning_levels === undefined" class="muted font-xs">Provider 未声明此模型的思考等级，仅提供常用等级供选择。</span>
+            <span v-if="selectedModel?.supported_reasoning_levels === null || selectedModel?.supported_reasoning_levels === undefined" class="muted font-xs">尚未获取到此模型的推理等级；打开 Profile 时会尝试从 Provider 更新。</span>
           </div>
           <div class="field">
             <label for="profile-verbosity">详细程度</label>
