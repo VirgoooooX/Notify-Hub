@@ -220,6 +220,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     browser_publisher_client = BrowserPublisherClient(
         base_url=settings.browser_publisher_api_url,
         access_token=browser_publisher_token,
+        public_media_base_url=settings.public_base_url,
+        internal_media_base_url=settings.browser_publisher_media_base_url,
     )
     xhs_channel = XhsArticleAdapter(browser_publisher_client)
     mp_library = MPArticleLibraryService(factory, clock, settings)

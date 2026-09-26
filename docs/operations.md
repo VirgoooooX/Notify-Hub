@@ -543,12 +543,13 @@ npm run build
 | `NOTIFY_HUB_MP_AUTHOR` | 文章作者名，默认 `Notify Hub` |
 | `NOTIFY_HUB_BROWSER_PUBLISHER_API_URL` | 独立 Browser Publisher 的 HTTP 地址 |
 | `NOTIFY_HUB_BROWSER_PUBLISHER_ACCESS_TOKEN` | Notify Hub 提交发布任务使用的 Bearer Token，须与发布器一致 |
+| `NOTIFY_HUB_BROWSER_PUBLISHER_MEDIA_BASE_URL` | 可选；Browser Publisher 从 Docker 网络访问 Notify Hub 自有媒体的内部地址，例如 `http://notify-hub:8000`。须与 `NOTIFY_HUB_PUBLIC_BASE_URL` 指向同一 Notify Hub 服务 |
 
 ### 双路径行为
 
 - **文章库模式（library）**：未配置 AppID/Secret 或显式设置为 `library` 时，`mp_article` 投递把文章写入文章库（`ready`），后台「公众号文章」可预览、复制公众号富文本格式；发布按钮由人工确认发布后再标记状态。
 - **官方 API 模式（draft/publish）**：平台下载并校验封面、上传永久素材、建草稿，再按模式保存草稿或提交发布；文章同时记录到文章库作为历史。草稿请求固定开启留言，且不限制为仅粉丝可留言。
-- **browser 统一发布网关模式**：设置 `browser` 后，Notify Hub 只把标题、正文、封面 URL 和文章元数据提交给 Browser Publisher，不调用公众号 API，也不提交 `platform_draft_id`。Browser Publisher 自己获取 Access Token、上传封面、调用 `draft/add`，再由 Playwright 打开草稿、点击最终发表并核对结果；不参与内容编辑、图片上传、封面选择或保存草稿的，是 API 已创建草稿之后的 Playwright 阶段。
+- **browser 统一发布网关模式**：设置 `browser` 后，Notify Hub 只把标题、正文、封面 URL 和文章元数据提交给 Browser Publisher，不调用公众号 API，也不提交 `platform_draft_id`。如果配置了 `NOTIFY_HUB_BROWSER_PUBLISHER_MEDIA_BASE_URL`，Notify Hub 自有媒体会在任务提交时改用该 Docker 网络地址，避免发布器容器绕行不可达的公网反向代理；外部图片 URL 不会被改写。Browser Publisher 自己获取 Access Token、上传封面、调用 `draft/add`，再由 Playwright 打开草稿、点击最终发表并核对结果；不参与内容编辑、图片上传、封面选择或保存草稿的，是 API 已创建草稿之后的 Playwright 阶段。
 - 显式配置 `draft`/`publish` 但凭证不完整时，投递以不可重试错误进入 dead，可查询、可审计，不隐式降级为文本通知。
 - Access Token 缓存并发安全，Token 失效只强制刷新重试一次；永久参数错误不反复重试；
 - 发布事件必须使用 article 消息并携带封面，且不与 `@all` 广播组合；

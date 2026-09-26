@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     mp_author: str = "Notify Hub"
     browser_publisher_api_url: str = "http://192.168.31.100:8790"
     browser_publisher_access_token: SecretStr | None = None
+    # Optional Docker-network URL for Notify Hub-owned media. Browser
+    # Publisher uses it instead of the public URL when both containers share a
+    # network and the public reverse-proxy port is not reachable internally.
+    browser_publisher_media_base_url: str | None = None
     media_root: Path = Path("./data/media")
     media_image_max_bytes: int = Field(default=2_097_152, gt=5, le=2_097_152)
     media_source_image_max_bytes: int = Field(default=16_777_216, ge=2_097_152, le=20_971_520)

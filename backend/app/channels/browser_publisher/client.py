@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 import structlog
@@ -18,6 +19,22 @@ class BrowserPublisherTemporaryError(BrowserPublisherError):
     """Temporary or network error calling Browser Publisher (retryable)."""
 
 
+def _url_origin(value: str) -> tuple[str, str, int] | None:
+    """Return a normalized HTTP origin, or None for an unusable URL."""
+
+    parsed = urlsplit(value)
+    scheme = parsed.scheme.lower()
+    if scheme not in {"http", "https"} or not parsed.hostname:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    return scheme, parsed.hostname.rstrip(".").lower(), port
+
+
 class BrowserPublisherClient:
     """Client for Browser Publisher standalone HTTP API."""
 
@@ -26,10 +43,18 @@ class BrowserPublisherClient:
         base_url: str = "http://192.168.31.100:8790",
         access_token: str | None = None,
         timeout: float = 15.0,
+        public_media_base_url: str | None = None,
+        internal_media_base_url: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.access_token = access_token
         self.timeout = timeout
+        self.public_media_base_url = (
+            public_media_base_url.rstrip("/") if public_media_base_url else None
+        )
+        self.internal_media_base_url = (
+            internal_media_base_url.rstrip("/") if internal_media_base_url else None
+        )
 
     @property
     def configured(self) -> bool:
@@ -42,6 +67,32 @@ class BrowserPublisherClient:
         if self.access_token:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
+
+    def _rewrite_media_url(self, url: str) -> str:
+        """Rewrite Notify Hub-owned media to a URL reachable by the publisher container."""
+
+        if not self.public_media_base_url or not self.internal_media_base_url:
+            return url
+
+        source_origin = _url_origin(self.public_media_base_url)
+        target_origin = _url_origin(self.internal_media_base_url)
+        media_url = urlsplit(url)
+        if source_origin is None or target_origin is None:
+            return url
+        if _url_origin(url) != source_origin:
+            return url
+
+        # Keep the path, query, and fragment (signed media URLs depend on the
+        # query string), while replacing only the unreachable public origin.
+        return urlunsplit(
+            (
+                target_origin[0],
+                urlsplit(self.internal_media_base_url).netloc,
+                media_url.path,
+                media_url.query,
+                media_url.fragment,
+            )
+        )
 
     async def upload_media(self, *, filename: str, content_type: str, content: bytes) -> str:
         """Upload one media asset and return its Browser Publisher media id."""
@@ -99,7 +150,7 @@ class BrowserPublisherClient:
         """Submit a publishing job to Browser Publisher and return response."""
         headers = {"Content-Type": "application/json", **self._auth_headers()}
 
-        media = [{"kind": "url", "url": u} for u in (image_urls or [])]
+        media = [{"kind": "url", "url": self._rewrite_media_url(u)} for u in (image_urls or [])]
         media.extend(
             {"kind": "uploaded", "media_id": media_id} for media_id in (uploaded_media_ids or [])
         )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -209,6 +210,43 @@ async def test_browser_publisher_client_http_calls() -> None:
             title="Title",
             body_text="Body",
         )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_browser_publisher_client_rewrites_notify_hub_media_url() -> None:
+    client = BrowserPublisherClient(
+        base_url="http://192.168.31.100:8790",
+        access_token="secret-token-123",
+        public_media_base_url="https://notify.example.com:37891",
+        internal_media_base_url="http://notify-hub:8000",
+    )
+    route = respx.post("http://192.168.31.100:8790/v1/jobs").respond(
+        status_code=202,
+        json={"id": "job_media_rewrite", "status": "queued"},
+    )
+
+    await client.submit_job(
+        client_request_id="req_media_rewrite",
+        platform="wechat_mp",
+        title="Title",
+        body_text="Body",
+        image_urls=[
+            "https://notify.example.com:37891/codex_wechat_cover.png",
+            "https://notify.example.com:37891/public/media/asset-1?expires=123&sig=abc",
+            "https://images.example.com/external.png",
+        ],
+    )
+
+    payload = json.loads(route.calls.last.request.content)
+    assert payload["media"] == [
+        {"kind": "url", "url": "http://notify-hub:8000/codex_wechat_cover.png"},
+        {
+            "kind": "url",
+            "url": "http://notify-hub:8000/public/media/asset-1?expires=123&sig=abc",
+        },
+        {"kind": "url", "url": "https://images.example.com/external.png"},
+    ]
 
 
 @pytest.mark.asyncio
