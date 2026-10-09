@@ -4,7 +4,7 @@
 
 本文只描述仓库中已存在的行为。标为“待实现”的项目目前没有可依赖的 CLI、API 或后台操作，不应以直接修改生产数据库代替。
 
-AI 模型访问已迁至 Family AI Hub；2026-10-09 线上容器已临时接入本机 AI Hub 开发服务，切换及运行依赖见第 13 节。
+AI 模型访问已迁至 Family AI Hub；2026-10-09 线上容器现接入 NAS Z4S 上的稳定服务，切换及运行依赖见第 13 节。
 
 ## 1. 运行边界与值班原则
 
@@ -572,13 +572,14 @@ npm run build
 
 ## 13. Family AI Hub 接入与迁移
 
-2026-10-09 本地代码已接入中心并使用模拟 CPA 完成跨项目验证；线上容器已部署临时镜像 `notify-hub:aihub-profiles-20261009`，接入本机 AI Hub 开发服务。此镜像基于原 0.11.2，只覆盖已验证的后端代码与前端构建物，依赖保持原版本，0020 仅添加中心 Profile revision 列；这不是正式 Release。
+2026-10-09 本地代码已接入中心并使用模拟 CPA 完成跨项目验证；线上容器运行迁移镜像 `notify-hub:aihub-profiles-20261009`，接入 NAS Z4S 上的 Family AI Hub。此镜像基于原 0.11.2，只覆盖已验证的后端代码与前端构建物，依赖保持原版本，0020 仅添加中心 Profile revision 列；这不是正式 Release。
 
 ### 本次实际切换
 
 - 两个启用 Profile 的参数已迁入中心，保留原 ID、Chat 协议和模型顺序：语义分类使用 `gpt-6-luna`，文章生成使用 `Gemini 3.8 Flash - Antigravity`。共享 `notify-hub` 应用令牌由 SecretStore 加密保存；历史 Provider 和旧凭据保留。
 - 本轮 Compose、环境和 SQLite 一致快照在实际应用目录的 `backups/aihub-profiles-20261009/`，首轮调用迁移快照仍在 `backups/aihub-20261009/`。程序回滚须先停止服务，用本轮新镜像对当前数据库执行 `alembic -c backend/alembic.ini downgrade 0019_ai_model_reasoning_levels`，然后恢复本轮 Compose 并重建服务；环境、挂载和 Secret 主密钥沿用实际配置。升级→降级→升级已在包含历史调用的影子库验证。不要用旧数据库覆盖新增通知和提醒；完整恢复按第 5 节执行。
-- 本机运行 AI Hub 时使用 `scripts/dev-start.ps1 -ListenHost 0.0.0.0`，切换监听前先停止原实例。服务停止、Windows 休眠或局域网地址变化会使线上 AI 不可用；实际地址保存在 Notify Hub 管理页面。稳定部署须后续单独安排。
+- Family AI Hub 当前运行在 NAS Z4S（`http://192.168.31.253:8848`），由 Fleetge stack `family-ai-hub` 管理；Notify Hub 管理页面已保存该地址。NAS 服务的 Compose 与持久化路径见 Family AI Hub 仓库 `deploy/nas-z4s/compose.yaml`。本机开发服务可独立启动，不承载线上调用。
+- NAS 容器状态为 `healthy`，`/health/ready` 返回 200；Notify Hub 连接测试返回 4 个授权模型，Profile 目录返回 2 项。导入的 SQLite 一致快照通过 `quick_check` 和外键检查。通过 Notify Hub 分类服务发送无业务副作用的合成运维消息，结果为“AI运维”（0.98）；本地调用记录为 `succeeded`，耗时 5.2 秒，未触发通知或文章发布。
 - 线上容器的管理员连接测试、两条合成内容真实调用及缓存验证通过：分类约 8.6 秒，摘要约 6.2 秒，相同分类缓存约 0.01 秒；AI Hub 记录中实际 task、协议、模型对应正确。测试未触发通知或文章发布。分类曾出现一次原 30 秒预算内的上游超时，错误正确记录为 `ai_hub_upstream_timeout`，手动重测成功，未增加业务侧自动重试。
 - 容器 `healthy`，数据库、迁移、Worker 检查通过；原插件启用状态与绑定保留。归档中保存回滚信息，不把密钥写进项目文档。
 
