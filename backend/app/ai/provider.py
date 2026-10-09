@@ -5,13 +5,15 @@ import ipaddress
 import json
 import re
 import socket
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 
+from app.ai.schemas import AIHubProfile
 from app.infrastructure.database.ai_models import AIProvider
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
@@ -66,7 +68,7 @@ def _always_forbidden(address: Address) -> bool:
     )
 
 
-class OpenAICompatibleClient:
+class AIHubClient:
     def __init__(
         self,
         *,
@@ -130,219 +132,147 @@ class OpenAICompatibleClient:
         ) as client:
             yield client
 
-    async def complete(
+    async def _request(
         self,
-        provider: AIProvider,
+        connection: AIProvider,
         *,
-        api_key: str | None,
-        model: str,
-        messages: list[dict[str, str]],
-        temperature: float,
-        max_output_tokens: int,
-        reasoning_effort: str = "provider_default",
-        reasoning_capable: bool = False,
-        response_format: Mapping[str, Any] | None,
+        application_key: str | None,
+        path: str,
+        body: dict[str, Any] | None = None,
         timeout_seconds: float,
-    ) -> tuple[str, int | None, int | None]:
-        if provider.protocol != "openai_chat_completions":
-            raise AIProviderError(
-                "ai_protocol_unsupported", "AI provider protocol is not supported"
-            )
-        endpoint = f"{provider.base_url.rstrip('/')}/chat/completions"
-        expected = await self._validate_url(endpoint, provider.allow_private_network)
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        payload: dict[str, Any] = {"model": model, "messages": messages}
-        if reasoning_effort == "provider_default" and not reasoning_capable:
-            payload.update(temperature=temperature, max_tokens=max_output_tokens)
-        else:
-            payload["max_completion_tokens"] = max_output_tokens
-            if reasoning_effort != "provider_default":
-                payload["reasoning_effort"] = reasoning_effort
-        if response_format is not None:
-            payload["response_format"] = response_format
-        body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+    ) -> dict[str, Any]:
+        if not application_key:
+            raise AIProviderError("ai_hub_key_missing", "AI Hub application key is not configured")
+        endpoint = f"{connection.base_url.rstrip('/')}/api/v1/{path}"
         try:
-            async with (
-                self._http_client(provider.verify_tls) as client,
-                client.stream(
-                    "POST",
-                    endpoint,
-                    headers=headers,
-                    params=provider.custom_query,
-                    content=body,
-                    follow_redirects=False,
-                    timeout=httpx.Timeout(timeout_seconds, connect=min(5.0, timeout_seconds)),
-                ) as response,
-            ):
-                self._validate_peer(response, expected, provider.allow_private_network)
-                if response.is_redirect:
-                    raise AIProviderError(
-                        "ai_redirect_forbidden", "AI provider redirects are forbidden"
-                    )
-                raw = bytearray()
-                async for chunk in response.aiter_bytes():
-                    raw.extend(chunk)
-                    if len(raw) > self._max_response_bytes:
+            async with asyncio.timeout(timeout_seconds + 10):
+                expected = await self._validate_url(endpoint, connection.allow_private_network)
+                async with (
+                    self._http_client(connection.verify_tls) as client,
+                    client.stream(
+                        "POST" if body is not None else "GET",
+                        endpoint,
+                        headers={"Authorization": f"Bearer {application_key}"},
+                        json=body,
+                        follow_redirects=False,
+                        timeout=httpx.Timeout(
+                            timeout_seconds + 10, connect=min(5.0, timeout_seconds)
+                        ),
+                    ) as response,
+                ):
+                    self._validate_peer(response, expected, connection.allow_private_network)
+                    if response.is_redirect:
                         raise AIProviderError(
-                            "ai_response_too_large", "AI provider response is too large"
+                            "ai_redirect_forbidden", "AI Hub redirects are forbidden"
                         )
-                if response.status_code >= 400:
-                    retryable = response.status_code == 429 or response.status_code >= 500
-                    code = (
-                        "ai_structured_output_unsupported"
-                        if response.status_code in {400, 422} and response_format is not None
-                        else "ai_provider_http_error"
+                    raw = bytearray()
+                    limit = (
+                        self._max_response_bytes
+                        if body is not None
+                        else self._max_catalog_response_bytes
                     )
-                    raise AIProviderError(
-                        code, "AI provider returned an error", retryable=retryable
-                    )
-        except httpx.TimeoutException as exc:
-            raise AIProviderError("ai_timeout", "AI provider timed out", retryable=True) from exc
+                    async for chunk in response.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > limit:
+                            raise AIProviderError(
+                                "ai_response_too_large", "AI Hub response is too large"
+                            )
+                    if response.is_error:
+                        # Remote messages may contain secrets; expose only a bounded machine code.
+                        code = "http_error"
+                        retryable = response.status_code == 429 or response.status_code >= 500
+                        try:
+                            error = json.loads(raw)["error"]
+                            candidate = error.get("code")
+                            if isinstance(candidate, str) and re.fullmatch(
+                                r"[a-z][a-z0-9_]{0,70}", candidate
+                            ):
+                                code = candidate
+                            if type(error.get("retryable")) is bool:
+                                retryable = error["retryable"]
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            pass
+                        raise AIProviderError(
+                            f"ai_hub_{code}", "AI Hub request failed", retryable=retryable
+                        )
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            raise AIProviderError("ai_timeout", "AI Hub timed out", retryable=True) from exc
         except httpx.RequestError as exc:
             raise AIProviderError(
-                "ai_network_error", "AI provider request failed", retryable=True
+                "ai_network_error", "AI Hub request failed", retryable=True
             ) from exc
-        try:
-            response_data = json.loads(raw)
-            content = response_data["choices"][0]["message"]["content"]
-            usage = response_data.get("usage") or {}
-            if not isinstance(content, str):
-                raise TypeError
-            return content, usage.get("prompt_tokens"), usage.get("completion_tokens")
-        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
-            raise AIProviderError("ai_invalid_response", "AI provider response is invalid") from exc
-
-    async def list_models(self, provider: AIProvider, *, api_key: str | None) -> list[str]:
-        catalog = await self.list_model_catalog(provider, api_key=api_key, include_metadata=False)
-        return [model["model_id"] for model in catalog]
-
-    async def list_model_catalog(
-        self, provider: AIProvider, *, api_key: str | None, include_metadata: bool = True
-    ) -> list[dict[str, Any]]:
-        endpoint = f"{provider.base_url.rstrip('/')}/models"
-        expected = await self._validate_url(endpoint, provider.allow_private_network)
-        headers = {"Accept": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        try:
-            async with self._http_client(provider.verify_tls) as client:
-                standard = await self._fetch_model_list(
-                    client, provider, endpoint, expected, headers, catalog_request=False
-                )
-                catalog = (
-                    await self._fetch_model_list(
-                        client, provider, endpoint, expected, headers, catalog_request=True
-                    )
-                    if include_metadata
-                    else None
-                )
-        except httpx.TimeoutException as exc:
-            raise AIProviderError("ai_timeout", "AI provider timed out", retryable=True) from exc
-        except httpx.RequestError as exc:
-            raise AIProviderError(
-                "ai_network_error", "AI provider request failed", retryable=True
-            ) from exc
-        try:
-            if standard is None:
-                raise TypeError
-            standard_entries = standard["data"]
-            if not isinstance(standard_entries, list):
-                raise TypeError
-            models = self._parse_model_entries(standard_entries, id_field="id")
-            if catalog is not None and isinstance(catalog.get("models"), list):
-                extended = self._parse_model_entries(catalog["models"], id_field="slug")
-                for model_id, model in models.items():
-                    if model_id in extended:
-                        model.update(extended[model_id])
-            return [models[model_id] for model_id in sorted(models)]
-        except (KeyError, TypeError) as exc:
-            raise AIProviderError("ai_invalid_response", "AI model list is invalid") from exc
-
-    async def _fetch_model_list(
-        self,
-        client: httpx.AsyncClient,
-        provider: AIProvider,
-        endpoint: str,
-        expected: set[Address],
-        headers: dict[str, str],
-        *,
-        catalog_request: bool,
-    ) -> dict[str, Any] | None:
-        params = dict(provider.custom_query)
-        if catalog_request:
-            params["client_version"] = "pi"
-        async with client.stream(
-            "GET",
-            endpoint,
-            headers=headers,
-            params=params,
-            follow_redirects=False,
-            timeout=httpx.Timeout(
-                provider.timeout_seconds,
-                connect=min(5.0, provider.timeout_seconds),
-            ),
-        ) as response:
-            self._validate_peer(response, expected, provider.allow_private_network)
-            if response.is_redirect:
-                raise AIProviderError(
-                    "ai_redirect_forbidden", "AI provider redirects are forbidden"
-                )
-            if catalog_request and response.status_code in {400, 401, 403, 404, 422}:
-                return None
-            raw = bytearray()
-            async for chunk in response.aiter_bytes():
-                raw.extend(chunk)
-                if len(raw) > self._max_catalog_response_bytes:
-                    raise AIProviderError(
-                        "ai_response_too_large", "AI provider response is too large"
-                    )
-            if response.status_code >= 400:
-                raise AIProviderError(
-                    "ai_provider_http_error",
-                    "AI provider returned an error",
-                    retryable=response.status_code == 429 or response.status_code >= 500,
-                )
         try:
             data = json.loads(raw)
             if not isinstance(data, dict):
                 raise TypeError
             return data
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise AIProviderError("ai_invalid_response", "AI model list is invalid") from exc
+        except (TypeError, ValueError) as exc:
+            raise AIProviderError("ai_invalid_response", "AI Hub response is invalid") from exc
 
-    @staticmethod
-    def _parse_model_entries(entries: list[Any], *, id_field: str) -> dict[str, dict[str, Any]]:
-        models: dict[str, dict[str, Any]] = {}
-        for item in entries:
-            if not isinstance(item, dict):
-                continue
-            model_id = item.get(id_field)
-            if not isinstance(model_id, str) or not model_id.strip():
-                continue
-            raw_levels = item.get("supported_reasoning_levels")
-            levels: list[str] | None = None
-            if isinstance(raw_levels, list):
-                levels = list(
-                    dict.fromkeys(
-                        effort
-                        for level in raw_levels[:32]
-                        if isinstance(level, dict)
-                        and isinstance((effort := level.get("effort")), str)
-                        and re.fullmatch(r"[a-z][a-z0-9_-]{0,29}", effort)
-                    )
-                )[:16]
-            elif "supported_reasoning_levels" in item:
-                levels = []
-            default = item.get("default_reasoning_level")
-            if not isinstance(default, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,29}", default):
-                default = None
-            models[model_id] = {
-                "model_id": model_id,
-                "supported_reasoning_levels": levels,
-                "default_reasoning_level": default,
-            }
-        if entries and not models:
-            raise TypeError
-        return models
+    async def generate(
+        self,
+        connection: AIProvider,
+        *,
+        application_key: str | None,
+        task: str,
+        messages: list[dict[str, str]],
+        output: dict[str, Any],
+        parameters: dict[str, Any],
+    ) -> tuple[str, int | None, int | None]:
+        data = await self._request(
+            connection,
+            application_key=application_key,
+            path="generate",
+            body={"task": task, "messages": messages, "output": output, "parameters": parameters},
+            timeout_seconds=connection.timeout_seconds,
+        )
+        try:
+            content = data["output"]["text"]
+            usage = data["usage"]
+            if not isinstance(content, str) or not content or not isinstance(usage, dict):
+                raise TypeError
+            tokens = [usage.get(key) for key in ("input_tokens", "output_tokens")]
+            if any(value is not None and (type(value) is not int or value < 0) for value in tokens):
+                raise TypeError
+            return content, tokens[0], tokens[1]
+        except (KeyError, TypeError) as exc:
+            raise AIProviderError("ai_invalid_response", "AI Hub response is invalid") from exc
+
+    async def list_models(
+        self, connection: AIProvider, *, application_key: str | None
+    ) -> list[str]:
+        data = await self._request(
+            connection,
+            application_key=application_key,
+            path="models",
+            timeout_seconds=min(connection.timeout_seconds, 30),
+        )
+        try:
+            entries = data["data"]
+            if not isinstance(entries, list):
+                raise TypeError
+            ids = [entry["id"] for entry in entries]
+            if any(not isinstance(model_id, str) or not model_id for model_id in ids):
+                raise TypeError
+            return ids
+        except (KeyError, TypeError) as exc:
+            raise AIProviderError("ai_invalid_response", "AI Hub model list is invalid") from exc
+
+    async def list_profiles(
+        self, connection: AIProvider, *, application_key: str | None
+    ) -> list[AIHubProfile]:
+        data = await self._request(
+            connection,
+            application_key=application_key,
+            path="profiles",
+            timeout_seconds=min(connection.timeout_seconds, 15),
+        )
+        try:
+            if not isinstance(data["data"], list):
+                raise TypeError
+            profiles = [AIHubProfile.model_validate(item) for item in data["data"]]
+            if len({profile.id for profile in profiles}) != len(profiles):
+                raise ValueError
+            return profiles
+        except (KeyError, TypeError, ValueError, ValidationError) as exc:
+            raise AIProviderError("ai_invalid_response", "AI Hub Profile list is invalid") from exc

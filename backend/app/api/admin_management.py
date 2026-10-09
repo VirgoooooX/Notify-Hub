@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from app.ai.service import AIGatewayError
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
 from app.application.audit import add_audit
@@ -207,6 +208,12 @@ async def update_settings(
     admin: Admin = Depends(require_admin),
 ) -> dict[str, object]:
     if payload.default_reminder_parser_profile_id is not None:
+        try:
+            await request.app.state.ai_service.refresh_profiles()
+        except AIGatewayError as exc:
+            raise AppError(
+                "ai_hub_catalog_unavailable", "AI Hub Profile catalog is unavailable", 503
+            ) from exc
         async with request.app.state.session_factory() as session:
             profile = await session.scalar(
                 select(AIProfile).where(

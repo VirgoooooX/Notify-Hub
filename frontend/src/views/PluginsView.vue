@@ -171,7 +171,8 @@ async function configure(item: Plugin) {
   try {
     const [details, secretsData] = await Promise.all([
       api.get<PluginDetailsResponse>(`/admin/plugins/${item.id}`),
-      api.get<PluginSecret[]>(`/admin/plugins/${item.id}/secrets`)
+      api.get<PluginSecret[]>(`/admin/plugins/${item.id}/secrets`),
+      loadAiProfiles()
     ])
 
     editing.value = { ...item, secrets: secretsData }

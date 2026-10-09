@@ -58,3 +58,5 @@ docs/project-log.md
 Thumbs.db
 .codegraph/
 .codex/generated/
+.codex
+.codex-remote-attachments

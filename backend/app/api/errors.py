@@ -46,11 +46,14 @@ def install_error_handlers(app: FastAPI) -> None:
     async def validation_error_handler(
         request: Request, exc: RequestValidationError
     ) -> JSONResponse:
+        # Credential validation must not echo submitted secrets or validator context.
+        details = [
+            {key: value for key, value in error.items() if key not in {"input", "ctx"}}
+            for error in exc.errors()
+        ]
         return JSONResponse(
             status_code=422,
-            content=error_body(
-                request, "validation_error", "Request validation failed", exc.errors()
-            ),
+            content=error_body(request, "validation_error", "Request validation failed", details),
         )
 
     @app.exception_handler(StarletteHTTPException)

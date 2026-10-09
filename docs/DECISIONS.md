@@ -700,3 +700,34 @@ Family Health 等业务只需要持有绑定了 Profile 的 Notify Hub API Key�
 - 新增 `application_profiles`、`wecom_profile_configs`、`profile_members`、`profile_user_states` 和 Profile-aware media provider reference 表；旧核心表新增 Profile 字段并回填 `profile_notify_hub`；
 - 默认 Profile 的 WeCom Agent/Secret/Callback 优先读取旧 ENV；新增 Profile 的 Agent 元数据存数据库，Secret 继续使用 SecretStore；管理 API 只返回 configured 状态；
 - 首版不做 Multi-Corp、Multi-Tenant、多数据库、每 Profile 单独 Worker/容器或 Family Health 领域目录。
+
+---
+
+## ADR-035：模型调用迁移到 Family AI Hub
+
+**状态：已接受（2026-10-09）；调用迁移已部署，后续 Profile 归属调整见 ADR-036**
+
+### 决策
+
+- Notify Hub 仅通过 Family AI Hub 的 `/api/v1/generate` 调用模型，以业务 AI Profile 的原稳定 ID 传入 `task`。所有 Profile 共用 Notify Hub 应用令牌；模型、协议、授权和有界回退集中在 AI Hub。
+- 分类、提取、摘要的提示词、输出 Schema、本地业务校验、最多一次业务输出修复、插件权限、缓存、预算及业务调用日志仍归 Notify Hub。插件调用接口及原 Profile ID 保持不变。
+- 旧 Provider 管理、模型同步、允许列表和直连调用入口移除；管理页面改为 AI Hub 地址、应用令牌和业务 Profile。旧 Provider、模型、凭据及 Profile 路由列保留在数据库中，作为历史与回滚资料，不参与运行调用。
+- 复用现有 Provider 表保存一个独立的 AI Hub 连接记录，不变更数据库 Schema，不增加 Alembic revision。连接未配置时默认禁用；不把旧 CPA URL 或密钥自动当作 AI Hub 配置。新增 Profile 的历史绑定列指向中心连接，模型列为空。
+- 可导出仅含稳定 Profile ID、历史协议与模型选择的中心应用路由配置；导出不包含业务提示词、URL 或凭据。模型有效性及备用顺序须在中心确认。
+- 连接或令牌变更递增业务 Profile revision，使旧业务缓存失效。中心内部路由变更不自动清除 Notify Hub 业务缓存；需要立即重新生成时，在 Notify Hub 修改业务 Profile 或关闭缓存。
+
+### 原因与影响
+
+独立中心已有统一接口和 Profile 路由能力，业务项目继续维护模型目录与重试会造成配置和授权分歧。此次只收敛模型访问边界，通知投递、事件幂等、插件游标和业务规则继续使用现有可靠链路。运行切换与回滚流程见 `docs/operations.md`，需要恢复旧程序时使用切换前的数据库、SecretStore 与环境备份。
+
+---
+
+## ADR-036：Profile 由中心管理，目录镜像和调用历史留在 Notify Hub
+
+**状态：已接受并完成临时部署（2026-10-09）；替代 ADR-035 的本地参数、预算和 Profile 编辑边界**
+
+两个系统同时管理 Profile 会造成配置分歧。新增、名称、用途标签、协议、模型顺序、生成参数、输出偏好、每日额度及缓存时间统一放到 AI Hub，Notify Hub 使用应用令牌读取目录，页面和接口只读，保留原 ID 及插件权限。分类规则、文章要求、发布条件、提示词和业务 Schema 继续由原业务代码管理。
+
+目录同步将支持用途的配置镜像到原表，0020 仅增加可空中心 revision；配置或路由变化递增本地缓存版本，删除或停用后停止调用，历史行和记录不删除。调用前、插件引用保存和启用前都重新读取目录；中心不可达时调用失败，本地历史仍独立可读。不保留双向编辑或静默旧配置调用。
+
+中心执行生成参数和每日额度；Notify Hub 执行业务 Schema 校验、最多一次业务输出修复，以及输出偏好和缓存策略。中心记录实际模型尝试，Notify Hub 记录插件用途、缓存命中及业务错误，历史日志不迁走。

@@ -112,11 +112,6 @@ def schema_response_format(
     return None
 
 
-def structured_modes(provider_mode: str, profile_mode: str) -> list[str]:
-    requested = profile_mode if profile_mode != "auto" else provider_mode
-    return ["json_schema", "json_object", "prompt_json"] if requested == "auto" else [requested]
-
-
 def apply_reason_policy(result: BaseModel, profile: AIProfile) -> BaseModel:
     reason = getattr(result, "reason", None)
     if not isinstance(reason, str):

@@ -4,6 +4,8 @@
 
 本文只描述仓库中已存在的行为。标为“待实现”的项目目前没有可依赖的 CLI、API 或后台操作，不应以直接修改生产数据库代替。
 
+AI 模型访问已迁至 Family AI Hub；2026-10-09 线上容器已临时接入本机 AI Hub 开发服务，切换及运行依赖见第 13 节。
+
 ## 1. 运行边界与值班原则
 
 必须始终满足：
@@ -563,4 +565,43 @@ npm run build
 - Browser Publisher 的公众号官方 API 凭据使用 `PUBLISHER_WECHAT_MP_APP_ID`、`PUBLISHER_WECHAT_MP_APP_SECRET`、`PUBLISHER_WECHAT_MP_API_BASE_URL` 和 `PUBLISHER_WECHAT_MP_AUTHOR`；不要把 `NOTIFY_HUB_MP_*` 当作 `browser` 模式的凭据来源。
 - 如果公众号 API 需要经过已配置 IP 白名单的受信任代理，把 `PUBLISHER_WECHAT_MP_API_BASE_URL` 指向该代理的 HTTPS 入口（含必要路径前缀）；不要把任意代理参数透传到任务请求。
 - 若启用登录失效和风控告警，Browser Publisher 通过 `PUBLISHER_NOTIFY_EVENT_URL` 与普通 Notify Hub API Client Key 调用外部事件 API；无需任何发布器专属权限。
+- 公众号会话默认每小时检查一次，登录失效后进入 `auth_required` 并发送按事件键去重的登录告警；等待登录时每15秒检查恢复，即使没有发布任务也能更新状态。网络超时不直接当作登录失效；定期访问不保证延长微信会话期限。
+- 主动登录采用 Notify Hub 的间隔提醒：每4天一次，沿用发布器告警的指定接收人。当前首次时间为2026-10-07 09:00（Asia/Shanghai），无需确认完成，不发送 `@all`；后续按96小时间隔继续。可从提醒中心修改、暂停或取消。若仍显示已登录但需要刷新会话，使用发布器控制台的重新登录入口。
+- 登录恢复后，`waiting_auth` 任务续用已有草稿；已进入发表意图或人工确认阶段的任务只核对结果。已经失败并手动发表的历史任务不得直接批量重试，以免重复发表。
 - 微信公众号进入 `publish_clicked` 或 `waiting_manual_confirm` 后只能核对结果，不再次点击发表；「群发通知 / 发送群通知」在发表前关闭。具体实现和部署参数以独立工程 `L:/Web/Browser Publisher` 的 README 与 compose 为准。
+
+## 13. Family AI Hub 接入与迁移
+
+2026-10-09 本地代码已接入中心并使用模拟 CPA 完成跨项目验证；线上容器已部署临时镜像 `notify-hub:aihub-profiles-20261009`，接入本机 AI Hub 开发服务。此镜像基于原 0.11.2，只覆盖已验证的后端代码与前端构建物，依赖保持原版本，0020 仅添加中心 Profile revision 列；这不是正式 Release。
+
+### 本次实际切换
+
+- 两个启用 Profile 的参数已迁入中心，保留原 ID、Chat 协议和模型顺序：语义分类使用 `gpt-6-luna`，文章生成使用 `Gemini 3.8 Flash - Antigravity`。共享 `notify-hub` 应用令牌由 SecretStore 加密保存；历史 Provider 和旧凭据保留。
+- 本轮 Compose、环境和 SQLite 一致快照在实际应用目录的 `backups/aihub-profiles-20261009/`，首轮调用迁移快照仍在 `backups/aihub-20261009/`。程序回滚须先停止服务，用本轮新镜像对当前数据库执行 `alembic -c backend/alembic.ini downgrade 0019_ai_model_reasoning_levels`，然后恢复本轮 Compose 并重建服务；环境、挂载和 Secret 主密钥沿用实际配置。升级→降级→升级已在包含历史调用的影子库验证。不要用旧数据库覆盖新增通知和提醒；完整恢复按第 5 节执行。
+- 本机运行 AI Hub 时使用 `scripts/dev-start.ps1 -ListenHost 0.0.0.0`，切换监听前先停止原实例。服务停止、Windows 休眠或局域网地址变化会使线上 AI 不可用；实际地址保存在 Notify Hub 管理页面。稳定部署须后续单独安排。
+- 线上容器的管理员连接测试、两条合成内容真实调用及缓存验证通过：分类约 8.6 秒，摘要约 6.2 秒，相同分类缓存约 0.01 秒；AI Hub 记录中实际 task、协议、模型对应正确。测试未触发通知或文章发布。分类曾出现一次原 30 秒预算内的上游超时，错误正确记录为 `ai_hub_upstream_timeout`，手动重测成功，未增加业务侧自动重试。
+- 容器 `healthy`，数据库、迁移、Worker 检查通过；原插件启用状态与绑定保留。归档中保存回滚信息，不把密钥写进项目文档。
+
+### 迁移步骤
+
+1. 按第 3、5 节备份原数据库、SecretStore 主密钥和环境，安排 AI 插件切换窗口。升级后原 Provider 不再直接调用；尚未配置中心时 AI 调用明确失败，纯规则插件和可靠通知链路继续运行。
+2. 升级 Notify Hub 后，在「AI Gateway → AI Hub 连接」导出原有模型路由；或通过管理员鉴权调用 `GET /api/v1/admin/ai/hub/routing`。导出是 AI Hub 应用配置，包含原 Profile ID、历史协议和模型选择，以及生成参数、输出偏好、用途、额度和缓存时间；不含提示词及凭据。
+3. 在 AI Hub 同步 CPA 模型，创建稳定标识为 `notify-hub` 的应用，在其「管理 Profile」中使用导出的 ID 和模型顺序。核实模型存在且已启用，补齐空模型列表，按需要添加备用模型及协议。默认 Profile 的列表为空，须明确配置需要的默认策略。导出 JSON 也可通过 AI Hub 管理接口 `POST /api/admin/applications` 创建应用；更新已有应用使用 `PUT /api/admin/applications/{id}`，保留已有令牌。
+4. 将 AI Hub 服务根地址和该应用的令牌保存到 Notify Hub 连接页。令牌使用已有 SecretStore 加密，只返回 configured 状态；不能复用旧 CPA 密钥。中心在同一可信私网时明确开启私网访问，HTTP 默认被拒绝。
+5. 「测试已保存的连接」检查应用鉴权和授权模型目录；目录成功不等于所有 Profile 已配置正确。随后以合成输入验证分类、提取和摘要，核实 AI Hub 调用记录中的 task、协议、模型及回退，再恢复 AI 插件。
+
+### 配置与行为
+
+- 首次可用 `NOTIFY_HUB_AI_HUB_BASE_URL`、`NOTIFY_HUB_AI_HUB_APPLICATION_KEY` 和 `NOTIFY_HUB_AI_HUB_ALLOW_PRIVATE_NETWORK` 初始化连接。已保存地址时环境不覆盖后台配置；旧 `NOTIFY_HUB_AI_ENABLED` 和 `NOTIFY_HUB_AI_BOOTSTRAP_*` 已移除。
+- 应用令牌需要配置 `NOTIFY_HUB_SECRET_ENCRYPTION_KEY`；缺少 SecretStore 时后台拒绝保存令牌。地址可填服务根路径或以 `/api/v1` 结尾，保存时归一化至服务根路径。
+- 原 Profile ID、插件引用、业务提示词及历史调用保留。新增和参数编辑只在中心；Notify Hub 读取鉴权目录，将支持的用途及参数镜像到原表，0020 添加 `hub_revision`；旧 Provider 和 model 列只作历史资料。
+- `auto` 使用 JSON Schema；显式 `json_object` 对应中心 JSON，`prompt_json` 对应文本加业务 Prompt 约束。业务校验仍在 Notify Hub 执行，最多一次业务输出修复。HTTP/网络/中心输出错误直接失败；不本地切换模型或降级协议。
+- Profile 调用等待上限由中心设置；Notify Hub 的连接等待上限独立限制传输时间，需留足中心回退时间，客户端额外留 10 秒接收错误。原 30/60 秒 Profile 等待上限保持不变，在中心调整。
+- 修改连接、令牌，或中心 Profile 参数、模型、协议及可用状态时，本地缓存 revision 失效。调用前重新读取目录，停用或删除后停止使用；历史调用保留。
+- 回滚使用切换前的程序、数据库和环境备份；不要删除历史 Provider 或密钥，也不要把中心应用令牌填写为旧上游密钥。
+
+### Profile 日常管理
+
+在 AI Hub「应用管理 → Notify hub → 管理 Profile」新增并选择模型，用途标签使用 `classify`、`extract`、`summarize`。Notify Hub 的 Profiles 页面只读；刷新页面目录或重新打开插件配置后，新项自动出现并接受原插件权限检查。中心用途标签缺失或不支持时不进入选择框。
+
+本地「最近调用」保留历史与缓存命中，独立于中心目录加载；中心不可达时页面提示目录失败，但仍可查看历史。中心的调用记录用于查看模型和回退，本地记录用于查看插件、用途、缓存和业务校验失败。删除中心 Profile 不删除本地历史引用。

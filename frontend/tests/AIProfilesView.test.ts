@@ -2,343 +2,63 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setApiFetcher } from '@/lib/api'
-import { useUiStore } from '@/stores/ui'
 import AIProfilesView from '@/views/AIProfilesView.vue'
 
-const profile = {
-  id: 'semantic_classifier_fast',
-  name: '快速语义分类',
-  description: '用于低延迟文本分类',
-  capability: 'classify',
-  provider_id: 'aip_test',
-  model: 'model-allowed',
-  temperature: 0,
-  max_output_tokens: 160,
-  response_format: 'auto',
-  timeout_seconds: 20,
-  output_language: 'zh-CN',
-  reasoning_effort: 'low',
-  verbosity: 'concise',
-  include_reason: true,
-  max_reason_characters: 200,
-  system_instructions: '',
-  cache_ttl_seconds: 2592000,
-  daily_request_limit: 500,
-  daily_token_limit: 1000000,
-  enabled: true,
-  revision: 1,
-  created_at: '2026-07-15T00:00:00Z',
-  updated_at: '2026-07-15T00:00:00Z',
+const profile = { id: 'new_center_profile', name: '中心新增分类', capability: 'classify', enabled: true,
+  max_output_tokens: 512, temperature: 0, timeout_seconds: 120, reasoning_effort: 'provider_default',
+  cache_ttl_seconds: 3600, output_language: 'auto', verbosity: 'standard' }
+const invocation = { id: 'old_invocation', profile_id: 'deleted_profile', use_case: 'old_business_use',
+  cache_hit: true, status: 'succeeded', created_at: '2026-10-09T00:00:00Z' }
+function json(data: unknown) {
+  return new Response(JSON.stringify({ data }), { headers: { 'Content-Type': 'application/json' } })
 }
+afterEach(() => { vi.restoreAllMocks() })
 
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify({ data }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
-}
-
-afterEach(() => {
-  document.body.innerHTML = ''
-  vi.restoreAllMocks()
-})
-
-describe('AIProfilesView', () => {
-  it('shows the complete policy form and only Provider-authorized models', async () => {
-    setApiFetcher(
-      vi.fn(async (input) => {
-        const path = String(input)
-        if (path.endsWith('/admin/ai/profiles')) return json([profile])
-        if (path.endsWith('/admin/ai/providers')) {
-          return json([
-            {
-              id: 'aip_test',
-              name: 'Test Provider',
-              preset: 'custom',
-              protocol: 'openai_chat_completions',
-              base_url: 'https://example.com/v1',
-              enabled: true,
-              allow_private_network: false,
-              timeout_seconds: 30,
-              max_retries: 2,
-              verify_tls: true,
-              structured_output_mode: 'auto',
-              api_key_configured: true,
-              created_at: '2026-07-15T00:00:00Z',
-              updated_at: '2026-07-15T00:00:00Z',
-            },
-          ])
-        }
-        if (path.includes('/admin/ai/invocations')) return json([])
-        if (path.endsWith('/admin/ai/providers/aip_test/models')) {
-          return json({
-            models: [
-              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true, supported_reasoning_levels: ['low', 'xhigh', 'ultra'], default_reasoning_level: 'low' },
-              { id: 'blocked', provider_id: 'aip_test', model_id: 'model-blocked', available: true, enabled: false },
-            ],
-          })
-        }
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
+describe('center Profile catalog and local invocation history', () => {
+  it('shows new center Profiles without exposing local creation or editing', async () => {
+    const methods: string[] = []
+    setApiFetcher(vi.fn(async (input, init) => {
+      methods.push(init?.method ?? 'GET')
+      const path = String(input)
+      return json(path.endsWith('/profiles') ? [profile] : path.endsWith('/hub') ? { base_url: 'https://hub.example.test' } : [invocation])
+    }) as typeof fetch)
     const wrapper = mount(AIProfilesView, { global: { plugins: [createPinia()] } })
     await flushPromises()
-    await wrapper.get('button.btn--primary').trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('身份与能力')
-    expect(wrapper.text()).toContain('模型路由')
-    expect(wrapper.text()).toContain('输出策略')
-    expect(wrapper.text()).toContain('成本可靠性')
-    expect(wrapper.text()).toContain('只会追加，不会替换')
-    expect(wrapper.text()).toContain('关闭后模型输出不再包含 reason 字段')
-    const modelOptions = wrapper.find('#ai-profile-model').findAll('option').map((item) => item.text())
-    expect(modelOptions).toContain('model-allowed')
-    expect(modelOptions).not.toContain('model-blocked')
-    await wrapper.find('#ai-profile-model').setValue('model-allowed')
-    const reasoningOptions = wrapper.find('#profile-reasoning').findAll('option').map((item) => item.attributes('value'))
-    expect(reasoningOptions).toEqual(['provider_default', 'low', 'xhigh', 'ultra'])
-    expect(wrapper.find('#profile-reasoning').text()).toContain('Provider 默认（低）')
-
+    expect(wrapper.text()).toContain('中心新增分类')
+    expect(wrapper.text()).toContain('old_business_use')
+    expect(wrapper.find('form').exists()).toBe(false)
+    expect(wrapper.findAll('button').some(button => button.text() === '新增 Profile')).toBe(false)
+    expect(wrapper.text()).not.toContain('确认删除')
+    expect(wrapper.get('a').attributes('href')).toBe('https://hub.example.test')
+    expect(methods.every(method => method === 'GET')).toBe(true)
     wrapper.unmount()
   })
 
-  it('refreshes missing model reasoning metadata and shows Provider levels', async () => {
-    const requests: Array<{ path: string; method: string }> = []
-    const levels = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        const method = init?.method ?? 'GET'
-        requests.push({ path, method })
-        if (path.endsWith('/admin/ai/profiles')) return json([profile])
-        if (path.endsWith('/admin/ai/providers')) {
-          return json([
-            {
-              id: 'aip_test',
-              name: 'Test Provider',
-              preset: 'custom',
-              protocol: 'openai_chat_completions',
-              base_url: 'https://example.com/v1',
-              enabled: true,
-              allow_private_network: false,
-              timeout_seconds: 30,
-              max_retries: 2,
-              verify_tls: true,
-              structured_output_mode: 'auto',
-              api_key_configured: true,
-              created_at: '2026-07-15T00:00:00Z',
-              updated_at: '2026-07-15T00:00:00Z',
-            },
-          ])
-        }
-        if (path.includes('/admin/ai/invocations')) return json([])
-        if (path.endsWith('/admin/ai/providers/aip_test/models')) {
-          return json({
-            models: [
-              {
-                id: 'gpt-6-luna',
-                provider_id: 'aip_test',
-                model_id: 'gpt-6-luna',
-                available: true,
-                enabled: true,
-                supported_reasoning_levels: null,
-                default_reasoning_level: null,
-              },
-            ],
-          })
-        }
-        if (
-          method === 'POST' &&
-          path.endsWith('/admin/ai/providers/aip_test/models/metadata/sync')
-        ) {
-          return json({
-            models: [
-              {
-                id: 'gpt-6-luna',
-                provider_id: 'aip_test',
-                model_id: 'gpt-6-luna',
-                available: true,
-                enabled: true,
-                supported_reasoning_levels: levels,
-                default_reasoning_level: 'medium',
-              },
-            ],
-          })
-        }
-        throw new Error(`unexpected request: ${method} ${path}`)
-      }) as typeof fetch,
-    )
-
+  it('keeps local invocation records visible when the center is unavailable', async () => {
+    setApiFetcher(vi.fn(async input => String(input).endsWith('/profiles')
+      ? new Response(JSON.stringify({ error: { message: 'unavailable' } }), { status: 502 })
+      : json(String(input).endsWith('/hub') ? { base_url: '' } : [invocation])) as typeof fetch)
     const wrapper = mount(AIProfilesView, { global: { plugins: [createPinia()] } })
     await flushPromises()
-    await wrapper.get('button.btn--primary').trigger('click')
-    await flushPromises()
-    await wrapper.get('#ai-profile-model').setValue('gpt-6-luna')
-
-    const reasoningSelect = wrapper.find('#profile-reasoning')
-    expect(reasoningSelect.findAll('option').map((item) => item.attributes('value'))).toEqual([
-      'provider_default',
-      ...levels,
-    ])
-    expect(reasoningSelect.text()).toContain('极高')
-    expect(reasoningSelect.text()).toContain('最大')
-    expect(reasoningSelect.text()).toContain('Ultra')
-    expect(requests).toContainEqual({
-      path: '/api/v1/admin/ai/providers/aip_test/models/metadata/sync',
-      method: 'POST',
-    })
-
+    expect(wrapper.text()).toContain('无法获取 AI Hub')
+    expect(wrapper.text()).toContain('old_business_use')
+    expect(wrapper.text()).toContain('deleted_profile')
     wrapper.unmount()
   })
 
-  it('confirms deletion and keeps the history warning visible', async () => {
-    const requests: Array<{ path: string; method: string }> = []
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        const method = init?.method ?? 'GET'
-        requests.push({ path, method })
-        if (method === 'DELETE') return new Response(null, { status: 204 })
-        if (path.endsWith('/admin/ai/profiles')) return json([profile])
-        if (path.endsWith('/admin/ai/providers')) return json([])
-        if (path.includes('/admin/ai/invocations')) return json([])
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
-    const wrapper = mount(AIProfilesView, {
-      attachTo: document.body,
-      global: { plugins: [createPinia()] },
-    })
-    await flushPromises()
-    await wrapper.get('.profile-table .btn--danger').trigger('click')
-
-    expect(document.body.textContent).toContain('历史调用记录会继续保留')
-    expect(document.body.textContent).toContain('请先修改或停用相关插件')
-    const confirm = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === '确认删除',
-    ) as HTMLButtonElement
-    confirm.click()
-    await flushPromises()
-
-    expect(requests).toContainEqual({
-      path: '/api/v1/admin/ai/profiles/semantic_classifier_fast',
-      method: 'DELETE',
-    })
-
-    wrapper.unmount()
-  })
-
-  it('keeps the delete dialog open and explains active plugin conflicts', async () => {
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        if (init?.method === 'DELETE') {
-          return new Response(
-            JSON.stringify({ error: { code: 'ai_profile_in_use', message: 'in use' } }),
-            { status: 409, headers: { 'Content-Type': 'application/json' } },
-          )
-        }
-        if (path.endsWith('/admin/ai/profiles')) return json([profile])
-        if (path.endsWith('/admin/ai/providers')) return json([])
-        if (path.includes('/admin/ai/invocations')) return json([])
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
-    const pinia = createPinia()
-    const wrapper = mount(AIProfilesView, {
-      attachTo: document.body,
-      global: { plugins: [pinia] },
-    })
-    await flushPromises()
-    await wrapper.get('.profile-table .btn--danger').trigger('click')
-    const confirm = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === '确认删除',
-    ) as HTMLButtonElement
-    confirm.click()
-    await flushPromises()
-
-    expect(useUiStore(pinia).toasts.at(-1)?.message).toContain('请先修改或停用相关插件')
-    expect(document.body.textContent).toContain('确认删除')
-
-    wrapper.unmount()
-  })
-
-  it('updates an existing policy with PATCH and clears optional budgets', async () => {
-    const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = []
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        const method = init?.method ?? 'GET'
-        requests.push({
-          path,
-          method,
-          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-        })
-        if (method === 'PATCH') return json({ ...profile, name: '更新后的分类策略' })
-        if (path.endsWith('/admin/ai/profiles')) return json([profile])
-        if (path.endsWith('/admin/ai/providers')) {
-          return json([
-            {
-              id: 'aip_test',
-              name: 'Test Provider',
-              preset: 'custom',
-              protocol: 'openai_chat_completions',
-              base_url: 'https://example.com/v1',
-              enabled: true,
-              allow_private_network: false,
-              timeout_seconds: 30,
-              max_retries: 2,
-              verify_tls: true,
-              structured_output_mode: 'auto',
-              api_key_configured: true,
-              created_at: '2026-07-15T00:00:00Z',
-              updated_at: '2026-07-15T00:00:00Z',
-            },
-          ])
-        }
-        if (path.includes('/admin/ai/invocations')) return json([])
-        if (path.endsWith('/admin/ai/providers/aip_test/models')) {
-          return json({
-            models: [
-              { id: 'allowed', provider_id: 'aip_test', model_id: 'model-allowed', available: true, enabled: true, supported_reasoning_levels: ['low'], default_reasoning_level: 'low' },
-            ],
-          })
-        }
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
+  it('refreshes the center catalog to discover Profiles added after page load', async () => {
+    let reads = 0
+    setApiFetcher(vi.fn(async input => {
+      const path = String(input)
+      if (path.endsWith('/profiles')) return json(++reads > 1 ? [profile] : [])
+      return json(path.endsWith('/hub') ? { base_url: '' } : [])
+    }) as typeof fetch)
     const wrapper = mount(AIProfilesView, { global: { plugins: [createPinia()] } })
     await flushPromises()
-    const edit = wrapper.findAll('.profile-table button').find((button) => button.text() === '编辑')
-    await edit?.trigger('click')
+    expect(wrapper.text()).not.toContain('中心新增分类')
+    await wrapper.get('button').trigger('click')
     await flushPromises()
-
-    expect(wrapper.get<HTMLInputElement>('#profile-id').element.disabled).toBe(true)
-    expect(wrapper.get<HTMLSelectElement>('#profile-capability').element.disabled).toBe(true)
-    await wrapper.get('#profile-name').setValue('更新后的分类策略')
-    await wrapper.get('#profile-request-limit').setValue('')
-    await wrapper.get('#profile-token-limit').setValue('')
-    await wrapper.get('form').trigger('submit')
-    await flushPromises()
-
-    const patchRequest = requests.find((request) => request.method === 'PATCH')
-    expect(patchRequest).toMatchObject({
-      path: '/api/v1/admin/ai/profiles/semantic_classifier_fast',
-      method: 'PATCH',
-      body: {
-        name: '更新后的分类策略',
-        daily_request_limit: null,
-        daily_token_limit: null,
-      },
-    })
-    expect(patchRequest?.body).not.toHaveProperty('id')
-    expect(patchRequest?.body).not.toHaveProperty('capability')
-
+    expect(wrapper.text()).toContain('中心新增分类')
     wrapper.unmount()
   })
 })

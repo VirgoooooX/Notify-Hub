@@ -316,7 +316,7 @@ async function publishReminderMenu() {
                 禁用 AI fallback (仅支持确定性结构语法)
               </option>
               <option v-for="profile in parserProfiles" :key="profile.id" :value="profile.id">
-                {{ profile.name }} · {{ profile.model }}
+                {{ profile.name }} · {{ profile.id }}
               </option>
             </AppSelect>
             <span class="field-help mt-2">
@@ -326,8 +326,8 @@ async function publishReminderMenu() {
 
           <div class="quick-link-box mt-5">
             <div class="quick-link-copy">
-              <strong>需要调整 AI Provider 或模型参数？</strong>
-              <span>前往 AI Gateway 配置接入点、凭据与模型温度等策略。</span>
+              <strong>需要调整 AI Hub 连接或业务参数？</strong>
+              <span>前往 AI Gateway 配置中心连接、应用令牌与业务 Profile。</span>
             </div>
             <RouterLink to="/ai/profiles" class="quick-link-action">
               打开 Profiles

@@ -78,6 +78,8 @@ from app.workers.x_health_worker import XHealthWorker
 
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope: Scope) -> Response:
+        if scope["path"].startswith("/api/"):
+            raise StarletteHTTPException(status_code=404)
         try:
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
@@ -95,7 +97,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = create_engine(settings)
     factory = create_session_factory(engine)
     clock = SystemClock()
-    ai_control_service = AIControlService(factory, clock.now)
     worker_stop = asyncio.Event()
     secret_store = (
         SecretStore(
@@ -106,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if settings.secret_encryption_key is not None
         else None
     )
+    ai_control_service = AIControlService(factory, clock.now, secret_store=secret_store)
     profile_registry = ProfileRegistry(
         factory,
         settings,
@@ -119,7 +121,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         profiles=profile_registry,
         routing=profile_routing,
     )
-    ai_service = AIService(factory, secret_store=secret_store)
+    ai_service = AIService(factory, secret_store=secret_store, profile_catalog=ai_control_service)
     reminder_service = ReminderService(
         factory,
         ReminderEventEmitterAdapter(event_service),
@@ -313,16 +315,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await profile_registry.ensure_default_profile()
-        await ai_control_service.bootstrap_if_empty(
-            enabled=settings.ai_enabled,
-            preset=settings.ai_bootstrap_preset,
-            base_url=settings.ai_bootstrap_base_url,
-            model=settings.ai_bootstrap_model,
-            api_key=(
-                settings.ai_bootstrap_api_key.get_secret_value()
-                if settings.ai_bootstrap_api_key is not None
+        await ai_control_service.bootstrap_connection(
+            base_url=settings.ai_hub_base_url,
+            application_key=(
+                settings.ai_hub_application_key.get_secret_value()
+                if settings.ai_hub_application_key is not None
                 else None
             ),
+            allow_private_network=settings.ai_hub_allow_private_network,
             secret_store=secret_store,
         )
         async with factory() as session:

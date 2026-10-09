@@ -27,22 +27,9 @@ class Settings(BaseSettings):
         default=SecretStr("development-only-change-me-public-media-signing-key")
     )
     secret_encryption_key: SecretStr | None = None
-    ai_enabled: bool = False
-    ai_bootstrap_preset: Literal[
-        "custom",
-        "openai",
-        "azure_openai",
-        "gemini",
-        "openrouter",
-        "deepseek",
-        "kimi",
-        "dashscope",
-        "zhipu",
-        "siliconflow",
-    ] = "custom"
-    ai_bootstrap_base_url: str | None = None
-    ai_bootstrap_model: str | None = None
-    ai_bootstrap_api_key: SecretStr | None = None
+    ai_hub_base_url: str | None = None
+    ai_hub_application_key: SecretStr | None = None
+    ai_hub_allow_private_network: bool = False
     access_token_minutes: int = Field(default=15, ge=1, le=1440)
     refresh_token_days: int = Field(default=30, ge=1, le=365)
     admin_api_key: SecretStr | None = None

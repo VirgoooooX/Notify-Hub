@@ -14,7 +14,7 @@ Notify Hub 是面向个人、家庭和小型自托管环境的企业微信通知
 - Once、Interval、Cron、周期和持续催办提醒；
 - 受控可信插件、Codex X Monitor 和 Fabrizio HWG Monitor；
 - 图片、语音和签名媒体访问；
-- AI Provider、Profile、预算、缓存和调用审计；
+- Family AI Hub 连接、Profile 目录、业务缓存和调用审计；
 - 管理后台与企业微信成员移动页面。
 
 当前不做多租户商业 SaaS、通用工作流平台、网页上传任意脚本、不可信进程内插件、LLM 直接操作数据库或渠道，以及无明确需求的 Redis、RabbitMQ 和微服务拆分。
@@ -151,13 +151,15 @@ Planner 只创建持久化实例；Escalation Worker claim 接收人并通过 Ev
 
 ## 9. AI Gateway
 
-Provider、API Key、模型目录、Profile、缓存、预算和调用日志属于核心平台。插件只能调用 Manifest 授权且能力匹配的 Profile，不能指定 Provider URL、API Key、任意 Header 或绕过安全策略。
+Family AI Hub 负责 Profile 新增和编辑、CPA 连接、协议、模型、生成参数及每日额度。Notify Hub 保存中心连接、应用令牌、只读 Profile 镜像、业务缓存和调用日志。插件只能调用 Manifest 授权且能力匹配的 Profile，不能指定 URL、令牌、模型、协议或任意 Header。
 
 - 外部内容视为不可信数据，模型无工具、通知或配置写权限。
 - 结构化输出必须通过 Pydantic 校验；不得从任意自然语言猜测业务结论。
-- Provider URL 受 HTTPS、SSRF、DNS、实际连接地址和重定向限制。
-- 模型同步可读取 Provider 提供的逐模型思考等级；已声明等级时，Profile 只允许选择该模型支持的值，调用前再次校验。未显式选择时沿用 Provider 默认值。
-- API Key 使用 SecretStore；日志和 Invocation 不保存正文、Prompt、Authorization 或原始响应。
+- AI Hub URL 受 HTTPS、SSRF、DNS、实际连接地址和重定向限制；私网 HTTP 需要管理员明确开启。
+- Profile 稳定 ID 作为 `task`；调用前读取鉴权目录同步新增、修改与停用状态，生成参数由中心执行，业务 Schema 随请求提交。中心用途标签由本项目解释为分类、提取或摘要；其他用途不进入 Notify Hub 选择框。
+- 本地 Profile 不提供新增、编辑或删除接口；镜像使用中心版本使业务缓存失效。中心删除或不可达时停止调用，历史 Profile 行和调用日志保留；调用记录页面不依赖中心可用性。
+- 应用令牌使用 SecretStore，所有业务 Profile 共用一个应用令牌；日志和 Invocation 不保存正文、Prompt、Authorization 或原始响应。旧 Provider 凭据不会用于中心鉴权。
+- Notify Hub 不重试网络错误，也不协商或降级上游输出协议；`auto` 对应中心 JSON Schema 输出。业务结果本地校验，保留最多一次业务输出修复；中心错误直接失败。
 - AI 是建议层；事件幂等、是否发送和 checkpoint 由确定性代码负责。
 - AI 不可用时核心平台和纯规则插件继续工作；需要 AI 决策的监控默认 fail closed。
 

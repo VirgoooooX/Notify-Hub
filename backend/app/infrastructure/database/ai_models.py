@@ -83,6 +83,7 @@ class AIProfile(StringIdMixin, TimestampMixin, Base):
     daily_token_limit: Mapped[int | None] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     revision: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    hub_revision: Mapped[str | None] = mapped_column(String(64))
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 

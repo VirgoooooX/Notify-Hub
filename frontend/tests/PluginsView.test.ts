@@ -72,6 +72,31 @@ afterEach(() => {
 })
 
 describe('PluginsView schedule compatibility', () => {
+  it('discovers a center Profile added after the plugin page was loaded', async () => {
+    let profiles: { id: string; name: string; capability: string; enabled: boolean }[] = []
+    const manifest = { permissions: { ai_capabilities: ['classify'] } }
+    setApiFetcher(vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/v1/admin/plugins') {
+        return response([{ id: 'codex_x_monitor', name: 'Fake Monitor', enabled: false, status: 'disabled', manifest }])
+      }
+      if (url === '/api/v1/admin/ai/profiles') return response(profiles)
+      if (url === '/api/v1/admin/plugins/codex_x_monitor') {
+        return response({ config: { decision_mode: 'ai_only' }, manifest })
+      }
+      if (url.endsWith('/secrets') || url.endsWith('/people')) return response([])
+      return response({})
+    }) as typeof fetch)
+    const wrapper = mount(PluginsView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    profiles = [{ id: 'center_new', name: '中心新增分类', capability: 'classify', enabled: true }]
+    await wrapper.findAll('button').find(button => button.text() === '配置')!.trigger('click')
+    await flushPromises()
+    const options = Array.from(document.body.querySelectorAll('option'))
+    expect(options.some(option => option.value === 'center_new' && option.textContent?.includes('中心新增分类'))).toBe(true)
+    wrapper.unmount()
+  })
+
   it('does not write scheduling when a new backend receives an ordinary config save', async () => {
     const requests = await openAndSave(true)
     expect(requests).toHaveLength(1)

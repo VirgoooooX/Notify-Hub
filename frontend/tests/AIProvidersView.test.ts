@@ -5,155 +5,75 @@ import { setApiFetcher } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import AIProvidersView from '@/views/AIProvidersView.vue'
 
-const provider = {
-  id: 'aip_test',
-  name: 'Test Provider',
-  preset: 'custom',
-  protocol: 'openai_chat_completions',
-  base_url: 'http://192.168.31.100:8317/v1',
-  enabled: true,
-  allow_private_network: true,
-  timeout_seconds: 30,
-  max_retries: 2,
-  verify_tls: true,
-  structured_output_mode: 'auto',
-  api_key_configured: true,
-  created_at: '2026-07-15T00:00:00Z',
-  updated_at: '2026-07-15T00:00:00Z',
+const connection = {
+  base_url: 'http://127.0.0.1:8848', enabled: true, allow_private_network: true,
+  timeout_seconds: 600, verify_tls: true, application_key_configured: true,
 }
-
-function json(data: unknown, status = 200) {
-  return new Response(JSON.stringify({ data }), {
-    status,
-    headers: { 'Content-Type': 'application/json' },
-  })
+function json(data: unknown) {
+  return new Response(JSON.stringify({ data }), { headers: { 'Content-Type': 'application/json' } })
 }
+afterEach(() => { document.body.innerHTML = ''; vi.restoreAllMocks() })
 
-afterEach(() => {
-  document.body.innerHTML = ''
-  vi.restoreAllMocks()
-})
-
-describe('AIProvidersView', () => {
-  it('shows only remotely available models and handles an empty sync result', async () => {
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        if (path.endsWith('/admin/ai/providers')) return json([provider])
-        if (path.endsWith('/models') && init?.method !== 'POST') {
-          return json({
-            models: [
-              { id: 'active', model_id: 'active-model', available: true, enabled: true },
-              { id: 'retired', model_id: 'retired-model', available: false, enabled: false },
-            ],
-          })
-        }
-        if (path.endsWith('/models/sync')) {
-          return json({
-            models: [
-              { id: 'active', model_id: 'active-model', available: false, enabled: false },
-              { id: 'retired', model_id: 'retired-model', available: false, enabled: false },
-            ],
-          })
-        }
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
-    const wrapper = mount(AIProvidersView, { global: { plugins: [createPinia()] } })
-    await flushPromises()
-    const configure = wrapper.findAll('.provider-actions button').find((button) => button.text() === '同步 / 配置模型')
-    await configure?.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.findAll('.model-option')).toHaveLength(1)
-    expect(wrapper.get('.model-option').text()).toContain('active-model')
-    expect(wrapper.text()).not.toContain('retired-model')
-    expect(wrapper.get('.model-summary').text()).toContain('1 个远端可用')
-
-    const sync = wrapper.findAll('.model-control__actions button').find((button) => button.text() === '从远端同步')
-    await sync?.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.findAll('.model-option')).toHaveLength(0)
-    expect(wrapper.text()).toContain('当前没有远端可用模型')
-    wrapper.unmount()
-  })
-
-  it('updates an existing Provider without sending an API key', async () => {
+describe('AI Hub connection', () => {
+  it('saves connection settings without model, protocol or credential fields', async () => {
     const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = []
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        const method = init?.method ?? 'GET'
-        requests.push({
-          path,
-          method,
-          body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined,
-        })
-        if (method === 'PATCH') return json({ ...provider, name: 'LAN Provider' })
-        if (path.endsWith('/admin/ai/providers')) return json([provider])
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
-
+    setApiFetcher(vi.fn(async (input, init) => {
+      const path = String(input)
+      requests.push({ path, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      return json(connection)
+    }) as typeof fetch)
     const wrapper = mount(AIProvidersView, { global: { plugins: [createPinia()] } })
     await flushPromises()
-    const edit = wrapper.findAll('.provider-table button').find((button) => button.text() === '编辑')
-    await edit?.trigger('click')
+    expect(wrapper.text()).toContain('AI Hub 连接')
+    expect(wrapper.text()).not.toContain('新增 Provider')
+    await wrapper.get('#hub-url').setValue('https://hub.example.test')
+    await wrapper.findAll('form')[0]!.trigger('submit')
     await flushPromises()
-
-    const name = wrapper.get<HTMLInputElement>('form.grid input[required]')
-    await name.setValue('LAN Provider')
-    await wrapper.get('form.grid').trigger('submit')
-    await flushPromises()
-
-    const request = requests.find((item) => item.method === 'PATCH')
-    expect(request).toMatchObject({
-      path: '/api/v1/admin/ai/providers/aip_test',
-      method: 'PATCH',
-      body: {
-        name: 'LAN Provider',
-        base_url: 'http://192.168.31.100:8317/v1',
-        allow_private_network: true,
-      },
-    })
-    expect(request?.body).not.toHaveProperty('api_key')
-    expect(request?.body).not.toHaveProperty('id')
+    expect(requests.at(-1)).toEqual({ path: '/api/v1/admin/ai/hub', method: 'PUT', body: {
+      ...connection, base_url: 'https://hub.example.test', application_key_configured: undefined,
+    } })
+    expect(requests.at(-1)?.body).not.toHaveProperty('application_key_configured')
     wrapper.unmount()
   })
 
-  it('confirms deletion and explains Profile reference conflicts', async () => {
-    setApiFetcher(
-      vi.fn(async (input, init) => {
-        const path = String(input)
-        if (init?.method === 'DELETE') {
-          return new Response(
-            JSON.stringify({ error: { code: 'conflict', message: 'provider in use' } }),
-            { status: 409, headers: { 'Content-Type': 'application/json' } },
-          )
-        }
-        if (path.endsWith('/admin/ai/providers')) return json([provider])
-        throw new Error(`unexpected request: ${path}`)
-      }) as typeof fetch,
-    )
+  it('stores the shared application key separately and clears the password field', async () => {
+    const requests: Array<{ path: string; body?: Record<string, unknown> }> = []
+    setApiFetcher(vi.fn(async (input, init) => {
+      requests.push({ path: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      return json(connection)
+    }) as typeof fetch)
+    const wrapper = mount(AIProvidersView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    await wrapper.get('#hub-key').setValue('test-application-key')
+    await wrapper.findAll('form')[1]!.trigger('submit')
+    await flushPromises()
+    expect(requests.at(-1)).toEqual({ path: '/api/v1/admin/ai/hub/application-key', body: { value: 'test-application-key' } })
+    expect((wrapper.get('#hub-key').element as HTMLInputElement).value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('exports routing for the central application without local model management', async () => {
+    const routing = { name: 'Notify Hub', slug: 'notify-hub', profiles: { stable_classifier: { protocol: 'chat', models: ['legacy-model'] } } }
+    setApiFetcher(vi.fn(async input => json(String(input).endsWith('/routing') ? routing : connection)) as typeof fetch)
+    const wrapper = mount(AIProvidersView, { global: { plugins: [createPinia()] } })
+    await flushPromises()
+    await wrapper.findAll('button').find(button => button.text() === '导出原有模型路由')!.trigger('click')
+    await flushPromises()
+    expect((wrapper.get('#hub-routing').element as HTMLTextAreaElement).value).toContain('stable_classifier')
+    expect(wrapper.text()).not.toContain('同步 / 配置模型')
+    wrapper.unmount()
+  })
+
+  it('reports a connection test failure', async () => {
+    setApiFetcher(vi.fn(async (_input, init) => init?.method === 'POST'
+      ? new Response(JSON.stringify({ error: { message: 'ai_hub_not_configured' } }), { status: 502 })
+      : json(connection)) as typeof fetch)
     const pinia = createPinia()
-    const wrapper = mount(AIProvidersView, {
-      attachTo: document.body,
-      global: { plugins: [pinia] },
-    })
+    const wrapper = mount(AIProvidersView, { global: { plugins: [pinia] } })
     await flushPromises()
-    await wrapper.get('.provider-table .btn--danger').trigger('click')
-
-    expect(document.body.textContent).toContain('历史模型配置和调用记录继续保留')
-    const confirm = [...document.body.querySelectorAll('button')].find(
-      (button) => button.textContent?.trim() === '确认删除',
-    ) as HTMLButtonElement
-    confirm.click()
+    await wrapper.findAll('button').find(button => button.text() === '测试已保存的连接')!.trigger('click')
     await flushPromises()
-
-    expect(useUiStore(pinia).toasts.at(-1)?.message).toContain('仍被 AI Profile 引用')
-    expect(document.body.textContent).toContain('确认删除')
+    expect(useUiStore(pinia).toasts.at(-1)?.message).toContain('ai_hub_not_configured')
     wrapper.unmount()
   })
 })

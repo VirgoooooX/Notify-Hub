@@ -79,7 +79,7 @@ const groups: NavGroup[] = [
   {
     groupName: 'AI Gateway',
     items: [
-      { href: '/ai/providers', label: 'Providers', icon: Bot },
+      { href: '/ai/providers', label: 'AI Hub 连接', icon: Bot },
       { href: '/ai/profiles', label: 'Profiles', icon: Cpu }
     ]
   },
@@ -278,7 +278,7 @@ onBeforeUnmount(() => {
           <button class="menu-trigger-btn mobile-only" aria-label="打开导航" @click="ui.sidebarOpen = true">
             <Menu :size="20" />
           </button>
-          
+
           <div class="breadcrumbs">
             <span class="crumb-parent">{{ currentGroup }}</span>
             <span class="crumb-separator">/</span>
@@ -668,30 +668,30 @@ onBeforeUnmount(() => {
     transform: translateX(-100%);
     transition: transform 180ms ease;
   }
-  
+
   .sidebar--open {
     transform: translateX(0);
   }
-  
+
   .sidebar-scrim {
     position: fixed;
     inset: 0;
     background-color: rgba(23, 27, 24, 0.53);
     z-index: 25;
   }
-  
+
   .main-workspace {
     margin-left: 0;
   }
-  
+
   .workspace-header {
     padding: 0 var(--space-4);
   }
-  
+
   .workspace-content {
     padding: var(--space-4);
   }
-  
+
   .system-status-badge {
     display: none;
   }

@@ -4,13 +4,14 @@ import ipaddress
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from app.ai.provider import AIProviderError, OpenAICompatibleClient
+from app.ai.provider import AIHubClient, AIProviderError
 from app.ai.schemas import AIClassificationItem
 from app.ai.service import AIGatewayError, AIService
-from app.application.ai_control_service import AIControlService
+from app.application.ai_control_service import HUB_CONNECTION_ID, AIControlService
 from app.infrastructure.database import Base
 from app.infrastructure.database.ai_models import (
     AIInvocation,
@@ -38,47 +39,331 @@ async def _configured_service(
         await connection.run_sync(Base.metadata.create_all)
     factory = create_session_factory(engine)
     control = AIControlService(factory)
-    await control.create_provider(
+    await control.update_connection(
         {
-            "id": "aip_test",
-            "name": "Test",
-            "preset": "custom",
-            "protocol": "openai_chat_completions",
-            "base_url": "https://provider.example.test/v1",
+            "base_url": "https://hub.example.test",
             "enabled": True,
             "allow_private_network": False,
-            "timeout_seconds": 5,
-            "max_retries": 0,
+            "timeout_seconds": 600,
             "verify_tls": True,
-            "structured_output_mode": "auto",
-            "custom_query": {},
         }
     )
-    await control.sync_provider_models("aip_test", ["test-model"])
-    await control.set_allowed_models("aip_test", ["test-model"])
-    await control.create_profile(
-        {
-            "id": "test_classifier",
-            "name": "Test classifier",
-            "provider_id": "aip_test",
-            "model": "test-model",
-            "temperature": 0,
-            "max_output_tokens": 160,
-            "response_format": "auto",
-            "timeout_seconds": 5,
-            "cache_ttl_seconds": 3600,
-            "daily_request_limit": daily_request_limit,
-            "daily_token_limit": None,
-            "enabled": True,
-        }
+    async with factory() as session, session.begin():
+        session.add(
+            AIProfile(
+                id="test_classifier",
+                name="Test classifier",
+                provider_id=HUB_CONNECTION_ID,
+                model="",
+                capability="classify",
+                temperature=0,
+                max_output_tokens=160,
+                response_format="auto",
+                timeout_seconds=5,
+                cache_ttl_seconds=3600,
+                daily_request_limit=daily_request_limit,
+                daily_token_limit=None,
+                enabled=True,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+    async def catalog_transport(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/profiles"):
+            async with factory() as session:
+                rows = list(
+                    await session.scalars(select(AIProfile).where(AIProfile.deleted_at.is_(None)))
+                )
+                entries = []
+                for row in rows:
+                    view = control._profile_view(row)
+                    metadata = {
+                        key: view[key]
+                        for key in [
+                            "name",
+                            "description",
+                            "enabled",
+                            "response_format",
+                            "output_language",
+                            "verbosity",
+                            "include_reason",
+                            "max_reason_characters",
+                            "cache_ttl_seconds",
+                            "daily_request_limit",
+                            "daily_token_limit",
+                        ]
+                    }
+                    entry = {
+                        "id": row.id,
+                        "purpose": row.capability,
+                        "available": True,
+                        "protocol": "chat",
+                        "models": ["synthetic"],
+                        **metadata,
+                        "parameters": {
+                            "temperature": row.temperature,
+                            "max_output_tokens": row.max_output_tokens,
+                            "reasoning_effort": None
+                            if row.reasoning_effort == "provider_default"
+                            else row.reasoning_effort,
+                            "timeout_seconds": row.timeout_seconds,
+                        },
+                    }
+                    import hashlib
+
+                    entry["revision"] = hashlib.sha256(
+                        json.dumps(entry, sort_keys=True).encode()
+                    ).hexdigest()
+                    entries.append(entry)
+            return httpx.Response(200, json={"data": entries})
+        return await handler.handle_async_request(request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(catalog_transport))
+    hub_client = AIHubClient(resolver=_public_resolver, client=client)
+    secrets = AsyncMock()
+    secrets.get.return_value = "test-application-key"
+    return AIService(factory, hub_client=hub_client, secret_store=secrets), factory, client
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status,code,retryable",
+    [
+        (401, "invalid_application_key", False),
+        (422, "output_schema_mismatch", False),
+        (429, "upstream_http_error", True),
+        (504, "upstream_timeout", True),
+    ],
+)
+async def test_hub_errors_fail_closed_without_local_retry_or_sensitive_body(
+    tmp_path: Path, status: int, code: str, retryable: bool
+) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            status,
+            json={
+                "error": {"code": code, "retryable": retryable, "message": "private-secret-body"},
+            },
+        )
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id="plugin",
+            plugin_run_id=None,
+            use_case="failure",
+            content="synthetic",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+        )
+    assert error.value.code == f"ai_hub_{code}"
+    assert error.value.retryable is retryable
+    assert "private-secret-body" not in str(error.value)
+    assert calls == 1
+    async with factory() as session:
+        row = await session.scalar(select(AIInvocation))
+        assert row.status == "failed" and row.error_code == f"ai_hub_{code}"
+        assert await session.scalar(select(func.count(AIResponseCache.id))) == 0
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_hub_network_timeout_does_not_retry(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("private body", request=request)
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AIGatewayError, match="AI Hub timed out") as error:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="timeout",
+            content="synthetic",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+        )
+    assert error.value.code == "ai_timeout" and calls == 1
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_missing_hub_key_never_uses_legacy_provider_key(tmp_path: Path) -> None:
+    service, factory, client = await _configured_service(
+        tmp_path, httpx.MockTransport(lambda request: pytest.fail("must not send a request"))
     )
-    client = httpx.AsyncClient(transport=handler)
-    provider_client = OpenAICompatibleClient(resolver=_public_resolver, client=client)
-    return AIService(factory, provider_client=provider_client), factory, client
+    service._secrets.get.return_value = None
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="missing_key",
+            content="synthetic",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+        )
+    assert error.value.code == "ai_hub_key_missing"
+    service._secrets.get.assert_awaited_once_with("ai_hub", HUB_CONNECTION_ID, "application_key")
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "address,allow_private,expected",
+    [
+        ("127.0.0.1", False, "ai_unsafe_url"),
+        ("169.254.169.254", True, "ai_unsafe_url"),
+        ("100.100.100.200", True, "ai_unsafe_url"),
+    ],
+)
+async def test_hub_blocks_private_and_metadata_addresses(
+    address: str, allow_private: bool, expected: str
+) -> None:
+    async def resolver(_host: str, _port: int) -> set[ipaddress.IPv4Address]:
+        return {ipaddress.ip_address(address)}
+
+    client = AIHubClient(resolver=resolver)
+    with pytest.raises(AIProviderError) as error:
+        await client._validate_url("https://hub.example.test", allow_private)
+    assert error.value.code == expected
+
+
+@pytest.mark.asyncio
+async def test_hub_allows_explicit_private_network_and_rejects_redirects(tmp_path: Path) -> None:
+    service, factory, client = await _configured_service(
+        tmp_path,
+        httpx.MockTransport(
+            lambda request: httpx.Response(
+                302, headers={"Location": "https://elsewhere.example.test"}
+            )
+        ),
+    )
+    assert await service._hub_client._validate_url("http://127.0.0.1:8848", True)
+    with pytest.raises(AIGatewayError) as error:
+        await service.test_connection()
+    assert error.value.code == "ai_redirect_forbidden"
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_hub_connection_change_invalidates_persistent_business_cache(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _success_response(request)
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    options = dict(
+        profile="test_classifier",
+        plugin_id=None,
+        plugin_run_id=None,
+        use_case="cache",
+        content="synthetic",
+        instruction="Classify.",
+        labels=["notify", "ignore"],
+    )
+    await service.classify(**options)
+    control = AIControlService(factory)
+    await control.update_connection(
+        {**await control.get_connection(), "base_url": "https://new-hub.example.test"}
+    )
+    await service.classify(**options)
+    assert calls == 2
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,calls", [("[]", 1), ("private-invalid-json", 2)])
+async def test_hub_malformed_business_output_has_bounded_repair_and_no_cache(
+    tmp_path: Path, text: str, calls: int
+) -> None:
+    received = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal received
+        received += 1
+        return httpx.Response(200, json={"output": {"text": text}, "usage": {}})
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="malformed",
+            content="synthetic",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+        )
+    assert error.value.code == "ai_invalid_structured_output"
+    assert "private-invalid-json" not in str(error.value)
+    assert received == calls
+    async with factory() as session:
+        row = await session.scalar(select(AIInvocation))
+        assert row.status == "failed"
+        assert await session.scalar(select(func.count(AIResponseCache.id))) == 0
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_hub_bounds_streamed_response_size(tmp_path: Path) -> None:
+    service, factory, client = await _configured_service(
+        tmp_path, httpx.MockTransport(lambda request: httpx.Response(200, content=b"x" * 1001))
+    )
+    service._hub_client._max_response_bytes = 1000
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="size",
+            content="synthetic",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+        )
+    assert error.value.code == "ai_response_too_large"
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.parametrize("peer", ["127.0.0.1", "93.184.216.35"])
+def test_hub_peer_must_match_the_validated_address(peer: str) -> None:
+    class Stream:
+        def get_extra_info(self, name: str) -> tuple[str, int]:
+            return peer, 443
+
+    client = AIHubClient()
+    response = httpx.Response(200, extensions={"network_stream": Stream()})
+    with pytest.raises(AIProviderError) as error:
+        client._validate_peer(response, {ipaddress.ip_address("93.184.216.34")}, False)
+    assert error.value.code == "ai_unsafe_url"
 
 
 def _success_response(request: httpx.Request) -> httpx.Response:
+    assert request.url.path == "/api/v1/generate"
+    assert request.headers["authorization"] == "Bearer test-application-key"
     payload = json.loads(request.content)
+    assert payload["task"] == "test_classifier"
+    assert set(payload) == {"task", "messages", "output", "parameters"}
     user_data = json.loads(payload["messages"][1]["content"])
     results = [
         {"id": item["id"], "label": "notify", "confidence": 0.95, "reason": "match"}
@@ -87,8 +372,14 @@ def _success_response(request: httpx.Request) -> httpx.Response:
     return httpx.Response(
         200,
         json={
-            "choices": [{"message": {"content": json.dumps({"results": results})}}],
-            "usage": {"prompt_tokens": 20, "completion_tokens": 10},
+            "request_id": "hub-request",
+            "model": "center-selected-model",
+            "output": {
+                "type": "json_schema",
+                "text": json.dumps({"results": results}),
+                "data": {"results": results},
+            },
+            "usage": {"input_tokens": 20, "output_tokens": 10},
         },
     )
 
@@ -139,74 +430,12 @@ async def test_ai_gateway_batches_and_reuses_persistent_cache(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_ai_gateway_falls_back_from_json_schema(tmp_path: Path) -> None:
-    modes: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        mode = payload.get("response_format", {}).get("type", "prompt_json")
-        modes.append(mode)
-        if mode == "json_schema":
-            return httpx.Response(400, json={"error": {"message": "unsupported"}})
-        return _success_response(request)
-
-    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    result = await service.classify(
-        profile="test_classifier",
-        plugin_id="test_plugin",
-        plugin_run_id="run-1",
-        use_case="test",
-        content="candidate",
-        instruction="Classify candidate.",
-        labels=["notify", "ignore"],
-    )
-    assert result.label == "notify"
-    assert modes == ["json_schema", "json_object"]
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_ai_gateway_continues_to_prompt_json_after_invalid_json_object(
-    tmp_path: Path,
-) -> None:
-    modes: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        mode = payload.get("response_format", {}).get("type", "prompt_json")
-        modes.append(mode)
-        if mode == "json_schema":
-            return httpx.Response(400, json={"error": {"message": "unsupported"}})
-        if mode == "json_object":
-            assert '"results"' in payload["messages"][0]["content"]
-            return httpx.Response(
-                200,
-                json={"choices": [{"message": {"content": "not valid JSON"}}]},
-            )
-        return _success_response(request)
-
-    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    result = await service.classify(
-        profile="test_classifier",
-        plugin_id="test_plugin",
-        plugin_run_id="run-1",
-        use_case="test",
-        content="candidate",
-        instruction="Classify candidate.",
-        labels=["notify", "ignore"],
-    )
-    assert result.label == "notify"
-    assert modes == ["json_schema", "json_object", "json_object", "prompt_json"]
-    await client.aclose()
-
-
-@pytest.mark.asyncio
 async def test_ai_gateway_accepts_complete_fenced_json(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         successful = _success_response(request)
         body = json.loads(successful.content)
-        content = body["choices"][0]["message"]["content"]
-        body["choices"][0]["message"]["content"] = f"```json\n{content}\n```"
+        content = body["output"]["text"]
+        body["output"]["text"] = f"```json\n{content}\n```"
         return httpx.Response(200, json=body)
 
     service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
@@ -224,58 +453,34 @@ async def test_ai_gateway_accepts_complete_fenced_json(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ai_gateway_rejects_all_invalid_modes_without_leaking_content(
-    tmp_path: Path,
-) -> None:
+async def test_ai_gateway_leaves_budget_enforcement_to_the_center(tmp_path: Path) -> None:
     calls = 0
-    raw_marker = "provider-private-invalid-output"
 
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        payload = json.loads(request.content)
-        mode = payload.get("response_format", {}).get("type", "prompt_json")
-        if mode == "json_schema":
-            return httpx.Response(400, json={"error": {"message": "unsupported"}})
-        return httpx.Response(
-            200,
-            json={"choices": [{"message": {"content": raw_marker}}]},
-        )
+        if calls > 1:
+            return httpx.Response(
+                429, json={"error": {"code": "budget_exceeded", "retryable": False}}
+            )
+        return _success_response(request)
 
-    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    with pytest.raises(AIGatewayError) as exc_info:
-        await service.classify(
-            profile="test_classifier",
-            plugin_id="test_plugin",
-            plugin_run_id="run-1",
-            use_case="test",
-            content="candidate",
-            instruction="Classify candidate.",
-            labels=["notify", "ignore"],
-        )
-    assert exc_info.value.code == "ai_invalid_structured_output"
-    assert raw_marker not in str(exc_info.value)
-    assert calls == 5
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_ai_gateway_enforces_daily_request_budget(tmp_path: Path) -> None:
     service, _factory, client = await _configured_service(
-        tmp_path, httpx.MockTransport(_success_response), daily_request_limit=1
+        tmp_path, httpx.MockTransport(handler), daily_request_limit=1
     )
-    common = {
-        "profile": "test_classifier",
-        "plugin_id": "test_plugin",
-        "plugin_run_id": "run-1",
-        "use_case": "test",
-        "instruction": "Classify candidate.",
-        "labels": ["notify", "ignore"],
-    }
+    common = dict(
+        profile="test_classifier",
+        plugin_id=None,
+        plugin_run_id=None,
+        use_case="budget",
+        instruction="Classify.",
+        labels=["notify", "ignore"],
+    )
     await service.classify(content="first", **common)
-    with pytest.raises(AIGatewayError, match="daily request limit") as exc_info:
+    with pytest.raises(AIGatewayError) as error:
         await service.classify(content="second", **common)
-    assert exc_info.value.code == "ai_budget_exceeded"
+    assert error.value.code == "ai_hub_budget_exceeded" and not error.value.retryable
+    assert calls == 2
     await client.aclose()
 
 
@@ -289,7 +494,7 @@ async def test_ai_gateway_extracts_summarizes_and_caches(tmp_path: Path) -> None
         options = user_data["options"]
         if "fields" in options:
             calls.append("extract")
-            extraction_schema = payload["response_format"]["json_schema"]["schema"]
+            extraction_schema = payload["output"]["schema"]
             assert "reason" not in extraction_schema["properties"]
             assert "reason" not in extraction_schema["required"]
             content = {
@@ -302,8 +507,8 @@ async def test_ai_gateway_extracts_summarizes_and_caches(tmp_path: Path) -> None
         return httpx.Response(
             200,
             json={
-                "choices": [{"message": {"content": json.dumps(content)}}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                "output": {"text": json.dumps(content)},
+                "usage": {"input_tokens": 10, "output_tokens": 5},
             },
         )
 
@@ -363,22 +568,20 @@ async def test_ai_profile_policy_is_applied_and_capability_is_enforced(tmp_path:
         nonlocal calls
         calls += 1
         payload = json.loads(request.content)
-        assert payload["reasoning_effort"] == "low"
-        assert payload["max_completion_tokens"] == 160
-        assert "temperature" not in payload
+        assert payload["parameters"] == {}
         assert "max_tokens" not in payload
         system_prompts.append(payload["messages"][0]["content"])
-        schema = payload["response_format"]["json_schema"]["schema"]
+        schema = payload["output"]["schema"]
         result_schema = schema["properties"]["results"]["items"]
         assert "reason" not in result_schema["properties"]
         assert "reason" not in result_schema["required"]
         response = _success_response(request)
         body = json.loads(response.content)
         if calls == 1:
-            content = json.loads(body["choices"][0]["message"]["content"])
+            content = json.loads(body["output"]["text"])
             for item in content["results"]:
                 item.pop("reason")
-            body["choices"][0]["message"]["content"] = json.dumps(content)
+            body["output"]["text"] = json.dumps(content)
         return httpx.Response(200, json=body)
 
     service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
@@ -444,15 +647,15 @@ async def test_disabled_reason_is_omitted_from_classification_fallback_prompts(
         ) in system_prompt
         assert '"confidence":number,"reason":string' not in system_prompt
         if mode == "json_object":
-            assert payload["response_format"] == {"type": "json_object"}
+            assert payload["output"] == {"type": "json"}
         else:
-            assert "response_format" not in payload
+            assert payload["output"] == {"type": "text"}
         response = _success_response(request)
         body = json.loads(response.content)
-        content = json.loads(body["choices"][0]["message"]["content"])
+        content = json.loads(body["output"]["text"])
         for item in content["results"]:
             item.pop("reason")
-        body["choices"][0]["message"]["content"] = json.dumps(content)
+        body["output"]["text"] = json.dumps(content)
         return httpx.Response(200, json=body)
 
     service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
@@ -476,204 +679,82 @@ async def test_disabled_reason_is_omitted_from_classification_fallback_prompts(
 
 
 @pytest.mark.asyncio
-async def test_ai_provider_lists_models_without_exposing_response_body(tmp_path: Path) -> None:
+async def test_center_profile_discovery_revision_and_removal_preserve_local_history(
+    tmp_path: Path,
+) -> None:
+    service, factory, initial_client = await _configured_service(
+        tmp_path, httpx.MockTransport(_success_response)
+    )
+    async with factory() as db:
+        connection = await db.get(AIProvider, HUB_CONNECTION_ID)
+    first = (await service._hub_client.list_profiles(connection, application_key="test"))[
+        0
+    ].model_dump()
+    first.update(id="center_new", name="New center classifier", revision="a" * 64)
+    catalog = [first]
+    posts = 0
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.method == "GET"
-        assert request.url.path.endswith("/models")
-        assert "client_version" not in request.url.params
-        return httpx.Response(200, json={"data": [{"id": "model-b"}, {"id": "model-a"}]})
-
-    service, _factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    assert await service.list_models("aip_test") == ["model-a", "model-b"]
-    await client.aclose()
-
-
-@pytest.mark.asyncio
-async def test_ai_provider_reads_cpa_model_reasoning_levels(tmp_path: Path) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "client_version" not in request.url.params:
-            return httpx.Response(
-                200,
-                json={
-                    "data": [{"id": "gpt-6-sol"}, {"id": "claude-sonnet"}, {"id": "standard-only"}]
-                },
-            )
+        nonlocal posts
+        if request.url.path.endswith("/profiles"):
+            return httpx.Response(200, json={"data": catalog})
+        posts += 1
+        payload = json.loads(request.content)
+        assert payload["parameters"] == {}
+        assert payload["task"] == "center_new"
+        items = json.loads(payload["messages"][1]["content"])["items"]
+        results = [
+            {"id": item["id"], "label": "notify", "confidence": 0.95, "reason": "match"}
+            for item in items
+        ]
         return httpx.Response(
             200,
             json={
-                "models": [
-                    {
-                        "slug": "gpt-6-sol",
-                        "default_reasoning_level": "medium",
-                        "supported_reasoning_levels": [
-                            {"effort": "low"},
-                            {"effort": "medium"},
-                            {"effort": "ultra"},
-                        ],
-                    },
-                    {"slug": "claude-sonnet", "supported_reasoning_levels": None},
-                ]
+                "request_id": "hub-discovery",
+                "model": "center-selected-model",
+                "output": {
+                    "type": "json_schema",
+                    "text": json.dumps({"results": results}),
+                    "data": {"results": results},
+                },
+                "usage": {"input_tokens": 20, "output_tokens": 10},
             },
         )
 
-    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    assert await service.list_model_catalog("aip_test") == [
-        {
-            "model_id": "claude-sonnet",
-            "supported_reasoning_levels": [],
-            "default_reasoning_level": None,
-        },
-        {
-            "model_id": "gpt-6-sol",
-            "supported_reasoning_levels": ["low", "medium", "ultra"],
-            "default_reasoning_level": "medium",
-        },
-        {
-            "model_id": "standard-only",
-            "supported_reasoning_levels": None,
-            "default_reasoning_level": None,
-        },
-    ]
-    await client.aclose()
-    await factory.kw["bind"].dispose()
-
-
-@pytest.mark.asyncio
-async def test_ai_provider_falls_back_when_catalog_query_is_unsupported(tmp_path: Path) -> None:
-    requests: list[bool] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        is_catalog = "client_version" in request.url.params
-        requests.append(is_catalog)
-        if is_catalog:
-            return httpx.Response(400)
-        return httpx.Response(200, json={"data": [{"id": "plain-model"}]})
-
-    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    assert await service.list_model_catalog("aip_test") == [
-        {
-            "model_id": "plain-model",
-            "supported_reasoning_levels": None,
-            "default_reasoning_level": None,
-        }
-    ]
-    assert requests == [False, True]
-    await client.aclose()
-    await factory.kw["bind"].dispose()
-
-
-@pytest.mark.asyncio
-async def test_ai_gateway_rejects_reasoning_level_removed_by_sync(tmp_path: Path) -> None:
-    def handler(_request: httpx.Request) -> httpx.Response:
-        pytest.fail("unsupported reasoning level must be rejected before an HTTP request")
-
-    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    control = AIControlService(factory)
-    await control.sync_provider_models(
-        "aip_test",
-        [
-            {
-                "model_id": "test-model",
-                "supported_reasoning_levels": ["low", "ultra"],
-                "default_reasoning_level": "low",
-            }
-        ],
-    )
-    await control.update_profile("test_classifier", {"reasoning_effort": "ultra"})
-    await control.sync_provider_models(
-        "aip_test",
-        [
-            {
-                "model_id": "test-model",
-                "supported_reasoning_levels": ["low"],
-                "default_reasoning_level": "low",
-            }
-        ],
-    )
-    with pytest.raises(AIGatewayError) as exc_info:
-        await service.classify(
-            profile="test_classifier",
-            plugin_id="test_plugin",
-            plugin_run_id="run-1",
-            use_case="reasoning_level_removed",
-            content="candidate",
-            instruction="Classify candidate.",
-            labels=["notify", "ignore"],
-        )
-    assert exc_info.value.code == "ai_reasoning_effort_not_supported"
-    await client.aclose()
-    await factory.kw["bind"].dispose()
-
-
-@pytest.mark.asyncio
-async def test_ai_gateway_uses_reasoning_token_limit_with_provider_default(tmp_path: Path) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        payload = json.loads(request.content)
-        assert payload["max_completion_tokens"] == 160
-        assert "reasoning_effort" not in payload
-        assert "temperature" not in payload
-        assert "max_tokens" not in payload
-        return _success_response(request)
-
-    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
-    control = AIControlService(factory)
-    await control.sync_provider_models(
-        "aip_test",
-        [
-            {
-                "model_id": "test-model",
-                "supported_reasoning_levels": ["low", "high"],
-                "default_reasoning_level": "low",
-            }
-        ],
-    )
-    result = await service.classify(
-        profile="test_classifier",
-        plugin_id="test_plugin",
-        plugin_run_id="run-1",
-        use_case="provider_default_reasoning",
-        content="candidate",
-        instruction="Classify candidate.",
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    service._hub_client._client = client
+    options = dict(
+        profile="center_new",
+        plugin_id=None,
+        plugin_run_id=None,
+        use_case="discovery",
+        content="synthetic",
+        instruction="Classify.",
         labels=["notify", "ignore"],
     )
-    assert result.label == "notify"
-    await client.aclose()
-    await factory.kw["bind"].dispose()
-
-
-@pytest.mark.asyncio
-async def test_ai_provider_blocks_private_and_metadata_addresses() -> None:
-    provider = AIProvider(
-        id="aip_unsafe",
-        name="Unsafe",
-        preset="custom",
-        protocol="openai_chat_completions",
-        base_url="https://provider.example.test/v1",
-        enabled=True,
-        allow_private_network=False,
-        timeout_seconds=5,
-        max_retries=0,
-        verify_tls=True,
-        structured_output_mode="auto",
-        custom_query={},
-        created_at=datetime.now(UTC),
-        updated_at=datetime.now(UTC),
-    )
-
-    async def private_resolver(_host: str, _port: int) -> set[ipaddress.IPv4Address]:
-        return {ipaddress.ip_address("127.0.0.1")}
-
-    client = OpenAICompatibleClient(resolver=private_resolver)
-    with pytest.raises(AIProviderError) as exc_info:
-        await client.complete(
-            provider,
-            api_key="must-not-appear",
-            model="test",
-            messages=[{"role": "user", "content": "test"}],
-            temperature=0,
-            max_output_tokens=10,
-            response_format=None,
-            timeout_seconds=5,
+    await service.classify(**options)
+    await service.classify(**options)
+    assert posts == 1
+    first["revision"] = "b" * 64
+    first["parameters"]["max_output_tokens"] = 256
+    await service.classify(**options)
+    assert posts == 2
+    first.update(enabled=False, revision="c" * 64)
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify(**options)
+    assert error.value.code == "ai_profile_disabled"
+    catalog.clear()
+    await service.refresh_profiles()
+    async with factory() as db:
+        profile = await db.get(AIProfile, "center_new")
+        assert profile is not None and not profile.enabled and profile.hub_revision is None
+        assert (
+            await db.scalar(
+                select(func.count(AIInvocation.id)).where(AIInvocation.profile_id == "center_new")
+            )
+            == 3
         )
-    assert exc_info.value.code == "ai_unsafe_url"
-    assert "must-not-appear" not in str(exc_info.value)
+    assert posts == 2
+    await client.aclose()
+    await initial_client.aclose()
+    await factory.kw["bind"].dispose()

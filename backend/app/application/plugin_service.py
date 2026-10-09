@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from app.ai.service import AIGatewayError, AIService
 from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
 from app.application.platform_settings import read_platform_timezone
@@ -256,6 +257,7 @@ class PluginService:
     ) -> dict[str, Any]:
         registered = self.registry.get(plugin_id)
         validated = self._validate_config(registered.plugin_class, config)
+        await self._refresh_ai_profiles(registered.manifest, validated)
         validated_schedule = (
             None
             if schedule is None
@@ -333,6 +335,14 @@ class PluginService:
         except PluginLoadError:
             registered = None
         now = self._clock()
+        async with self._factory() as session:
+            current = await session.get(PluginRecord, plugin_id)
+            configuration = await session.get(PluginConfig, plugin_id)
+            if current is not None:
+                manifest = PluginManifest.model_validate(current.manifest)
+                config = configuration.config if configuration else {}
+        if current is not None:
+            await self._refresh_ai_profiles(manifest, config)
         async with self._factory() as session, session.begin():
             row = await session.get(PluginRecord, plugin_id)
             if row is None:
@@ -377,6 +387,17 @@ class PluginService:
         validated = dict(config)
         validate_json_schema(validated, plugin_class.config_schema())
         return validated
+
+    async def _refresh_ai_profiles(
+        self, manifest: PluginManifest, config: Mapping[str, Any]
+    ) -> None:
+        if referenced_ai_profiles(manifest, config) and isinstance(self._ai_service, AIService):
+            try:
+                await self._ai_service.refresh_profiles()
+            except AIGatewayError as exc:
+                raise PluginAIProfileUnavailableError(
+                    "AI Hub Profile catalog is unavailable"
+                ) from exc
 
     @staticmethod
     async def _ensure_ai_profiles_available(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import re
 from collections.abc import Sequence
@@ -9,7 +8,7 @@ from time import monotonic
 from typing import Any, TypeVar
 
 from pydantic import BaseModel, ValidationError
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai.policy import (
@@ -23,10 +22,9 @@ from app.ai.policy import (
     response_format,
     schema_response_format,
     structured_hash,
-    structured_modes,
     validate_classification_batch,
 )
-from app.ai.provider import AIProviderError, OpenAICompatibleClient
+from app.ai.provider import AIHubClient, AIProviderError
 from app.ai.schemas import (
     AIClassificationBatch,
     AIClassificationItem,
@@ -34,11 +32,11 @@ from app.ai.schemas import (
     AIExtractionResult,
     AISummaryResult,
 )
+from app.application.ai_control_service import HUB_CONNECTION_ID, AIControlService
 from app.infrastructure.database.ai_models import (
     AIInvocation,
     AIProfile,
     AIProvider,
-    AIProviderModel,
     AIResponseCache,
 )
 from app.infrastructure.database.base import new_id
@@ -82,37 +80,40 @@ class AIService:
         factory: async_sessionmaker[AsyncSession],
         *,
         secret_store: Any = None,
-        provider_client: OpenAICompatibleClient | None = None,
+        hub_client: AIHubClient | None = None,
+        profile_catalog: AIControlService | None = None,
     ) -> None:
         self._factory = factory
         self._secrets = secret_store
-        self._provider_client = provider_client or OpenAICompatibleClient()
+        self._hub_client = hub_client or AIHubClient()
+        self._catalog = profile_catalog or AIControlService(
+            factory, hub_client=self._hub_client, secret_store=secret_store
+        )
 
-    async def list_models(self, provider_id: str) -> list[str]:
-        catalog = await self.list_model_catalog(provider_id, include_metadata=False)
-        return [model["model_id"] for model in catalog]
-
-    async def list_model_catalog(
-        self, provider_id: str, *, include_metadata: bool = True
-    ) -> list[dict[str, Any]]:
+    async def test_connection(self) -> list[str]:
         async with self._factory() as session:
-            provider = await session.get(AIProvider, provider_id)
-            if provider is None or provider.deleted_at is not None:
-                raise AIGatewayError("ai_provider_not_found", "AI provider was not found")
-            if not provider.enabled:
-                raise AIGatewayError("ai_provider_disabled", "AI provider is disabled")
-            session.expunge(provider)
-        api_key = (
-            await self._secrets.get("ai_provider", provider.id, "api_key")
+            connection = await session.get(AIProvider, HUB_CONNECTION_ID)
+            if connection is None or not connection.enabled or not connection.base_url:
+                raise AIGatewayError("ai_hub_not_configured", "AI Hub connection is not enabled")
+            session.expunge(connection)
+        key = await self._application_key()
+        try:
+            return await self._hub_client.list_models(connection, application_key=key)
+        except AIProviderError as exc:
+            raise AIGatewayError(exc.code, str(exc), retryable=exc.retryable) from exc
+
+    async def refresh_profiles(self) -> None:
+        try:
+            await self._catalog.refresh_profiles()
+        except AIProviderError as exc:
+            raise AIGatewayError(exc.code, str(exc), retryable=exc.retryable) from exc
+
+    async def _application_key(self) -> str | None:
+        return (
+            await self._secrets.get("ai_hub", HUB_CONNECTION_ID, "application_key")
             if self._secrets is not None
             else None
         )
-        try:
-            return await self._provider_client.list_model_catalog(
-                provider, api_key=api_key, include_metadata=include_metadata
-            )
-        except AIProviderError as exc:
-            raise AIGatewayError(exc.code, str(exc), retryable=exc.retryable) from exc
 
     async def classify(
         self,
@@ -155,7 +156,7 @@ class AIService:
             raise AIGatewayError("ai_invalid_request", "classification labels must be unique")
         if not instruction.strip() or len(instruction) > 10000 or len(use_case) > 100:
             raise AIGatewayError("ai_invalid_request", "classification request is invalid")
-        profile_row, provider, model = await self._load_configuration(profile, "classify")
+        profile_row, provider = await self._load_configuration(profile, "classify")
         input_hashes = {
             item.id: classification_item_hash(item, instruction, cleaned_labels) for item in items
         }
@@ -177,11 +178,7 @@ class AIService:
         )
         started = monotonic()
         try:
-            api_key = (
-                await self._secrets.get("ai_provider", provider.id, "api_key")
-                if self._secrets is not None
-                else None
-            )
+            api_key = await self._application_key()
             generated, input_tokens, output_tokens = await self._generate(
                 provider,
                 profile_row,
@@ -189,7 +186,6 @@ class AIService:
                 instruction,
                 cleaned_labels,
                 api_key,
-                reasoning_capable=bool(model.supported_reasoning_levels),
             )
             generated = [
                 AIClassificationResult.model_validate(apply_reason_policy(item, profile_row))
@@ -359,7 +355,7 @@ class AIService:
     ) -> StructuredResult:
         if not use_case or len(use_case) > 100:
             raise AIGatewayError("ai_invalid_request", "AI use case is invalid")
-        profile, provider, model = await self._load_configuration(profile_id, capability)
+        profile, provider = await self._load_configuration(profile_id, capability)
         input_hash = structured_hash(content, instruction, options)
         cached = await self._load_single_cached(profile, prompt_version, input_hash, result_type)
         if cached is not None:
@@ -378,11 +374,7 @@ class AIService:
         )
         started = monotonic()
         try:
-            api_key = (
-                await self._secrets.get("ai_provider", provider.id, "api_key")
-                if self._secrets is not None
-                else None
-            )
+            api_key = await self._application_key()
             result, input_tokens, output_tokens = await self._generate_single_structured(
                 provider,
                 profile,
@@ -393,7 +385,6 @@ class AIService:
                 schema,
                 result_type,
                 api_key,
-                reasoning_capable=bool(model.supported_reasoning_levels),
             )
             result = result_type.model_validate(apply_reason_policy(result, profile))
             await self._store_single_success(
@@ -423,7 +414,11 @@ class AIService:
 
     async def _load_configuration(
         self, profile_id: str, required_capability: str
-    ) -> tuple[AIProfile, AIProvider, AIProviderModel]:
+    ) -> tuple[AIProfile, AIProvider]:
+        try:
+            await self._catalog.refresh_profiles()
+        except AIProviderError as exc:
+            raise AIGatewayError(exc.code, str(exc), retryable=exc.retryable) from exc
         async with self._factory() as session:
             profile = await session.get(AIProfile, profile_id)
             if profile is None or profile.deleted_at is not None:
@@ -435,37 +430,12 @@ class AIService:
                     "ai_profile_capability_mismatch",
                     f"AI profile does not support {required_capability}",
                 )
-            provider = await session.get(AIProvider, profile.provider_id)
-            if provider is None or provider.deleted_at is not None:
-                raise AIGatewayError("ai_provider_not_found", "AI provider was not found")
-            if not provider.enabled:
-                raise AIGatewayError("ai_provider_disabled", "AI provider is disabled")
-            allowed_model = await session.scalar(
-                select(AIProviderModel).where(
-                    AIProviderModel.provider_id == provider.id,
-                    AIProviderModel.model_id == profile.model,
-                    AIProviderModel.available.is_(True),
-                    AIProviderModel.enabled.is_(True),
-                )
-            )
-            if allowed_model is None:
-                raise AIGatewayError(
-                    "ai_model_not_allowed",
-                    "AI profile model is not enabled for this provider",
-                )
-            levels = allowed_model.supported_reasoning_levels
-            if profile.reasoning_effort != "provider_default" and (
-                (levels is None and profile.reasoning_effort not in {"low", "medium", "high"})
-                or (levels is not None and profile.reasoning_effort not in levels)
-            ):
-                raise AIGatewayError(
-                    "ai_reasoning_effort_not_supported",
-                    "AI profile reasoning effort is not supported by this model",
-                )
+            provider = await session.get(AIProvider, HUB_CONNECTION_ID)
+            if provider is None or not provider.enabled or not provider.base_url:
+                raise AIGatewayError("ai_hub_not_configured", "AI Hub connection is not enabled")
             session.expunge(profile)
             session.expunge(provider)
-            session.expunge(allowed_model)
-            return profile, provider, allowed_model
+            return profile, provider
 
     async def _load_cached(
         self, profile: AIProfile, input_hashes: dict[str, str]
@@ -550,38 +520,34 @@ class AIService:
                 )
             )
             await session.flush()
-            if profile.daily_request_limit is not None:
-                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                count = await session.scalar(
-                    select(func.count(AIInvocation.id)).where(
-                        AIInvocation.profile_id == profile.id,
-                        AIInvocation.cache_hit.is_(False),
-                        AIInvocation.created_at >= start,
-                    )
-                )
-                if int(count or 0) > profile.daily_request_limit:
-                    await session.execute(
-                        delete(AIInvocation).where(AIInvocation.id == invocation_id)
-                    )
-                    raise AIGatewayError("ai_budget_exceeded", "AI daily request limit exceeded")
-            if profile.daily_token_limit is not None:
-                start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                tokens = await session.scalar(
-                    select(
-                        func.coalesce(func.sum(AIInvocation.input_tokens), 0)
-                        + func.coalesce(func.sum(AIInvocation.output_tokens), 0)
-                    ).where(
-                        AIInvocation.profile_id == profile.id,
-                        AIInvocation.cache_hit.is_(False),
-                        AIInvocation.created_at >= start,
-                    )
-                )
-                if int(tokens or 0) > profile.daily_token_limit:
-                    await session.execute(
-                        delete(AIInvocation).where(AIInvocation.id == invocation_id)
-                    )
-                    raise AIGatewayError("ai_budget_exceeded", "AI daily token limit exceeded")
         return invocation_id
+
+    async def _generate_with_hub(
+        self,
+        connection: AIProvider,
+        *,
+        api_key: str | None,
+        profile: AIProfile,
+        messages: list[dict[str, str]],
+        response_format: dict[str, Any] | None,
+    ) -> tuple[str, int | None, int | None]:
+        output: dict[str, Any] = {"type": "text"}
+        if response_format is not None:
+            output = (
+                {"type": "json_schema", "schema": response_format["json_schema"]["schema"]}
+                if response_format["type"] == "json_schema"
+                else {"type": "json"}
+            )
+        # Generation parameters and quotas are enforced by the center.
+        parameters: dict[str, Any] = {}
+        return await self._hub_client.generate(
+            connection,
+            application_key=api_key,
+            task=profile.id,
+            messages=messages,
+            output=output,
+            parameters=parameters,
+        )
 
     async def _generate(
         self,
@@ -591,81 +557,69 @@ class AIService:
         instruction: str,
         labels: list[str],
         api_key: str | None,
-        *,
-        reasoning_capable: bool,
     ) -> tuple[list[AIClassificationResult], int | None, int | None]:
-        modes = structured_modes(provider.structured_output_mode, profile.response_format)
+        mode = "json_schema" if profile.response_format == "auto" else profile.response_format
         last_error: AIProviderError | None = None
-        for mode in modes:
-            messages = self._messages(items, instruction, labels, mode, profile)
-            response_format_value = response_format(mode, labels, profile)
-            for attempt in range(provider.max_retries + 2):
-                try:
-                    content, input_tokens, output_tokens = await self._provider_client.complete(
-                        provider,
-                        api_key=api_key,
-                        model=profile.model,
-                        messages=messages,
-                        temperature=profile.temperature,
-                        max_output_tokens=profile.max_output_tokens,
-                        reasoning_effort=profile.reasoning_effort,
-                        reasoning_capable=reasoning_capable,
-                        response_format=response_format_value,
-                        timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
-                    )
-                    data = parse_structured_content(content)
-                    if not profile.include_reason:
-                        raw_results = data.get("results")
-                        if isinstance(raw_results, list):
-                            data["results"] = [
-                                {key: value for key, value in item.items() if key != "reason"}
-                                if isinstance(item, dict)
-                                else item
-                                for item in raw_results
-                            ]
-                    batch = AIClassificationBatch.model_validate(data)
-                    return batch.results, input_tokens, output_tokens
-                except json.JSONDecodeError:
-                    last_error = AIProviderError(
-                        "ai_invalid_structured_output", "AI provider returned invalid JSON"
-                    )
-                    if attempt == 0:
-                        messages = [
-                            *messages,
-                            {"role": "assistant", "content": content},
-                            {
-                                "role": "user",
-                                "content": "Repair the previous response. Return valid JSON only.",
-                            },
-                        ]
-                        continue
-                    break
-                except ValidationError:
-                    last_error = AIProviderError(
+        messages = self._messages(items, instruction, labels, mode, profile)
+        response_format_value = response_format(mode, labels, profile)
+        for attempt in range(2):
+            try:
+                content, input_tokens, output_tokens = await self._generate_with_hub(
+                    provider,
+                    api_key=api_key,
+                    profile=profile,
+                    messages=messages,
+                    response_format=response_format_value,
+                )
+                data = parse_structured_content(content)
+                if not isinstance(data, dict):
+                    raise AIProviderError(
                         "ai_invalid_structured_output", "AI structured output is invalid"
                     )
-                    if attempt == 0:
-                        messages = [
-                            *messages,
-                            {
-                                "role": "user",
-                                "content": (
-                                    "Return every requested id once using only allowed labels."
-                                ),
-                            },
+                if not profile.include_reason:
+                    raw_results = data.get("results")
+                    if isinstance(raw_results, list):
+                        data["results"] = [
+                            {key: value for key, value in item.items() if key != "reason"}
+                            if isinstance(item, dict)
+                            else item
+                            for item in raw_results
                         ]
-                        continue
-                    break
-                except AIProviderError as exc:
-                    last_error = exc
-                    if exc.code == "ai_structured_output_unsupported":
-                        break
-                    if exc.retryable and attempt < provider.max_retries:
-                        await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
-                        continue
-                    raise
+                batch = AIClassificationBatch.model_validate(data)
+                return batch.results, input_tokens, output_tokens
+            except json.JSONDecodeError:
+                last_error = AIProviderError(
+                    "ai_invalid_structured_output", "AI provider returned invalid JSON"
+                )
+                if attempt == 0:
+                    messages = [
+                        *messages,
+                        {"role": "assistant", "content": content},
+                        {
+                            "role": "user",
+                            "content": "Repair the previous response. Return valid JSON only.",
+                        },
+                    ]
+                    continue
+                break
+            except ValidationError:
+                last_error = AIProviderError(
+                    "ai_invalid_structured_output", "AI structured output is invalid"
+                )
+                if attempt == 0:
+                    messages = [
+                        *messages,
+                        {
+                            "role": "user",
+                            "content": (
+                                "Return every requested id once using only allowed labels."
+                            ),
+                        },
+                    ]
+                    continue
+                break
         raise last_error or AIProviderError(
-            "ai_structured_output_unsupported", "No structured output mode is supported"
+            "ai_invalid_structured_output", "AI structured output is invalid"
         )
 
     async def _generate_single_structured(
@@ -679,83 +633,71 @@ class AIService:
         schema: dict[str, Any],
         result_type: type[StructuredResult],
         api_key: str | None,
-        *,
-        reasoning_capable: bool,
     ) -> tuple[StructuredResult, int | None, int | None]:
-        modes = structured_modes(provider.structured_output_mode, profile.response_format)
+        mode = "json_schema" if profile.response_format == "auto" else profile.response_format
         last_error: AIProviderError | None = None
         effective_schema = apply_reason_schema_policy(schema, profile)
-        for mode in modes:
-            format_hint = (
-                "Return one JSON object matching this JSON Schema: "
-                + json.dumps(effective_schema, ensure_ascii=False, separators=(",", ":"))
-                if mode in {"json_object", "prompt_json"}
-                else "Return the requested structured result."
-            )
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        f"{GENERIC_SYSTEM_PROMPT}\n"
-                        f"{profile_policy_instructions(profile)}\n{format_hint}"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "instruction": instruction,
-                            "options": options,
-                            "content": content,
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
-            ]
-            response_format_value = schema_response_format(mode, schema_name, effective_schema)
-            for attempt in range(provider.max_retries + 2):
-                try:
-                    generated, input_tokens, output_tokens = await self._provider_client.complete(
-                        provider,
-                        api_key=api_key,
-                        model=profile.model,
-                        messages=messages,
-                        temperature=profile.temperature,
-                        max_output_tokens=profile.max_output_tokens,
-                        reasoning_effort=profile.reasoning_effort,
-                        reasoning_capable=reasoning_capable,
-                        response_format=response_format_value,
-                        timeout_seconds=min(profile.timeout_seconds, provider.timeout_seconds),
-                    )
-                    data = parse_structured_content(generated)
-                    if not profile.include_reason:
-                        data.pop("reason", None)
-                    return result_type.model_validate(data), input_tokens, output_tokens
-                except (ValidationError, ValueError):
-                    last_error = AIProviderError(
+        format_hint = (
+            "Return one JSON object matching this JSON Schema: "
+            + json.dumps(effective_schema, ensure_ascii=False, separators=(",", ":"))
+            if mode in {"json_object", "prompt_json"}
+            else "Return the requested structured result."
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    f"{GENERIC_SYSTEM_PROMPT}\n"
+                    f"{profile_policy_instructions(profile)}\n{format_hint}"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "instruction": instruction,
+                        "options": options,
+                        "content": content,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        response_format_value = schema_response_format(mode, schema_name, effective_schema)
+        for attempt in range(2):
+            try:
+                generated, input_tokens, output_tokens = await self._generate_with_hub(
+                    provider,
+                    api_key=api_key,
+                    profile=profile,
+                    messages=messages,
+                    response_format=response_format_value,
+                )
+                data = parse_structured_content(generated)
+                if not isinstance(data, dict):
+                    raise AIProviderError(
                         "ai_invalid_structured_output", "AI structured output is invalid"
                     )
-                    if attempt == 0:
-                        messages = [
-                            *messages,
-                            {"role": "assistant", "content": generated},
-                            {
-                                "role": "user",
-                                "content": "Repair the previous response. Return valid JSON only.",
-                            },
-                        ]
-                        continue
-                    break
-                except AIProviderError as exc:
-                    last_error = exc
-                    if exc.code == "ai_structured_output_unsupported":
-                        break
-                    if exc.retryable and attempt < provider.max_retries:
-                        await asyncio.sleep(min(0.25 * (2**attempt), 1.0))
-                        continue
-                    raise
+                if not profile.include_reason:
+                    data.pop("reason", None)
+                return result_type.model_validate(data), input_tokens, output_tokens
+            except (ValidationError, ValueError):
+                last_error = AIProviderError(
+                    "ai_invalid_structured_output", "AI structured output is invalid"
+                )
+                if attempt == 0:
+                    messages = [
+                        *messages,
+                        {"role": "assistant", "content": generated},
+                        {
+                            "role": "user",
+                            "content": "Repair the previous response. Return valid JSON only.",
+                        },
+                    ]
+                    continue
+                break
         raise last_error or AIProviderError(
-            "ai_structured_output_unsupported", "No structured output mode is supported"
+            "ai_invalid_structured_output", "AI structured output is invalid"
         )
 
     @staticmethod

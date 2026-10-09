@@ -3,6 +3,36 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class AIHubParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    max_output_tokens: int | None = Field(default=None, ge=1, le=100000)
+    reasoning_effort: str | None = Field(default=None, max_length=30)
+    timeout_seconds: float | None = Field(default=None, gt=0, le=1800)
+
+
+class AIHubProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,64}$")
+    name: str = Field(default="", max_length=200)
+    description: str = Field(default="", max_length=1000)
+    purpose: str = Field(default="", max_length=40)
+    enabled: bool
+    available: bool
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    protocol: str
+    models: list[str]
+    parameters: AIHubParameters
+    response_format: str = Field(pattern=r"^(auto|json_schema|json_object|prompt_json)$")
+    output_language: str = Field(pattern=r"^(auto|zh-CN|en)$")
+    verbosity: str = Field(pattern=r"^(concise|standard|detailed)$")
+    include_reason: bool
+    max_reason_characters: int = Field(ge=0, le=1000)
+    cache_ttl_seconds: int = Field(ge=0, le=31536000)
+    daily_request_limit: int | None = Field(default=None, ge=1, le=1000000)
+    daily_token_limit: int | None = Field(default=None, ge=1, le=1000000000)
+
+
 class AIClassificationItem(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 

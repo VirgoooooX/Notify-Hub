@@ -40,12 +40,10 @@ services:
       # Bounded source-image download limit; output remains capped at 2 MiB.
       NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES: "${NOTIFY_HUB_MEDIA_SOURCE_IMAGE_MAX_BYTES:-16777216}"
 
-      # 5. Optional AI Gateway bootstrap. Leave disabled/blank to configure later in the admin UI.
-      NOTIFY_HUB_AI_ENABLED: "${NOTIFY_HUB_AI_ENABLED:-false}"
-      NOTIFY_HUB_AI_BOOTSTRAP_PRESET: "${NOTIFY_HUB_AI_BOOTSTRAP_PRESET:-custom}"
-      NOTIFY_HUB_AI_BOOTSTRAP_BASE_URL: "${NOTIFY_HUB_AI_BOOTSTRAP_BASE_URL:-}"
-      NOTIFY_HUB_AI_BOOTSTRAP_MODEL: "${NOTIFY_HUB_AI_BOOTSTRAP_MODEL:-}"
-      NOTIFY_HUB_AI_BOOTSTRAP_API_KEY: "${NOTIFY_HUB_AI_BOOTSTRAP_API_KEY:-}"
+      # 5. Optional Family AI Hub connection bootstrap; subsequent changes use the admin page.
+      NOTIFY_HUB_AI_HUB_BASE_URL: "${NOTIFY_HUB_AI_HUB_BASE_URL:-}"
+      NOTIFY_HUB_AI_HUB_APPLICATION_KEY: "${NOTIFY_HUB_AI_HUB_APPLICATION_KEY:-}"
+      NOTIFY_HUB_AI_HUB_ALLOW_PRIVATE_NETWORK: "${NOTIFY_HUB_AI_HUB_ALLOW_PRIVATE_NETWORK:-false}"
 
       # 6. 微信公众号发布配置
       NOTIFY_HUB_MP_APP_ID: "${NOTIFY_HUB_MP_APP_ID:-}"

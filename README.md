@@ -64,13 +64,13 @@
   插件通过 Manifest 声明网络、Secret、媒体、AI 和广播权限，只能使用 `PluginContext` 发出标准事件，不能直接访问企业微信渠道或业务数据库。
 
 - 🧠 **AI Gateway**
-  平台统一管理 Provider、模型允许列表、Profile、API Key、预算、缓存和调用审计。插件只能调用已授权且能力匹配的 Profile，无法读取明文密钥或自行指定远端模型。
+  通过 Family AI Hub 统一调用模型和管理 Profile；新增、协议、模型、生成参数、每日额度与输出偏好在中心设置。Notify Hub 自动读取可用目录，保留插件授权、业务缓存和调用记录；中心配置变化使旧缓存失效。接入与迁移见 [AI Hub 接入](docs/operations.md#13-family-ai-hub-接入与迁移)。
 
 - 🖼️ **安全媒体处理**
   图片与语音具有类型、尺寸、时长、下载跳转和 SSRF 边界；媒体资产统一入库、签名访问、引用保护并由后台任务进行有界清理。
 
 - 🖥️ **一体化管理后台**
-  提供运行概览、通知与投递、公众号文章工作台、接收人、API Client、插件、AI Provider/Profile、提醒中心和系统设置等管理页面，并包含面向企业微信成员的移动提醒页面。
+  提供运行概览、通知与投递、公众号文章工作台、接收人、API Client、插件、AI Hub 连接及业务 Profile、提醒中心和系统设置等管理页面，并包含面向企业微信成员的移动提醒页面。
 
 ---
 
@@ -150,7 +150,7 @@ notify-hub/
 │       └── source/                 # 选稿过程文件
 ├── backend/
 │   ├── app/
-│   │   ├── ai/                     # AI Provider 协议、Schema 与 Gateway
+│   │   ├── ai/                     # AI Hub 薄客户端、业务 Schema 与 Gateway
 │   │   ├── api/                    # Admin、Client、回调、媒体与移动端 API
 │   │   ├── application/            # Event、Reminder、Plugin 等应用服务
 │   │   ├── channels/wecom/         # 企业微信客户端、加解密与渠道适配器

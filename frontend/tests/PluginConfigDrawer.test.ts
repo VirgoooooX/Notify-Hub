@@ -13,8 +13,6 @@ function profile(
     name: id,
     description: '',
     capability,
-    provider_id: 'aip_test',
-    model: 'test-model',
     temperature: 0,
     max_output_tokens: 160,
     response_format: 'auto',
