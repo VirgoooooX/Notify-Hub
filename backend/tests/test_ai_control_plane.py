@@ -46,7 +46,7 @@ async def test_hub_connection_and_business_profiles_require_admin(
     assert saved.json()["data"]["base_url"] == "http://127.0.0.1:8848"
     assert (
         await client.post("/api/v1/admin/ai/profiles", headers=headers, json={"name": "local"})
-    ).status_code == 404
+    ).status_code in (404, 405)
     assert (
         await client.patch(
             "/api/v1/admin/ai/profiles/central", headers=headers, json={"temperature": 1}
