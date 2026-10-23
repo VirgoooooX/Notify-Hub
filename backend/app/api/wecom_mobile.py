@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.api.dependencies import get_session, require_admin
 from app.api.errors import AppError
+from app.api.reminder_repeat import RepeatInput as MobileRepeatInput
 from app.application.audit import add_audit
 from app.application.mobile_identity_service import MobileIdentityError, MobileMember
 from app.application.mobile_reminder_query_service import MobileReminderNotFound
@@ -56,12 +57,6 @@ class MobileScheduleInput(BaseModel):
         return self
 
 
-class MobileRepeatInput(BaseModel):
-    interval_seconds: int = Field(default=300, ge=300)
-    max_attempts: int = Field(default=12, ge=1, le=12)
-    stop_at: datetime | None = None
-
-
 class MobileReminderInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(default="", max_length=20_000)
@@ -94,6 +89,7 @@ def _summary(reminder: Reminder) -> dict[str, object]:
         "require_ack": reminder.require_ack,
         "ack_policy": reminder.ack_policy,
         "repeat_interval_seconds": reminder.repeat_interval_seconds,
+        "repeat_config": reminder.repeat_config,
         "max_attempts": reminder.max_reminders,
     }
 
@@ -252,6 +248,8 @@ async def create_mobile_reminder(
             request.app.state.session_factory, request.app.state.settings.app_timezone
         )
         payload.schedule.normalize_timezone(timezone)
+        if repeat is not None and repeat.due_at is not None:
+            repeat.due_at = resolve_datetime(repeat.due_at, timezone, field="repeat.due_at")
         if repeat is not None and repeat.stop_at is not None:
             repeat.stop_at = resolve_datetime(repeat.stop_at, timezone, field="repeat.stop_at")
     except ValueError as exc:
@@ -274,7 +272,8 @@ async def create_mobile_reminder(
                 recurrence_rule=payload.schedule.rrule,
                 require_ack=payload.require_ack,
                 ack_policy=AckPolicy.ANY,
-                repeat_interval_seconds=repeat.interval_seconds if repeat else None,
+                repeat_interval_seconds=repeat.interval_value() if repeat else None,
+                repeat_config=repeat.rule_config() if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat.stop_at if repeat else None,
             )

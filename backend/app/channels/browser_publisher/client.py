@@ -68,6 +68,42 @@ class BrowserPublisherClient:
             headers["Authorization"] = f"Bearer {self.access_token}"
         return headers
 
+    async def _login_request(self, method: str, path: str) -> httpx.Response:
+        if not self.configured:
+            raise BrowserPublisherError("Publisher login service is not configured")
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(90.0, connect=5.0)) as client:
+                response = await client.request(
+                    method, f"{self.base_url}{path}", headers=self._auth_headers()
+                )
+            if not response.is_success:
+                raise BrowserPublisherTemporaryError("Publisher login request failed")
+            if len(response.content) > 2 * 1024 * 1024:
+                raise BrowserPublisherError("Publisher login response exceeds size limit")
+            return response
+        except httpx.HTTPError as exc:
+            # Never include response bodies, credentials, cookies, or QR data in errors.
+            raise BrowserPublisherTemporaryError("Publisher login request unavailable") from exc
+
+    async def login_state(self) -> dict[str, Any]:
+        response = await self._login_request("GET", "/v1/platforms")
+        try:
+            data = response.json()
+            if data.get("caller_login_notifications_supported") is not True:
+                raise BrowserPublisherError("Publisher must be upgraded before login maintenance")
+            platforms = data["platforms"]
+            return next(item for item in platforms if item["platform"] == "wechat_mp")
+        except (ValueError, KeyError, TypeError, StopIteration) as exc:
+            raise BrowserPublisherError("Publisher login state is invalid") from exc
+
+    async def request_login(self, *, refresh_only: bool) -> bytes:
+        # auth_required can refresh without another logout. A ready session is
+        # cleared only in response to the explicit maintenance menu action.
+        operation = "login" if refresh_only else "reauth"
+        await self._login_request("POST", f"/v1/platforms/wechat_mp/{operation}?notify=false")
+        response = await self._login_request("GET", "/v1/platforms/wechat_mp/qr.png")
+        return response.content
+
     def _rewrite_media_url(self, url: str) -> str:
         """Rewrite Notify Hub-owned media to a URL reachable by the publisher container."""
 

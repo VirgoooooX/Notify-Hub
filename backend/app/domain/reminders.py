@@ -20,6 +20,22 @@ class InvalidReminderTransition(ReminderError):
     pass
 
 
+def transition_login_action(current: str, target: str) -> str:
+    allowed = {
+        "pending": {"starting", "completed", "cancelled", "failed_pending"},
+        "starting": {"qr_ready", "completed", "cancelled", "failed_pending"},
+        "qr_ready": {"waiting_scan", "cancelled"},
+        "waiting_scan": {"pending", "completed", "cancelled", "failed_pending"},
+        "failed_pending": {"failed", "cancelled"},
+        "failed": {"pending", "cancelled"},
+        "cancelled": {"pending"},
+        "completed": set(),
+    }
+    if target not in allowed.get(current, set()):
+        raise InvalidReminderTransition(f"cannot change login action from {current} to {target}")
+    return target
+
+
 class ReminderStatus(str, enum.Enum):
     DRAFT = "draft"
     ACTIVE = "active"

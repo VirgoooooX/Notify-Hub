@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from app.domain.reminders import transition_login_action
 from app.infrastructure.database.base import Base, StringIdMixin
 from app.infrastructure.database.utc_datetime import UTCDateTime
 from app.profiles.constants import DEFAULT_PROFILE_ID
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     ForeignKey,
     Index,
     Integer,
@@ -57,6 +59,12 @@ class Reminder(StringIdMixin, Base):
     require_ack: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     ack_policy: Mapped[str] = mapped_column(String(10), nullable=False)
     repeat_interval_seconds: Mapped[int | None] = mapped_column(Integer)
+    completion_action: Mapped[str] = mapped_column(
+        String(40), default="none", server_default="none", nullable=False
+    )
+    repeat_config: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}", nullable=False
+    )
     max_reminders: Mapped[int | None] = mapped_column(Integer)
     reminder_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     stop_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
@@ -124,6 +132,15 @@ class ReminderOccurrence(StringIdMixin, Base):
     url: Mapped[str | None] = mapped_column(String(2048))
     ack_policy_snapshot: Mapped[str] = mapped_column(String(10), nullable=False)
     repeat_interval_seconds_snapshot: Mapped[int | None] = mapped_column(Integer)
+    require_ack_snapshot: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0", nullable=False
+    )
+    completion_action_snapshot: Mapped[str] = mapped_column(
+        String(40), default="none", server_default="none", nullable=False
+    )
+    repeat_config_snapshot: Mapped[dict[str, Any]] = mapped_column(
+        JSON, default=dict, server_default="{}", nullable=False
+    )
     max_reminders_snapshot: Mapped[int | None] = mapped_column(Integer)
     stop_at_snapshot: Mapped[datetime | None] = mapped_column(UTCDateTime())
     completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
@@ -132,6 +149,35 @@ class ReminderOccurrence(StringIdMixin, Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+
+
+class ReminderLoginAction(StringIdMixin, Base):
+    __tablename__ = "reminder_login_actions"
+    __table_args__ = (
+        UniqueConstraint("occurrence_recipient_id", name="uq_login_action_recipient"),
+        CheckConstraint("generation > 0", name="ck_login_action_generation"),
+        CheckConstraint(
+            "status IN ('pending','starting','qr_ready','waiting_scan',"
+            "'failed_pending','failed','completed','cancelled')",
+            name="ck_login_action_status",
+        ),
+    )
+
+    occurrence_recipient_id: Mapped[str] = mapped_column(
+        ForeignKey("reminder_occurrence_recipients.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    next_check_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    media_asset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("media_assets.id", ondelete="SET NULL")
+    )
+
+    def transition(self, target: str, *, now: datetime) -> None:
+        self.status = transition_login_action(self.status, target)
+        self.updated_at = now
 
 
 class ReminderOccurrenceRecipient(StringIdMixin, Base):

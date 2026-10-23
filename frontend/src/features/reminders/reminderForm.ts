@@ -25,11 +25,37 @@ export function defaultReminderForm(timezone = DEFAULT_TIMEZONE) {
     broadcast: false,
     notify_on_all_completed: false,
     require_ack: false,
+    completion_action: 'none',
     ack_policy: 'any',
     repeat_interval_seconds: 300,
+    repeat_type: 'interval',
+    repeat_cron_expression: '0 9 * * 1-5',
+    repeat_offset_days: '0,1,3,7',
+    repeat_days_before_due: '30,7,3,1',
+    repeat_due_at: '',
     max_attempts: 12,
     stop_at: '',
   }
+}
+
+export function repeatRulePayload(type: string, values: {
+  intervalSeconds: number; cron: string; offsetDays: string; daysBeforeDue: string; dueAt: string
+}) {
+  const numbers = (text: string) => {
+    const parts = text.split(/[,，]/).map(value => value.trim())
+    const result = parts.map(Number)
+    if (parts.some(value => !value) || result.some(value => !Number.isFinite(value))) {
+      throw new Error('请用逗号分隔有效的时间节点')
+    }
+    return result
+  }
+  if (type === 'cron') return { type, cron_expression: values.cron }
+  if (type === 'offsets') return { type, offsets_seconds: numbers(values.offsetDays).map(day => day * 86400) }
+  if (type === 'before_due') {
+    if (!values.dueAt) throw new Error('请填写到期时间')
+    return { type, due_at: values.dueAt, days_before_due: numbers(values.daysBeforeDue) }
+  }
+  return { interval_seconds: values.intervalSeconds }
 }
 
 export function reminderCreatePayload(form: ReturnType<typeof defaultReminderForm>) {
@@ -37,7 +63,9 @@ export function reminderCreatePayload(form: ReturnType<typeof defaultReminderFor
   if (!isValidTimezone(timezone)) throw new Error('请输入有效的 IANA 时区')
   // Keep datetime-local values as wall-clock strings. The API receives the
   // selected IANA timezone alongside them and is the sole DST authority.
-  const scheduledAt = form.at || undefined
+  const beforeDue = form.require_ack && form.repeat_type === 'before_due'
+  if (beforeDue && form.schedule_type !== 'once') throw new Error('到期前节点请使用单次调度，每次到期为一轮')
+  const scheduledAt = (beforeDue ? form.repeat_due_at : form.at) || undefined
   const stopAt = form.stop_at || undefined
   return {
     profile_id: form.profile_id || undefined,
@@ -77,10 +105,17 @@ export function reminderCreatePayload(form: ReturnType<typeof defaultReminderFor
     broadcast: form.broadcast,
     notify_on_all_completed: form.notify_on_all_completed,
     require_ack: form.require_ack,
+    completion_action: form.completion_action,
     ack_policy: form.ack_policy,
     repeat: form.require_ack
       ? {
-          interval_seconds: form.repeat_interval_seconds,
+          ...repeatRulePayload(form.repeat_type, {
+            intervalSeconds: form.repeat_interval_seconds,
+            cron: form.repeat_cron_expression,
+            offsetDays: form.repeat_offset_days,
+            daysBeforeDue: form.repeat_days_before_due,
+            dueAt: form.repeat_due_at,
+          }),
           max_attempts: form.max_attempts,
           stop_at: stopAt,
         }

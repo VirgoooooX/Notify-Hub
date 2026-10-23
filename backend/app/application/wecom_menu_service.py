@@ -208,7 +208,10 @@ class WeComMenuService:
             return MenuResult("not_found", "当前没有可操作的交互式提醒。")
 
         title = result.title
+        if result.code == "login_requested":
+            return MenuResult(result.code, "")
         messages = {
+            "login_busy": "已有一项公众号登录维护正在处理，请完成该次扫码后再操作。",
             "completed": f"✅ 已完成：{title}，本次持续提醒已停止。",
             "snooze_10": f"⏰ 已推迟10分钟：{title}，10分钟内不会再次催办。",
             "snooze_30": f"⏰ 已推迟30分钟：{title}，30分钟内不会再次催办。",

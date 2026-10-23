@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 
 from app.api.dependencies import require_api_client
 from app.api.errors import AppError
+from app.api.reminder_repeat import RepeatInput as ClientReminderRepeat
 from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_access import (
     ReminderAccessDenied,
@@ -72,12 +73,6 @@ class ClientReminderSchedule(BaseModel):
         return self
 
 
-class ClientReminderRepeat(BaseModel):
-    interval_seconds: int = Field(default=300, ge=300)
-    max_attempts: int = Field(default=12, ge=1, le=12)
-    stop_at: datetime | None = None
-
-
 class ClientReminderCreate(BaseModel):
     creator_person_id: str | None = Field(default=None, max_length=64)
     title: str = Field(min_length=1, max_length=200)
@@ -117,6 +112,10 @@ async def create_client_reminder(
             request.app.state.session_factory, request.app.state.settings.app_timezone
         )
         payload.schedule.normalize_timezone(timezone)
+        if payload.repeat is not None and payload.repeat.due_at is not None:
+            payload.repeat.due_at = resolve_datetime(
+                payload.repeat.due_at, timezone, field="repeat.due_at"
+            )
         if payload.repeat is not None and payload.repeat.stop_at is not None:
             payload.repeat.stop_at = resolve_datetime(
                 payload.repeat.stop_at, timezone, field="repeat.stop_at"
@@ -147,7 +146,8 @@ async def create_client_reminder(
                 misfire_policy=MisfirePolicy(payload.schedule.misfire_policy),
                 require_ack=payload.require_ack,
                 ack_policy=AckPolicy(payload.ack_policy),
-                repeat_interval_seconds=repeat.interval_seconds if repeat else None,
+                repeat_interval_seconds=repeat.interval_value() if repeat else None,
+                repeat_config=repeat.rule_config() if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat.stop_at if repeat else None,
                 profile_id=client.profile_id,
@@ -161,6 +161,7 @@ async def create_client_reminder(
                 allow_media=client.allow_media,
                 allowed_recipients=tuple(client.allowed_recipient_ids),
                 max_active=client.max_active_reminders,
+                max_duration_seconds=30 * 86400,
             ),
             schedule_mode=payload.schedule.mode or payload.schedule.type,
             idempotency_key=idempotency_key,

@@ -22,6 +22,13 @@ from app.application.reminder_scheduling import (
     utc_datetime as _utc,
 )
 from app.domain.clock import Clock, SystemClock
+from app.domain.reminder_repeat import (
+    RepeatRule,
+    configure_repeat,
+    due_repeat_start,
+    next_repeat_at,
+    parse_repeat_rule,
+)
 from app.domain.reminder_schedules import (
     MisfirePolicy,
     ScheduleValidationError,
@@ -40,7 +47,6 @@ from app.domain.reminders import (
     action_token_matches,
     next_rrule_occurrence,
     normalize_utc,
-    validate_continuous_limits,
     validate_timezone,
 )
 from app.infrastructure.database.base import new_id
@@ -54,6 +60,7 @@ from app.infrastructure.database.reminder_models import (
     IncomingMessage,
     NotificationAction,
     Reminder,
+    ReminderLoginAction,
     ReminderOccurrence,
     ReminderOccurrenceRecipient,
     ReminderRecipient,
@@ -124,8 +131,10 @@ class ReminderCreate:
     end_at: datetime | None = None
     misfire_policy: MisfirePolicy = MisfirePolicy.FIRE_ONCE
     require_ack: bool = False
+    completion_action: str = "none"
     ack_policy: AckPolicy = AckPolicy.ANY
     repeat_interval_seconds: int | None = None
+    repeat_config: dict[str, Any] | None = None
     max_reminders: int | None = None
     stop_at: datetime | None = None
     content_type: str = "text"
@@ -149,8 +158,10 @@ class ReminderUpdate:
     misfire_policy: MisfirePolicy | None = None
     recipient_ids: tuple[str, ...] | None = None
     require_ack: bool | None = None
+    completion_action: str | None = None
     ack_policy: AckPolicy | None = None
     repeat_interval_seconds: int | None = None
+    repeat_config: dict[str, Any] | None = None
     max_reminders: int | None = None
     stop_at: datetime | None = None
     content_type: str | None = None
@@ -217,7 +228,27 @@ class ReminderService:
         )
         return f"v1.{action_id}.{signature}"
 
+    @staticmethod
+    def _next_repeat(occurrence: ReminderOccurrence, now: datetime) -> datetime | None:
+        # Keep the occurrence actionable after the final node, until its deadline.
+        return (
+            next_repeat_at(
+                occurrence.repeat_config_snapshot or {},
+                interval_seconds=occurrence.repeat_interval_seconds_snapshot,
+                scheduled_for=_utc(occurrence.scheduled_for),
+                after=now,
+                timezone=(occurrence.repeat_config_snapshot or {}).get("timezone", "UTC"),
+            )
+            or occurrence.stop_at_snapshot
+        )
+
     async def create(self, command: ReminderCreate, *, now: datetime | None = None) -> Reminder:
+        if command.completion_action not in {"none", "publisher_wechat_login"}:
+            raise ReminderError("unsupported completion action")
+        if command.completion_action != "none":
+            if command.broadcast or len(command.recipient_ids) != 1:
+                raise ReminderError("publisher login maintenance requires one explicit recipient")
+            command = replace(command, require_ack=True)
         if self._profiles is not None:
             profile_id = await self._profiles.resolve_id(command.profile_id)
             if profile_id != command.profile_id:
@@ -232,6 +263,13 @@ class ReminderService:
                 await self._routing.validate_recipients(command.profile_id, command.recipient_ids)
         instant = _utc(now or self._clock.now())
         validate_timezone(command.timezone)
+        rule = parse_repeat_rule(command.repeat_config)
+        if rule.type == "before_due":
+            if command.schedule_type is not ScheduleType.ONCE:
+                raise ReminderError(
+                    "before_due repeats require a once schedule for one expiry cycle"
+                )
+            command = replace(command, scheduled_at=due_repeat_start(rule, now=instant))
         if not command.title.strip():
             raise ReminderError("title is required")
         if not command.recipient_ids:
@@ -292,13 +330,22 @@ class ReminderService:
         if first_run < instant:
             raise ReminderError("first reminder occurrence must not be in the past")
 
-        interval, maximum, stop_at = validate_continuous_limits(
+        interval, maximum, stop_at, repeat_config = configure_repeat(
             require_ack=command.require_ack,
-            repeat_interval_seconds=command.repeat_interval_seconds,
-            max_reminders=command.max_reminders,
+            config=command.repeat_config,
+            interval_seconds=command.repeat_interval_seconds,
+            maximum=command.max_reminders,
             stop_at=command.stop_at,
             start_at=first_run,
+            timezone=command.timezone,
         )
+        if command.completion_action != "none":
+            interval, maximum, stop_at, repeat_config = (
+                None,
+                1,
+                first_run + timedelta(days=4),
+                {"type": "offsets", "offsets_seconds": [0]},
+            )
         reminder = Reminder(
             id=new_id("rem"),
             profile_id=command.profile_id,
@@ -321,8 +368,10 @@ class ReminderService:
             broadcast=command.broadcast,
             notify_on_all_completed=command.notify_on_all_completed,
             require_ack=command.require_ack,
+            completion_action=command.completion_action,
             ack_policy=command.ack_policy.value,
             repeat_interval_seconds=interval,
+            repeat_config=repeat_config,
             max_reminders=maximum,
             reminder_count=0,
             stop_at=stop_at,
@@ -410,6 +459,20 @@ class ReminderService:
                 reminder.title = command.title.strip()
             if command.content is not None:
                 reminder.content = command.content.strip()
+            if command.completion_action is not None:
+                if command.completion_action not in {"none", "publisher_wechat_login"}:
+                    raise ReminderError("unsupported completion action")
+                if command.completion_action != "none":
+                    count = await session.scalar(
+                        select(func.count(ReminderRecipient.id)).where(
+                            ReminderRecipient.reminder_id == reminder.id
+                        )
+                    )
+                    if reminder.broadcast or count != 1:
+                        raise ReminderError(
+                            "publisher login maintenance requires one explicit recipient"
+                        )
+                reminder.completion_action = command.completion_action
             if command.content_type is not None:
                 if command.content_type not in {"text", "image", "article"}:
                     raise ReminderError("unsupported reminder content type")
@@ -500,6 +563,8 @@ class ReminderService:
             require_ack = (
                 reminder.require_ack if command.require_ack is None else command.require_ack
             )
+            if reminder.completion_action != "none":
+                require_ack = True
             if self._routing is not None and require_ack:
                 await self._routing.resolve(
                     reminder.profile_id,
@@ -509,19 +574,46 @@ class ReminderService:
                 value is not None
                 for value in (
                     command.repeat_interval_seconds,
+                    command.repeat_config,
                     command.max_reminders,
                     command.stop_at,
                 )
             ):
-                interval, maximum, stop_at = validate_continuous_limits(
+                interval, maximum, stop_at, repeat_config = configure_repeat(
                     require_ack=require_ack,
-                    repeat_interval_seconds=command.repeat_interval_seconds,
-                    max_reminders=command.max_reminders,
+                    config=(
+                        command.repeat_config
+                        if command.repeat_config is not None
+                        else reminder.repeat_config
+                    )
+                    if require_ack
+                    else None,
+                    interval_seconds=command.repeat_interval_seconds,
+                    maximum=command.max_reminders,
                     stop_at=command.stop_at,
                     start_at=reminder.next_run_at or instant,
+                    timezone=reminder.timezone,
                 )
+                if repeat_config.get("type") == "before_due":
+                    if reminder.schedule_type != ScheduleType.ONCE.value:
+                        raise ReminderError("before_due repeats require a once schedule")
+                    if reminder.next_run_at is not None:
+                        reminder.next_run_at = due_repeat_start(
+                            RepeatRule.model_validate(repeat_config), now=instant
+                        )
+                        reminder.scheduled_at = reminder.next_run_at
+                        interval, maximum, stop_at, repeat_config = configure_repeat(
+                            require_ack=require_ack,
+                            config=repeat_config,
+                            interval_seconds=None,
+                            maximum=maximum,
+                            stop_at=command.stop_at,
+                            start_at=reminder.next_run_at,
+                            timezone=reminder.timezone,
+                        )
                 reminder.require_ack = require_ack
                 reminder.repeat_interval_seconds = interval
+                reminder.repeat_config = repeat_config
                 reminder.max_reminders = maximum
                 reminder.stop_at = stop_at
                 reminder.escalation_stop_after_seconds = (
@@ -531,10 +623,21 @@ class ReminderService:
                 )
             if command.ack_policy is not None:
                 reminder.ack_policy = command.ack_policy.value
+            if reminder.completion_action != "none":
+                reminder.require_ack = True
+                reminder.repeat_interval_seconds = None
+                reminder.repeat_config = {"type": "offsets", "offsets_seconds": [0]}
+                reminder.max_reminders = 1
+                reminder.escalation_stop_after_seconds = 4 * 86400
+                reminder.stop_at = (reminder.next_run_at or instant) + timedelta(days=4)
             if command.recipient_ids is not None:
                 if reminder.reminder_count:
                     raise ReminderError("recipients cannot change after the first reminder")
                 recipients = command.recipient_ids
+                if reminder.completion_action != "none" and len(recipients) != 1:
+                    raise ReminderError(
+                        "publisher login maintenance requires one explicit recipient"
+                    )
                 if not recipients or len(set(recipients)) != len(recipients):
                     raise ReminderError("recipient IDs must be non-empty and unique")
                 people = set(
@@ -865,6 +968,11 @@ class ReminderService:
                 url=reminder.url,
                 ack_policy_snapshot=reminder.ack_policy,
                 repeat_interval_seconds_snapshot=reminder.repeat_interval_seconds,
+                require_ack_snapshot=reminder.require_ack,
+                completion_action_snapshot=reminder.completion_action,
+                repeat_config_snapshot={**reminder.repeat_config, "timezone": reminder.timezone}
+                if reminder.repeat_config
+                else {},
                 max_reminders_snapshot=reminder.max_reminders,
                 stop_at_snapshot=escalation_deadline,
                 expires_at=escalation_deadline,
@@ -957,7 +1065,7 @@ class ReminderService:
                             (
                                 (ReminderOccurrence.status == "acknowledged")
                                 & ReminderOccurrence.broadcast_sent_at.is_not(None)
-                                & ReminderOccurrence.repeat_interval_seconds_snapshot.is_not(None)
+                                & ReminderOccurrence.require_ack_snapshot.is_(True)
                                 & ReminderOccurrence.notify_on_all_completed_snapshot.is_(True)
                                 & ReminderOccurrence.broadcast_completion_announced_at.is_(None)
                                 & ~exists(
@@ -1041,7 +1149,7 @@ class ReminderService:
                     },
                 )
             elif occurrence.status == "active" and occurrence.broadcast_sent_at is None:
-                interactive = occurrence.repeat_interval_seconds_snapshot is not None
+                interactive = occurrence.require_ack_snapshot
                 content = occurrence.content_snapshot
                 message_type = occurrence.content_type_snapshot
                 if (
@@ -1100,7 +1208,7 @@ class ReminderService:
                 occurrence.broadcast_completion_announced_at = instant
             else:
                 occurrence.broadcast_sent_at = instant
-                interactive = occurrence.repeat_interval_seconds_snapshot is not None
+                interactive = occurrence.require_ack_snapshot
                 recipients = list(
                     await session.scalars(
                         select(ReminderOccurrenceRecipient).where(
@@ -1116,9 +1224,7 @@ class ReminderService:
                     recipient.claim_expires_at = None
                     recipient.updated_at = instant
                     if interactive:
-                        recipient.next_notify_at = instant + timedelta(
-                            seconds=occurrence.repeat_interval_seconds_snapshot or 300
-                        )
+                        recipient.next_notify_at = self._next_repeat(occurrence, instant)
                     else:
                         recipient.status = RecipientStatus.ACKNOWLEDGED.value
                         recipient.acknowledged_at = instant
@@ -1177,7 +1283,7 @@ class ReminderService:
                         (Reminder.status == ReminderStatus.ACTIVE.value)
                         | (
                             (Reminder.status == ReminderStatus.COMPLETED.value)
-                            & ReminderOccurrence.repeat_interval_seconds_snapshot.is_(None)
+                            & ReminderOccurrence.require_ack_snapshot.is_(False)
                             & (ReminderOccurrenceRecipient.notify_count == 0)
                         )
                     ),
@@ -1228,7 +1334,6 @@ class ReminderService:
                 return None
 
             max_notifications = occurrence.max_reminders_snapshot or 12
-            repeat_interval = occurrence.repeat_interval_seconds_snapshot or 300
             stop_at = occurrence.stop_at_snapshot
 
             exhausted = recipient.notify_count >= max_notifications
@@ -1242,7 +1347,7 @@ class ReminderService:
                 await self._recheck_occurrence_status(occurrence, session, instant)
                 return None
 
-            interactive = occurrence.repeat_interval_seconds_snapshot is not None
+            interactive = occurrence.require_ack_snapshot
             message_type = occurrence.content_type_snapshot
             if (
                 message_type == "article"
@@ -1258,6 +1363,13 @@ class ReminderService:
                     else INTERACTIVE_REMINDER_HINT
                 )
                 content = f"{content}\n\n{hint}" if content else hint
+            if occurrence.completion_action_snapshot == "publisher_wechat_login":
+                content = (
+                    f"{occurrence.content_snapshot}\n\n"
+                    "建议刷新公众号登录。准备好扫码时，请点击底部【快捷操作】→【完成本次】，"
+                    "系统会清理旧登录并发送一次新的登录二维码。\n"
+                    "暂不操作时保留现有登录态；二维码过期后可再次点击获取。"
+                )
 
             draft = ReminderEventDraft(
                 profile_id=occurrence.profile_id_snapshot,
@@ -1319,21 +1431,29 @@ class ReminderService:
                 current.last_notified_at = instant
                 current.claimed_by = None
                 current.claim_expires_at = None
-                if current_occurrence.repeat_interval_seconds_snapshot is None:
+                if not current_occurrence.require_ack_snapshot:
                     current.status = RecipientStatus.ACKNOWLEDGED.value
                     current.next_notify_at = None
                     current_occurrence.status = "acknowledged"
                     current_occurrence.completed_at = instant
                     current_occurrence.updated_at = instant
                 else:
-                    current.next_notify_at = instant + timedelta(seconds=repeat_interval)
-            elif current_occurrence is None or current_occurrence.status != "active":
+                    current.next_notify_at = self._next_repeat(current_occurrence, instant)
+            elif (
+                current is None
+                or current.status != RecipientStatus.PENDING.value
+                or current_occurrence is None
+                or current_occurrence.status != "active"
+            ):
                 cancel_after_accept = True
         if cancel_after_accept:
             await self._cancel_pending_deliveries(
                 occurrence.reminder_id,
                 profile_id=occurrence.profile_id_snapshot,
                 occurrence_id=occurrence.id,
+                recipient_id=recipient.person_id
+                if current_occurrence is not None and current_occurrence.status == "active"
+                else None,
             )
         return acceptance
 
@@ -1492,6 +1612,80 @@ class ReminderService:
                     }
                 return result
 
+            if (
+                operation == "complete"
+                and occurrence.completion_action_snapshot == "publisher_wechat_login"
+            ):
+                other_action = await session.scalar(
+                    select(ReminderLoginAction.id)
+                    .where(
+                        ReminderLoginAction.occurrence_recipient_id != recipient.id,
+                        ReminderLoginAction.status.in_(
+                            ("pending", "starting", "qr_ready", "waiting_scan")
+                        ),
+                    )
+                    .limit(1)
+                )
+                if other_action is not None:
+                    return InteractiveOccurrenceResult(
+                        "login_busy", occurrence.title_snapshot, reminder.id, occurrence.id
+                    )
+                action = await session.scalar(
+                    select(ReminderLoginAction).where(
+                        ReminderLoginAction.occurrence_recipient_id == recipient.id
+                    )
+                )
+                if action is None:
+                    session.add(
+                        ReminderLoginAction(
+                            id=new_id("rla"),
+                            occurrence_recipient_id=recipient.id,
+                            status="pending",
+                            generation=1,
+                            requested_at=instant,
+                            updated_at=instant,
+                            next_check_at=instant,
+                        )
+                    )
+                elif action.status in {"waiting_scan", "failed", "cancelled"}:
+                    await session.execute(
+                        update(Delivery)
+                        .where(
+                            Delivery.notification_id.in_(
+                                select(Notification.id).where(
+                                    Notification.reminder_occurrence_id == occurrence.id,
+                                    Notification.profile_id == profile_id,
+                                )
+                            ),
+                            Delivery.recipient_id == recipient.person_id,
+                            Delivery.status.in_(("pending", "retry_wait")),
+                        )
+                        .values(status="cancelled", updated_at=instant)
+                    )
+                    action.transition("pending", now=instant)
+                    action.generation += 1
+                    action.media_asset_id = None
+                    action.next_check_at = instant
+                    action.updated_at = instant
+                if incoming is not None:
+                    incoming.event_payload = {
+                        **incoming.event_payload,
+                        "menu_result": "login_requested",
+                        "menu_occurrence_id": occurrence.id,
+                    }
+                add_audit(
+                    session,
+                    self._clock,
+                    actor_type="wecom_member",
+                    actor_id=identity.person_id,
+                    action="reminder.publisher_login.request",
+                    resource_type="reminder_occurrence",
+                    resource_id=occurrence.id,
+                )
+                return InteractiveOccurrenceResult(
+                    "login_requested", occurrence.title_snapshot, reminder.id, occurrence.id
+                )
+
             if operation == "complete":
                 recipient_values: dict[str, Any] = {
                     "status": RecipientStatus.ACKNOWLEDGED.value,
@@ -1517,6 +1711,16 @@ class ReminderService:
                     "next_notify_at": None,
                 }
                 result_code = "stopped"
+
+            if (
+                occurrence.repeat_config_snapshot
+                and operation in {"snooze_10", "snooze_30", "ignore_today"}
+                and recipient.next_notify_at is not None
+            ):
+                # Deferral must not introduce an extra send before a planned node.
+                recipient_values["next_notify_at"] = max(
+                    _utc(recipient.next_notify_at), recipient_values["next_notify_at"]
+                )
 
             claimed_version = recipient.version
             claimed = cast(

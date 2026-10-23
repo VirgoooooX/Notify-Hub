@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, BellRing, CalendarClock, CheckCircle2, ImagePlus, Plus } from 'lucide-vue-next'
 import { captureMobileEntry, hasMobileEntry, mobileRequest } from '@/lib/mobileApi'
+import { repeatRulePayload } from '@/features/reminders/reminderForm'
 import {
   DEFAULT_TIMEZONE,
   formatInstant,
@@ -27,6 +28,7 @@ interface MobileReminder {
   timezone: string
   require_ack: boolean
   repeat_interval_seconds?: number
+  repeat_config?: { type?: string; cron_expression?: string; offsets_seconds?: number[]; days_before_due?: number[] }
   max_attempts?: number
   occurrences?: Array<{
     id: string
@@ -63,6 +65,10 @@ const form = reactive({
   runAt: nowLocalDateTime(DEFAULT_TIMEZONE, 60),
   requireAck: false,
   repeatMinutes: 5,
+  repeatType: 'interval',
+  repeatCron: '0 9 * * 1-5',
+  repeatOffsetDays: '0,1,3,7',
+  repeatDaysBeforeDue: '30,7,3,1',
   maxAttempts: 6,
 })
 
@@ -173,7 +179,13 @@ async function createReminder() {
         require_ack: form.requireAck,
         repeat: form.requireAck
           ? {
-              interval_seconds: form.repeatMinutes * 60,
+              ...repeatRulePayload(form.repeatType, {
+                intervalSeconds: form.repeatMinutes * 60,
+                cron: form.repeatCron,
+                offsetDays: form.repeatOffsetDays,
+                daysBeforeDue: form.repeatDaysBeforeDue,
+                dueAt: form.runAt,
+              }),
               max_attempts: form.maxAttempts,
             }
           : undefined,
@@ -295,9 +307,16 @@ onBeforeUnmount(() => {
         <span><strong>需要我确认完成</strong><small>未完成时可以继续催办</small></span>
       </label>
       <div v-if="form.requireAck" class="repeat-grid">
-        <label><span>每隔（分钟）</span><input v-model.number="form.repeatMinutes" type="number" min="5"></label>
+        <label><span>本轮催办规则</span><select v-model="form.repeatType"><option value="interval">固定间隔</option><option value="cron">Cron 时间规则</option><option value="offsets">自定义节点</option><option value="before_due">到期前节点</option></select></label>
+        <label v-if="form.repeatType === 'interval'"><span>每隔（分钟）</span><input v-model.number="form.repeatMinutes" type="number" min="5"></label>
+        <label v-else-if="form.repeatType === 'cron'"><span>Cron（本提醒时区）</span><input v-model="form.repeatCron" placeholder="0 9 * * 1-5"></label>
+        <label v-else-if="form.repeatType === 'offsets'"><span>距首次触发天数（含 0）</span><input v-model="form.repeatOffsetDays" placeholder="0,1,3,7"></label>
+        <label v-else><span>到期前天数（上方时间作为到期时间）</span><input v-model="form.repeatDaysBeforeDue" placeholder="30,7,3,1"></label>
         <label><span>最多提醒</span><input v-model.number="form.maxAttempts" type="number" min="1" max="12"></label>
       </div>
+      <p v-if="form.requireAck">
+        同一轮按规则发送，节点之间不额外催办；停止本次后不再发送。最长 30 天；到期前节点跳过创建时已过去的节点。
+      </p>
       <button class="primary-action" type="submit" :disabled="busy">
         <CalendarClock :size="20" /> {{ busy ? '正在保存…' : '安排提醒' }}
       </button>

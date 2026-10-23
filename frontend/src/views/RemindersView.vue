@@ -44,7 +44,7 @@ const broadcastAudienceCount = ref(0)
 const form = reactive(defaultReminderForm(settings.timezone))
 let timezoneEdited = false
 const editing = ref<Reminder | null>(null)
-const editForm = reactive({ title: '', content: '' })
+const editForm = reactive({ title: '', content: '', completion_action: 'none' })
 const editBusy = ref(false)
 const actionBusyId = ref('')
 const deleting = ref<Reminder | null>(null)
@@ -54,6 +54,14 @@ const previewTriggers = ref<string[]>([])
 const mediaPreviewUrl = ref('')
 const mediaUploading = ref(false)
 const isInteractive = computed(() => form.require_ack)
+
+watch(() => form.completion_action, (action) => {
+  if (action !== 'none') form.require_ack = true
+})
+
+watch(() => form.repeat_type, (type) => {
+  if (type === 'before_due') form.schedule_type = 'once'
+})
 
 watch(
   () => [form.broadcast, form.require_ack],
@@ -200,6 +208,7 @@ function openEdit(item: Reminder) {
   editing.value = item
   editForm.title = item.title
   editForm.content = item.content ?? ''
+  editForm.completion_action = item.completion_action ?? 'none'
 }
 
 async function saveEdit() {
@@ -209,6 +218,7 @@ async function saveEdit() {
     await api.patch(`/admin/reminders/${editing.value.id}`, {
       title: editForm.title,
       content: editForm.content,
+      completion_action: editForm.completion_action,
     })
     ui.toast('提醒内容已更新', 'success')
     editing.value = null
@@ -378,8 +388,9 @@ const contentLabel = (type?: string) => {
         </AppSelect>
       </div>
       <div v-if="form.schedule_type === 'once'" class="field">
-        <label>触发时间</label>
-        <AppInput v-model="form.at" type="datetime-local" required />
+        <label>{{ form.require_ack && form.repeat_type === 'before_due' ? '到期时间（用于计算本轮节点）' : '首次触发时间' }}</label>
+        <AppInput v-if="form.require_ack && form.repeat_type === 'before_due'" v-model="form.repeat_due_at" type="datetime-local" required />
+        <AppInput v-else v-model="form.at" type="datetime-local" required />
       </div>
       <div v-if="form.schedule_type === 'once'" class="field">
         <label>时区（IANA）</label>
@@ -474,6 +485,19 @@ const contentLabel = (type?: string) => {
         <span class="field-help">开启后，消息会附带底部菜单提示，并在成功送达后成为该用户的最近操作目标。</span>
       </div>
 
+      <div class="field full-width">
+        <label>【完成本次】的处理动作</label>
+        <AppSelect v-model="form.completion_action">
+          <option value="none">
+            确认完成提醒
+          </option>
+          <option value="publisher_wechat_login">
+            后台重新登录公众号并发送二维码
+          </option>
+        </AppSelect>
+        <small class="field-help">登录维护只允许一位指定接收人，自动启用交互，每轮只通知一次。消息会注明点击【完成本次】开始重登；未点击时保留登录态，扫码成功才完成。</small>
+      </div>
+
       <template v-if="form.require_ack">
         <div class="field">
           <label>确认策略</label>
@@ -491,11 +515,44 @@ const contentLabel = (type?: string) => {
           <small v-if="form.notify_on_all_completed" class="field-help">启用“全员完成后通知”时必须使用“全部确认”。</small>
         </div>
         <div class="field">
+          <label>本轮催办规则</label>
+          <AppSelect v-model="form.repeat_type">
+            <option value="interval">
+              固定间隔
+            </option>
+            <option value="cron">
+              Cron 时间规则
+            </option>
+            <option value="offsets">
+              自定义节点
+            </option>
+            <option value="before_due">
+              到期前节点
+            </option>
+          </AppSelect>
+          <small class="field-help">同一轮按规则发送；停止本次后，剩余催办全部停止。最长持续 30 天。</small>
+        </div>
+        <div v-if="form.repeat_type === 'interval'" class="field">
           <label>催办间隔（秒，至少 300）</label>
           <AppInput v-model.number="form.repeat_interval_seconds" type="number" min="300" />
         </div>
+        <div v-else-if="form.repeat_type === 'cron'" class="field">
+          <label>本轮 Cron（分 时 日 月 周）</label>
+          <AppInput v-model="form.repeat_cron_expression" placeholder="0 9 * * 1-5" />
+          <small class="field-help">首次触发后按此规则催办，沿用本提醒时区，不开启新一轮。</small>
+        </div>
+        <div v-else-if="form.repeat_type === 'offsets'" class="field">
+          <label>距首次触发的天数</label>
+          <AppInput v-model="form.repeat_offset_days" placeholder="0,1,3,7" />
+          <small class="field-help">从 0 开始递增，支持小数；仅在这些节点发送，最多 12 个节点。</small>
+        </div>
+        <div v-else class="field">
+          <label>到期前提前天数</label>
+          <AppInput v-model="form.repeat_days_before_due" placeholder="30,7,3,1" />
+          <small class="field-help">配合单次调度及上方到期时间使用；从大到小填写 0–30 的整数。创建时跳过已过去节点，不修改业务到期或续费状态。</small>
+        </div>
         <div class="field">
-          <label>最多次数</label>
+          <label>最多次数（含首次）</label>
           <AppInput v-model.number="form.max_attempts" type="number" min="1" max="12" />
         </div>
         <div class="field">
@@ -706,6 +763,18 @@ const contentLabel = (type?: string) => {
       <div class="field">
         <label>内容</label>
         <AppTextarea v-model="editForm.content" :rows="8" />
+      </div>
+      <div class="field">
+        <label>【完成本次】的处理动作</label>
+        <AppSelect v-model="editForm.completion_action">
+          <option value="none">
+            确认完成提醒
+          </option>
+          <option value="publisher_wechat_login">
+            后台重新登录公众号并发送二维码
+          </option>
+        </AppSelect>
+        <small class="field-help">可将现有 4 天静态提醒改为登录维护；从下一轮生效，不更改调度。登录维护提醒会自动附带操作说明。</small>
       </div>
       <p class="edit-note">
         编辑只影响后续尚未生成的提醒实例；已经发送的历史消息不会被改写。

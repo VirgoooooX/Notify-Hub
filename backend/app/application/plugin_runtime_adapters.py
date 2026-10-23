@@ -158,6 +158,7 @@ class PluginReminderCreator:
                 require_ack=draft.require_ack,
                 ack_policy=AckPolicy(draft.ack_policy),
                 repeat_interval_seconds=draft.repeat_interval_seconds,
+                repeat_config=draft.repeat_config,
                 max_reminders=draft.max_reminders,
                 stop_at=draft.stop_at,
                 content_type=draft.content_type,

@@ -24,6 +24,7 @@ from app.application.mobile_reminder_query_service import MobileReminderQuerySer
 from app.application.mp_article_service import MPArticleLibraryService
 from app.application.notification_service import NotificationService
 from app.application.plugin_service import PluginService
+from app.application.publisher_login_service import PublisherLoginService
 from app.application.reminder_access import ReminderAccessService
 from app.application.reminder_draft_service import ReminderDraftService
 from app.application.reminder_maintenance_service import ReminderMaintenanceService
@@ -226,6 +227,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         internal_media_base_url=settings.browser_publisher_media_base_url,
     )
     xhs_channel = XhsArticleAdapter(browser_publisher_client)
+    publisher_login_service = PublisherLoginService(
+        factory, browser_publisher_client, event_service, media_service, clock
+    )
     mp_library = MPArticleLibraryService(factory, clock, settings)
     mp_credentials = bool(settings.mp_app_id) and settings.mp_app_secret is not None
     # The browser route must not use Notify Hub's MP credentials. Keep the
@@ -368,6 +372,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         name="reminder-worker",
                     ),
                     asyncio.create_task(interaction_loop(), name="interaction-worker"),
+                    asyncio.create_task(
+                        publisher_login_service.run(worker_stop), name="publisher-login-worker"
+                    ),
                     asyncio.create_task(media_cleanup_loop(), name="media-cleanup-worker"),
                 ]
             )
@@ -407,6 +414,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.notification_channel = channel
     app.state.delivery_worker = worker
     app.state.reminder_service = reminder_service
+    app.state.publisher_login_service = publisher_login_service
     app.state.reminder_access_service = reminder_access_service
     app.state.reminder_maintenance_service = reminder_maintenance_service
     app.state.conversation_service = conversation_service

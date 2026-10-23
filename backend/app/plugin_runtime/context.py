@@ -80,6 +80,7 @@ class PluginReminderDraft(BaseModel):
     require_ack: bool = False
     ack_policy: Literal["any", "all", "each"] = "any"
     repeat_interval_seconds: int | None = None
+    repeat_config: dict[str, Any] | None = None
     max_reminders: int | None = None
     stop_at: datetime | None = None
     content_type: Literal["text", "image", "article"] = "text"

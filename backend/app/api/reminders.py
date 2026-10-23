@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.api.dependencies import require_admin
 from app.api.errors import AppError
+from app.api.reminder_repeat import RepeatInput
 from app.application.audit import add_audit
 from app.application.platform_settings import read_platform_timezone
 from app.application.reminder_service import ReminderCreate, ReminderNotFound, ReminderUpdate
@@ -91,13 +92,8 @@ class ScheduleInput(BaseModel):
         return self
 
 
-class RepeatInput(BaseModel):
-    interval_seconds: int = Field(default=300, ge=300)
-    max_attempts: int = Field(default=12, ge=1, le=12)
-    stop_at: datetime | None = None
-
-
 class ReminderInput(BaseModel):
+    completion_action: Literal["none", "publisher_wechat_login"] = "none"
     creator_person_id: str | None = None
     profile_id: str | None = Field(default=None, max_length=64)
     title: str = Field(min_length=1, max_length=200)
@@ -149,6 +145,7 @@ class CleanupInput(BaseModel):
 
 
 class ReminderPatchInput(BaseModel):
+    completion_action: Literal["none", "publisher_wechat_login"] | None = None
     title: str | None = Field(default=None, min_length=1, max_length=200)
     content: str | None = Field(default=None, max_length=20_000)
     content_type: Literal["text", "image", "article"] | None = None
@@ -192,19 +189,17 @@ def _view(reminder: Reminder) -> dict[str, object]:
         "broadcast": item.broadcast,
         "notify_on_all_completed": item.notify_on_all_completed,
         "require_ack": item.require_ack,
+        "completion_action": item.completion_action,
         "ack_policy": item.ack_policy,
         "repeat_interval_seconds": item.repeat_interval_seconds,
+        "repeat_config": item.repeat_config,
         "max_reminders": item.max_reminders,
         "max_attempts": item.max_reminders,
         "reminder_count": item.reminder_count,
         "attempt_count": item.reminder_count,
         "stop_at": _utc(item.stop_at),
         "escalation_stop_after_seconds": item.escalation_stop_after_seconds,
-        "interaction_mode": (
-            "latest_menu"
-            if item.require_ack and item.repeat_interval_seconds is not None
-            else "none"
-        ),
+        "interaction_mode": ("latest_menu" if item.require_ack else "none"),
     }
 
 
@@ -248,6 +243,10 @@ async def create_reminder(
     try:
         timezone = payload.schedule.timezone or platform_timezone
         payload.schedule.normalize_timezone(timezone)
+        if payload.repeat is not None and payload.repeat.due_at is not None:
+            payload.repeat.due_at = resolve_datetime(
+                payload.repeat.due_at, timezone, field="repeat.due_at"
+            )
         if payload.repeat is not None and payload.repeat.stop_at is not None:
             payload.repeat.stop_at = resolve_datetime(
                 payload.repeat.stop_at, timezone, field="repeat.stop_at"
@@ -288,8 +287,10 @@ async def create_reminder(
                 end_at=payload.schedule.end_at,
                 misfire_policy=MisfirePolicy(payload.schedule.misfire_policy),
                 require_ack=payload.require_ack,
+                completion_action=payload.completion_action,
                 ack_policy=AckPolicy(payload.ack_policy),
-                repeat_interval_seconds=repeat.interval_seconds if repeat else None,
+                repeat_interval_seconds=repeat.interval_value() if repeat else None,
+                repeat_config=repeat.rule_config() if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat.stop_at if repeat else None,
                 profile_id=profile_id,
@@ -596,7 +597,7 @@ async def update_reminder(
     schedule, repeat = payload.schedule, payload.repeat
     repeat_stop_at = repeat.stop_at if repeat else None
     timezone = schedule.timezone if schedule else None
-    if timezone is None and (schedule is not None or repeat_stop_at is not None):
+    if timezone is None and (schedule is not None or repeat is not None):
         timezone = existing.timezone
     if not isinstance(timezone, str) and (schedule is not None or repeat_stop_at is not None):
         raise AppError("not_found", "Reminder not found", 404)
@@ -611,6 +612,12 @@ async def update_reminder(
             raise AppError("not_found", "Reminder not found", 404)
         try:
             repeat_stop_at = resolve_datetime(repeat_stop_at, timezone, field="repeat.stop_at")
+        except ValueError as exc:
+            raise AppError("invalid_reminder", str(exc), 422) from exc
+    if repeat is not None and repeat.due_at is not None:
+        assert isinstance(timezone, str)
+        try:
+            repeat.due_at = resolve_datetime(repeat.due_at, timezone, field="repeat.due_at")
         except ValueError as exc:
             raise AppError("invalid_reminder", str(exc), 422) from exc
     try:
@@ -633,8 +640,10 @@ async def update_reminder(
                 misfire_policy=MisfirePolicy(schedule.misfire_policy) if schedule else None,
                 recipient_ids=tuple(payload.recipients) if payload.recipients else None,
                 require_ack=payload.require_ack,
+                completion_action=payload.completion_action,
                 ack_policy=AckPolicy(payload.ack_policy) if payload.ack_policy else None,
-                repeat_interval_seconds=repeat.interval_seconds if repeat else None,
+                repeat_interval_seconds=repeat.interval_value() if repeat else None,
+                repeat_config=repeat.rule_config() if repeat else None,
                 max_reminders=repeat.max_attempts if repeat else None,
                 stop_at=repeat_stop_at,
             ),

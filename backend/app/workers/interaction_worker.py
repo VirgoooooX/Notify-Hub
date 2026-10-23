@@ -239,9 +239,9 @@ class InteractionWorker:
                     incoming_message_id=message_id,
                     profile_id=profile_id,
                 )
-                if self._emit_reply_profile is not None:
+                if menu_reply.text and self._emit_reply_profile is not None:
                     await self._emit_reply_profile(sender, message_id, menu_reply.text, profile_id)
-                elif self._emit_reply is not None:
+                elif menu_reply.text and self._emit_reply is not None:
                     await self._emit_reply(sender, message_id, menu_reply.text)
             except Exception as exc:
                 attempts = int(event_payload.get("menu_reply_attempts") or 0) + 1

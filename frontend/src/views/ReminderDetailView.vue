@@ -133,6 +133,23 @@ const contentLabel = (type?: string) => {
           <dd>{{ item.require_ack ? '底部【快捷操作】菜单' : '无交互 · 普通通知' }}</dd>
           <dt>催办进度</dt>
           <dd>{{ item.attempt_count ?? 0 }} / {{ item.max_attempts ?? '—' }}</dd>
+          <dt v-if="item.require_ack">
+            本轮催办规则
+          </dt>
+          <dd v-if="item.require_ack">
+            <template v-if="item.repeat_config?.type === 'cron'">
+              Cron：{{ item.repeat_config.cron_expression }}
+            </template>
+            <template v-else-if="item.repeat_config?.type === 'offsets'">
+              距首次触发：{{ item.repeat_config.offsets_seconds?.map(value => value / 86400).join('、') }} 天
+            </template>
+            <template v-else-if="item.repeat_config?.type === 'before_due'">
+              到期前 {{ item.repeat_config.days_before_due?.join('、') }} 天；到期时间 {{ time(item.repeat_config.due_at) }}
+            </template>
+            <template v-else>
+              每隔 {{ item.repeat_interval_seconds }} 秒
+            </template>
+          </dd>
           <dt>停止时间</dt>
           <dd>{{ time(item.stop_at) }}</dd>
         </DescriptionList>

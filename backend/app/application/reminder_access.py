@@ -4,11 +4,15 @@ import asyncio
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import timedelta
+from itertools import pairwise
 from typing import Literal
 
 from app.application.audit import add_audit
 from app.application.reminder_service import ReminderCreate, ReminderService
 from app.domain.clock import Clock
+from app.domain.reminder_repeat import configure_repeat, parse_repeat_rule
+from app.domain.reminder_schedules import CronSchedule, validate_minimum_frequency
 from app.domain.reminders import ReminderError, ScheduleType, normalize_utc
 from app.infrastructure.database.models import AuditLog
 from app.infrastructure.database.reminder_models import Reminder
@@ -117,8 +121,8 @@ class ReminderAccessService:
                 )
             return ReminderCreationResult(reminder, duplicate=False)
 
-    @staticmethod
     def _authorize(
+        self,
         command: ReminderCreate,
         permissions: ReminderPermissions,
         *,
@@ -131,7 +135,9 @@ class ReminderAccessService:
         if recurring and not permissions.allow_recurring:
             raise ReminderAccessDenied("recurring reminders are not permitted")
         if (
-            command.schedule_type is ScheduleType.CRON or schedule_mode == "cron"
+            command.schedule_type is ScheduleType.CRON
+            or schedule_mode == "cron"
+            or (command.repeat_config or {}).get("type") == "cron"
         ) and not permissions.allow_cron:
             raise ReminderAccessDenied("cron reminders are not permitted")
         if command.require_ack and not permissions.allow_interactive:
@@ -152,6 +158,44 @@ class ReminderAccessService:
             and command.repeat_interval_seconds < permissions.min_interval_seconds
         ):
             raise ReminderAccessDenied("reminder interval is below the permitted minimum")
+        rule = parse_repeat_rule(command.repeat_config)
+        if (
+            rule.interval_seconds is not None
+            and rule.interval_seconds < permissions.min_interval_seconds
+        ):
+            raise ReminderAccessDenied("reminder interval is below the permitted minimum")
+        if rule.offsets_seconds and any(
+            b - a < permissions.min_interval_seconds for a, b in pairwise(rule.offsets_seconds)
+        ):
+            raise ReminderAccessDenied("repeat nodes are below the permitted minimum")
+        if rule.type == "cron":
+            try:
+                validate_minimum_frequency(
+                    CronSchedule(rule.cron_expression or "", command.timezone),
+                    after=command.scheduled_at or self._clock.now(),
+                    minimum_seconds=permissions.min_interval_seconds,
+                )
+            except ValueError as exc:
+                raise ReminderAccessDenied(
+                    "repeat cron is invalid or below the permitted minimum"
+                ) from exc
+        if rule.type != "interval":
+            start = (
+                normalize_utc(rule.due_at) - timedelta(days=(rule.days_before_due or [0])[0])
+                if rule.type == "before_due" and rule.due_at is not None
+                else command.scheduled_at or command.start_at or self._clock.now()
+            )
+            _, _, stop, _ = configure_repeat(
+                require_ack=command.require_ack,
+                config=command.repeat_config,
+                interval_seconds=command.repeat_interval_seconds,
+                maximum=command.max_reminders,
+                stop_at=command.stop_at,
+                start_at=start,
+                timezone=command.timezone,
+            )
+            if stop and (stop - start).total_seconds() > permissions.max_duration_seconds + 1:
+                raise ReminderAccessDenied("reminder duration exceeds the permitted maximum")
         if (
             command.interval_seconds is not None
             and command.interval_seconds < permissions.min_interval_seconds
@@ -227,7 +271,7 @@ class ReminderAccessService:
 
     @staticmethod
     def _command_hash(command: ReminderCreate, schedule_mode: str | None) -> str:
-        payload = {
+        payload: dict[str, object] = {
             "profile_id": command.profile_id,
             "creator_person_id": command.creator_person_id,
             "title": command.title,
@@ -252,5 +296,7 @@ class ReminderAccessService:
             "media_asset_id": command.media_asset_id,
             "url": command.url,
         }
+        if command.repeat_config:
+            payload["repeat_config"] = command.repeat_config
         encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode()).hexdigest()
