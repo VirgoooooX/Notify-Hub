@@ -339,6 +339,7 @@ npm run build
 
 | 文档 | 内容 |
 | --- | --- |
+| [`docs/notification-format.md`](docs/notification-format.md) | 通知来源、分类封面、简短文案与二维码等例外 |
 | [`PROJECT_GUIDE.md`](PROJECT_GUIDE.md) | 当前架构、领域、安全、插件和测试总纲 |
 | [`docs/DECISIONS.md`](docs/DECISIONS.md) | 已接受的架构决策及其原因 |
 | [`docs/operations.md`](docs/operations.md) | 部署、备份、恢复和提醒运维 |

@@ -200,8 +200,12 @@ async def test_primary_degradation_alerts_and_records_rsshub_fallback(tmp_path: 
     assert events.events[0]["event_type"] == "system.x_source_degraded"
     assert events.events[0]["payload"]["error_code"] == "x_source_cookie_invalid"
     assert events.events[0]["payload"]["provider_used"] == "rsshub"
+    assert events.events[0]["message_type"] == "article"
+    assert events.events[0]["image_url"].endswith("/notification-covers/system-alert.png")
+    assert events.events[0]["title"].startswith("【Notify Hub】")
     assert await service.run_once() == 1
     assert events.events[1]["event_type"] == "system.x_source_recovered"
+    assert events.events[1]["image_url"].endswith("/notification-covers/system-recovered.png")
     await engine.dispose()
 
 

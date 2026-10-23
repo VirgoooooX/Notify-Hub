@@ -15,6 +15,7 @@ from app.domain.clock import Clock
 from app.domain.x_source import XPostRecord, XSourceAccountError, XSourceError
 from app.infrastructure.database.base import new_id
 from app.infrastructure.database.models import XSourceHealth
+from app.media.public_urls import PublicMediaUrlBuilder
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
@@ -63,6 +64,9 @@ class XHealthService:
         self._source = source
         self._targets = targets
         self._settings = settings
+        self._public_urls = PublicMediaUrlBuilder(
+            settings.public_base_url, settings.public_media_signing_key.get_secret_value()
+        )
 
     async def run_once(self) -> int:
         targets = await self._targets()
@@ -170,13 +174,20 @@ class XHealthService:
             if not recipients:
                 continue
             event_key = self._event_key(decision)
+            recovery = decision.kind in {"recovered", "content_recovered"}
+            if decision.kind == "recovered" and decision.scope_type == "account":
+                title = f"X 账号获取已恢复｜@{decision.username}"
             accept_result = await self._events.accept_internal_event(
                 source_type="system",
                 source_id="x_source_health",
                 event_type=event_type,
                 event_key=event_key,
-                title=title,
+                title=f"【Notify Hub】{title}"[:40],
                 content=content,
+                message_type="article",
+                image_url=self._public_urls.static_url(
+                    f"notification-covers/system-{'recovered' if recovery else 'alert'}.png"
+                ),
                 recipients=recipients,
                 level=level,
                 payload={
