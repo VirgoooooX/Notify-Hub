@@ -14,9 +14,12 @@ import pytest
 from pydantic import ValidationError
 from twscrape.accounts_pool import NoAccountError
 
-from plugins.builtin.codex_x_monitor.decision_prompt import RESET_CLASSIFICATION_INSTRUCTION
+from plugins.builtin.codex_x_monitor.decision_prompt import (
+    RESET_CLASSIFICATION_INSTRUCTION,
+    build_classification_content,
+)
 from plugins.builtin.codex_x_monitor.matcher import match_post
-from plugins.builtin.codex_x_monitor.plugin import CodexXMonitorPlugin
+from plugins.builtin.codex_x_monitor.plugin import CodexXMonitorPlugin, EmitEventError
 from plugins.builtin.codex_x_monitor.schemas import (
     STATE_KEY,
     CodexXMonitorConfig,
@@ -110,18 +113,23 @@ class FakeAI:
         error: Exception | None = None,
         summary_error: Exception | None = None,
         summary: str = "AI 生成的中文摘要正文。",
+        confidence: float = 0.95,
     ) -> None:
         self.label = label
         self.error = error
         self.summary_error = summary_error
         self.summary = summary
+        self.confidence = confidence
         self.calls: list[dict[str, Any]] = []
 
     async def classify_many(self, **kwargs: Any) -> list[FakeAIDecision]:
         self.calls.append(kwargs)
         if self.error is not None:
             raise self.error
-        return [FakeAIDecision(id=item.id, label=self.label) for item in kwargs["items"]]
+        return [
+            FakeAIDecision(id=item.id, label=self.label, confidence=self.confidence)
+            for item in kwargs["items"]
+        ]
 
     async def summarize(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
@@ -331,7 +339,7 @@ def test_posts_are_processed_in_order_and_negative_match_is_excluded() -> None:
     result = asyncio.run(CodexXMonitorPlugin().run(context))
     assert result.new_posts == 3
     assert [event.event_key for event in context.events] == ["x-post-2061106703446450395"]
-    assert [saved["last_seen_post_id"] for saved in context.saved[:3]] == [
+    assert [saved["last_seen_post_id"] for saved in context.saved[1:4]] == [
         "2061106703446450393",
         "2061106703446450394",
         "2061106703446450395",
@@ -526,7 +534,7 @@ def test_v1_state_migration_does_not_replay_old_posts_or_lower_high_water_mark()
 
     assert result.new_posts == 1
     assert [event.event_key for event in context.events] == ["x-post-99"]
-    assert context.states[STATE_KEY]["schema_version"] == 2
+    assert context.states[STATE_KEY]["schema_version"] == 3
     assert context.states[STATE_KEY]["last_seen_post_id"] == "100"
     assert context.states[STATE_KEY]["migration_cutoff_at"] == "2026-08-25T08:00:00Z"
 
@@ -604,11 +612,43 @@ def test_ai_prompt_contains_account_history_and_neighboring_posts() -> None:
     call = ai.calls[0]
     assert call["instruction"] == RESET_CLASSIFICATION_INSTRUCTION
     assert "不要因为账号过去经常发布类似内容就自动通知" in call["instruction"]
+    assert "related_reset_history" in call["items"][0].content
     assert "banked reset" in call["instruction"]
     assert "reset card" in call["instruction"]
+    assert "视为可能相关的线索并标 uncertain" in call["instruction"]
     item_payload = json.loads(call["items"][0].content)
     assert item_payload["target_post"]["id"] == "2"
     assert [post["id"] for post in item_payload["nearby_posts"]] == ["1", "3"]
+
+
+def test_classification_context_recovers_related_resets_outside_the_neighbor_window() -> None:
+    texts = [
+        "It's reset day today",
+        "A quiet breakfast before work",
+        "That's a reset!",
+        "I reset my sleep schedule yesterday",
+        "A new keyboard arrived",
+        "Long walk after lunch",
+        "Reading a book tonight",
+        "The weather is mild today",
+        "Rest and reset",
+    ]
+    posts = [
+        XPost(
+            id=str(100 + index),
+            author_username="thsottiaux",
+            text=text,
+            url=f"https://x.com/thsottiaux/status/{100 + index}",
+            published_at=datetime(2026, 10, 17 + index, 12, tzinfo=UTC),
+        )
+        for index, text in enumerate(texts)
+    ]
+
+    content = json.loads(build_classification_content(posts[-1], posts))
+
+    assert [post["id"] for post in content["nearby_posts"]] == ["104", "105", "106", "107"]
+    assert [post["id"] for post in content["related_reset_history"]] == ["100", "102"]
+    assert content["target_post"]["text"] == "Rest and reset"
 
 
 def test_replies_and_reposts_never_reach_ai() -> None:
@@ -627,6 +667,16 @@ def test_replies_and_reposts_never_reach_ai() -> None:
     assert context.states[STATE_KEY]["last_seen_post_id"] == "2"
 
 
+def test_ambiguous_rest_and_reset_only_reaches_ai_at_low_rule_confidence() -> None:
+    config = CodexXMonitorConfig.model_validate(BASE_CONFIG)
+    post = _post(7).model_copy(update={"text": "Rest and reset"})
+
+    result = match_post(post, config)
+
+    assert result.matched is False
+    assert result.confidence == 0.6
+
+
 def test_ai_failure_is_fail_closed_without_checkpoint() -> None:
     ai = FakeAI(error=RuntimeError("AI unavailable"))
     context = FakeContext(
@@ -637,8 +687,158 @@ def test_ai_failure_is_fail_closed_without_checkpoint() -> None:
     )
     with pytest.raises(RuntimeError, match="AI unavailable"):
         asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
-    assert context.saved == []
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "0"
+    assert [post["id"] for post in context.states[STATE_KEY]["pending_posts"]] == ["1"]
     assert context.events == []
+
+
+def test_pending_post_survives_restart_and_leaving_fetch_window() -> None:
+    config = {**BASE_CONFIG, "decision_mode": "rules_then_ai", "rule_ai_threshold": 1.0}
+    first = FakeContext(
+        config,
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=FakeAI(error=RuntimeError("AI unavailable")),
+    )
+    with pytest.raises(RuntimeError, match="AI unavailable"):
+        asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(first))
+
+    restarted = FakeContext(config, [], state=first.states[STATE_KEY], ai=FakeAI())
+    asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(2)])}).run(restarted))
+
+    assert [event.event_key for event in restarted.events] == ["x-post-1", "x-post-2"]
+    assert restarted.states[STATE_KEY]["last_seen_post_id"] == "2"
+    assert restarted.states[STATE_KEY]["pending_posts"] == []
+
+
+@pytest.mark.parametrize("first_run_mode", ["baseline", "scan_recent"])
+def test_pending_posts_bypass_first_run_baseline_and_scan_limit(first_run_mode: str) -> None:
+    config = {**BASE_CONFIG, "first_run_mode": first_run_mode, "scan_recent_limit": 1}
+    context = FakeContext(
+        config,
+        [],
+        state={"schema_version": 3, "pending_posts": [_post(1).model_dump(mode="json")]},
+    )
+    asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(2)])}).run(context))
+    assert [event.event_key for event in context.events] == ["x-post-1", "x-post-2"]
+    assert context.states[STATE_KEY]["pending_posts"] == []
+
+
+def test_v2_state_migrates_without_replaying_seen_posts() -> None:
+    context = FakeContext(
+        BASE_CONFIG,
+        [],
+        state={"schema_version": 2, "last_seen_post_id": "1", "recent_processed_ids": ["1"]},
+    )
+    asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1), _post(2)])}).run(context))
+    assert [event.event_key for event in context.events] == ["x-post-2"]
+    assert context.states[STATE_KEY]["schema_version"] == 3
+
+
+def test_pending_review_retries_same_key_after_core_failure() -> None:
+    config = {**BASE_CONFIG, "decision_mode": "ai", "recipients": ["person-1"]}
+    first = FakeContext(
+        config,
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=FakeAI(label="uncertain"),
+        receipts=[{"status": "rejected"}],
+    )
+    with pytest.raises(EmitEventError):
+        asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(first))
+    restarted = FakeContext(
+        config,
+        [],
+        state=first.states[STATE_KEY],
+        ai=FakeAI(label="uncertain"),
+        receipts=[{"status": "duplicate"}],
+    )
+    result = asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([])}).run(restarted))
+    assert restarted.events[0].event_key == first.events[0].event_key == "x-post-1-review"
+    assert result.emitted_events == 0
+    assert restarted.states[STATE_KEY]["pending_posts"] == []
+    assert restarted.states[STATE_KEY]["last_seen_post_id"] == "1"
+
+
+@pytest.mark.parametrize(
+    ("label", "confidence", "review_reasons"),
+    [
+        ("uncertain", 0.95, ["uncertain_classification"]),
+        ("notify", 0.79, ["below_confidence_threshold"]),
+        ("ignore", 0.79, ["below_confidence_threshold"]),
+    ],
+)
+def test_uncertain_or_low_confidence_ai_results_emit_private_review_event(
+    label: str, confidence: float, review_reasons: list[str]
+) -> None:
+    target = _post(1).model_copy(update={"text": "Rest and reset"})
+    ai = FakeAI(label=label, confidence=confidence)
+    context = FakeContext(
+        {
+            **BASE_CONFIG,
+            "decision_mode": "rules_then_ai",
+            "rule_ai_threshold": 1.0,
+            "recipients": ["person-1"],
+        },
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=ai,
+    )
+
+    result = asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([target])}).run(context))
+
+    assert result.emitted_events == 1
+    assert result.matched_posts == 0
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "1"
+    event = context.events[0]
+    assert event.event_type == "codex.usage_reset_review"
+    assert event.event_key == "x-post-1-review"
+    assert event.recipients == ["person-1"]
+    assert event.level == "warning"
+    assert event.publish_to_mp is False and event.publish_variants == []
+    assert event.payload["review_reasons"] == review_reasons
+
+
+def test_uncertain_decision_without_recipients_does_not_checkpoint() -> None:
+    context = FakeContext(
+        {
+            **BASE_CONFIG,
+            "decision_mode": "rules_then_ai",
+            "rule_ai_threshold": 1.0,
+        },
+        [],
+        state={"last_seen_post_id": "0"},
+        ai=FakeAI(label="uncertain"),
+    )
+
+    with pytest.raises(EmitEventError, match="requires explicit recipients"):
+        asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
+
+    assert context.events == []
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "0"
+    assert [post["id"] for post in context.states[STATE_KEY]["pending_posts"]] == ["1"]
+    assert context.logger.messages[0][0] == "codex_reset_uncertain_requires_recipients"
+
+
+def test_rejected_uncertain_review_event_does_not_checkpoint() -> None:
+    context = FakeContext(
+        {
+            **BASE_CONFIG,
+            "decision_mode": "rules_then_ai",
+            "rule_ai_threshold": 1.0,
+            "recipients": ["person-1"],
+        },
+        [],
+        state={"last_seen_post_id": "0"},
+        receipts=[{"status": "rejected"}],
+        ai=FakeAI(label="uncertain"),
+    )
+
+    with pytest.raises(EmitEventError, match="core did not accept review event"):
+        asyncio.run(CodexXMonitorPlugin({"rss": FakePostSource([_post(1)])}).run(context))
+
+    assert context.states[STATE_KEY]["last_seen_post_id"] == "0"
+    assert [post["id"] for post in context.states[STATE_KEY]["pending_posts"]] == ["1"]
 
 
 def test_ai_ignore_checkpoints_without_emitting() -> None:

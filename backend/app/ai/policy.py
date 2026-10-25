@@ -166,6 +166,12 @@ def validate_classification_batch(
     items: Sequence[AIClassificationItem],
     labels: Sequence[str],
 ) -> bool:
-    requested = {item.id for item in items}
-    returned = {item.id for item in results}
+    requested_ids = [item.id for item in items]
+    returned_ids = [item.id for item in results]
+    if len(requested_ids) != len(set(requested_ids)):
+        return False
+    if len(returned_ids) != len(requested_ids) or len(returned_ids) != len(set(returned_ids)):
+        return False
+    requested = set(requested_ids)
+    returned = set(returned_ids)
     return requested == returned and all(item.label in labels for item in results)

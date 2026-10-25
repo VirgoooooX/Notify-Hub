@@ -121,8 +121,17 @@ class CodexXMonitorPlugin:
         posts = sorted(await source.fetch(context, config), key=_post_sort_key)
         raw_state = await context.get_state(STATE_KEY, None)
         state = MonitorState.from_raw(raw_state, posts, max_recent_ids=MAX_RECENT_PROCESSED_IDS)
+        if state.pending_posts:
+            # Retain the exact source record even after it leaves the live fetch window.
+            posts_by_id = {post.id: post for post in posts}
+            posts_by_id.update({post.id: post for post in state.pending_posts})
+            posts = sorted(posts_by_id.values(), key=_post_sort_key)
 
-        if state.last_seen_post_id is None and config.first_run_mode == "baseline":
+        if (
+            state.last_seen_post_id is None
+            and not state.pending_posts
+            and config.first_run_mode == "baseline"
+        ):
             if posts:
                 latest = posts[-1]
                 state.last_seen_post_id = latest.id
@@ -134,8 +143,17 @@ class CodexXMonitorPlugin:
             return PluginRunResult(status="baseline_initialized", fetched_posts=len(posts))
 
         candidates = self._new_candidates(posts, state)
-        if state.last_seen_post_id is None and config.first_run_mode == "scan_recent":
+        if (
+            state.last_seen_post_id is None
+            and not state.pending_posts
+            and config.first_run_mode == "scan_recent"
+        ):
             candidates = candidates[-config.scan_recent_limit :]
+
+        if candidates:
+            # Commit recoverable inputs before any AI/network work or event submission.
+            state.pending_posts = candidates
+            await self._save_state(context, state)
 
         emitted = 0
         matched = 0
@@ -196,6 +214,61 @@ class CodexXMonitorPlugin:
                     and ai_decision.label == "notify"
                     and ai_decision.confidence >= config.ai_min_confidence
                 )
+
+            review_reasons: list[str] = []
+            if ai_controls_decision and ai_decision is not None:
+                if ai_decision.label == "uncertain":
+                    review_reasons.append("uncertain_classification")
+                if ai_decision.confidence < config.ai_min_confidence:
+                    review_reasons.append("below_confidence_threshold")
+            if review_reasons and ai_decision is not None:
+                if not config.recipients:
+                    context.logger.warning(
+                        "codex_reset_uncertain_requires_recipients",
+                        post_id=post.id,
+                        url=str(post.url),
+                        ai_label=ai_decision.label,
+                        ai_confidence=ai_decision.confidence,
+                    )
+                    raise EmitEventError(
+                        f"uncertain reset decision for post {post.id} requires explicit recipients"
+                    )
+                event = EventDraft(
+                    event_type="codex.usage_reset_review",
+                    event_key=f"x-post-{post.id}-review",
+                    title="Codex 用量重置线索待核查",
+                    content=(
+                        "AI 判定这条帖子可能与 Codex 用量重置有关，但目标帖本身不足以确认"
+                        "是否已执行或承诺执行。"
+                        f"\n\n@{post.author_username} 原文：\n{post.text[:9000]}"
+                    ),
+                    level="warning",
+                    occurred_at=post.published_at,
+                    url=post.url,
+                    recipients=config.recipients,
+                    payload={
+                        "post_id": post.id,
+                        "source": config.source,
+                        "review_reasons": review_reasons,
+                        "matched_rules": list(result.matched_rules),
+                        "rule_matched": result.matched,
+                        "rule_confidence": result.confidence,
+                        "ai_label": ai_decision.label,
+                        "ai_confidence": ai_decision.confidence,
+                        "ai_reason": getattr(ai_decision, "reason", None),
+                    },
+                )
+                receipt = await context.emit_event(event)
+                status = _receipt_status(receipt)
+                if status not in {"accepted", "duplicate"}:
+                    receipt_status = status or "missing"
+                    raise EmitEventError(
+                        f"core did not accept review event (status={receipt_status})"
+                    )
+                if status == "accepted":
+                    emitted += 1
+                await self._checkpoint(context, state, post, config.source)
+                continue
 
             if should_notify:
                 matched += 1
@@ -397,6 +470,7 @@ class CodexXMonitorPlugin:
             state.last_seen_post_id = post.id
         if state.last_seen_published_at is None or post.published_at > state.last_seen_published_at:
             state.last_seen_published_at = post.published_at
+        state.pending_posts = [item for item in state.pending_posts if item.id != post.id]
         state.last_source = source  # type: ignore[assignment]
         state.recent_processed_ids = (
             [item for item in state.recent_processed_ids if item != post.id] + [post.id]

@@ -199,7 +199,8 @@ class EventDraft(BaseModel):
 
 
 class MonitorState(BaseModel):
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
+    pending_posts: list[XPost] = Field(default_factory=list)
     last_seen_post_id: str | None = None
     last_seen_published_at: datetime | None = None
     recent_processed_ids: list[str] = Field(default_factory=list)
@@ -215,8 +216,9 @@ class MonitorState(BaseModel):
         *,
         max_recent_ids: int = 200,
     ) -> MonitorState:
-        """Load v1 state and mark the already-scanned time window as seen.
+        """Migrate v1/v2 checkpoints without replaying already processed history.
 
+        v3 also retains unprocessed posts across fetch windows and restarts.
         v1 used a numeric high-water mark as the only eligibility test. During
         a source switch, a post can arrive late with a lower ID, so v2 keeps a
         bounded set of processed IDs instead. Existing posts at or before the
@@ -227,7 +229,7 @@ class MonitorState(BaseModel):
             return cls()
         raw_version = raw.get("schema_version", 1)
         normalized = dict(raw)
-        normalized["schema_version"] = 2
+        normalized["schema_version"] = 3
         state = cls.model_validate(normalized)
         if raw_version == 1:
             if state.last_seen_published_at is not None:

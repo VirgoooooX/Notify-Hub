@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import structlog
 from app.ai.service import AIGatewayError, AIService
 from app.application.ai_profile_references import referenced_ai_profiles
 from app.application.media_service import MediaService
@@ -714,6 +715,95 @@ class PluginService:
                     plugin.next_run_at = None
                 elif plugin.consecutive_failures >= self.DEGRADED_AFTER:
                     plugin.status = "degraded"
+
+    async def check_health(self) -> int:
+        """Retry durable circuit alerts through the core event acceptance boundary."""
+        emitted = 0
+        async with self._factory() as session:
+            plugin_ids = list(
+                await session.scalars(select(PluginRecord.id).where(PluginRecord.enabled.is_(True)))
+            )
+        for plugin_id in plugin_ids:
+            async with self._factory() as session, session.begin():
+                plugin = await session.get(PluginRecord, plugin_id)
+                if plugin is None:
+                    continue
+                config = await session.get(PluginConfig, plugin_id)
+                marker = await session.get(PluginState, (plugin_id, "runtime_health"))
+                health = dict(marker.value) if marker is not None else {}
+                if not health and not plugin.circuit_open:
+                    continue
+                recipients = list((config.config if config else {}).get("recipients") or [])
+                if (
+                    not recipients
+                    and self._settings is not None
+                    and plugin.profile_id == DEFAULT_PROFILE_ID
+                    and plugin.manifest.get("permissions", {}).get("x_source")
+                ):
+                    recipients = list(self._settings.x_health_alert_recipient_ids)
+                if not recipients:
+                    continue
+                if not health:
+                    health = {
+                        "episode": new_id("circuit"),
+                        "profile_id": plugin.profile_id,
+                        "opened_at": self._clock().isoformat(),
+                        "notified": False,
+                    }
+                    marker = PluginState(
+                        plugin_id=plugin_id,
+                        key="runtime_health",
+                        value=health,
+                        version=1,
+                        updated_at=self._clock(),
+                    )
+                    session.add(marker)
+                if health["profile_id"] != plugin.profile_id:
+                    # An old incident must never move to a different Profile on retry.
+                    continue
+                recovered = not plugin.circuit_open and plugin.status == "healthy"
+                if health["notified"] and not recovered:
+                    continue
+                kind = "recovered" if health["notified"] else "circuit_open"
+                event = EventDraft(
+                    event_type=f"system.plugin_{kind}",
+                    event_key=f"{health['episode']}-{kind}",
+                    title="插件监控已恢复" if kind == "recovered" else "插件连续失败，监控已暂停",
+                    content=(
+                        f"插件 {plugin.name}（{plugin_id}）手动运行成功，已恢复定时调度。"
+                        if kind == "recovered"
+                        else f"插件 {plugin.name}（{plugin_id}）因连续运行失败触发熔断，"
+                        "定时调度已暂停。"
+                        "请检查插件运行记录及 AI/数据源配置，修复后手动运行以恢复监控。"
+                    ),
+                    level="info" if kind == "recovered" else "warning",
+                    recipients=recipients,
+                    payload={"plugin_id": plugin_id, "episode": health["episode"]},
+                )
+            # Keep event routing and network work outside the state transaction.
+            try:
+                receipt = await self._emitter.emit(plugin_id, event)
+                if receipt.status not in {"accepted", "duplicate"}:
+                    raise RuntimeError("core did not accept plugin health event")
+            except Exception as exc:
+                structlog.get_logger().warning(
+                    "plugin_health_event_failed",
+                    plugin_id=plugin_id,
+                    error_type=type(exc).__name__,
+                )
+                continue
+            async with self._factory() as session, session.begin():
+                marker = await session.get(PluginState, (plugin_id, "runtime_health"))
+                if marker is None or marker.value.get("episode") != health["episode"]:
+                    continue
+                if kind == "recovered":
+                    await session.delete(marker)
+                else:
+                    marker.value = {**health, "notified": True}
+                    marker.version += 1
+                    marker.updated_at = self._clock()
+            emitted += receipt.status == "accepted"
+        return emitted
 
     async def cancel(self, run_id: str) -> bool:
         if self._runner.cancel(run_id):

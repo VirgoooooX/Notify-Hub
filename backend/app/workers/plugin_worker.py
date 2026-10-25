@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
+from time import monotonic
 
 import structlog
 from app.application.plugin_service import PluginService
@@ -20,6 +21,7 @@ class PluginWorker:
         self._service = service
         self._worker_id = worker_id
         self._poll_interval = poll_interval_seconds
+        self._next_health_check = 0.0
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._logger = structlog.get_logger().bind(worker_id=worker_id, worker_type="plugin")
@@ -40,6 +42,12 @@ class PluginWorker:
             self._task = None
 
     async def run_once(self) -> bool:
+        if monotonic() >= self._next_health_check:
+            self._next_health_check = monotonic() + 60
+            try:
+                await self._service.check_health()
+            except Exception as exc:
+                self._logger.warning("plugin_health_check_failed", error_type=type(exc).__name__)
         await self._service.enqueue_due()
         run_id = await self._service.claim_next(self._worker_id)
         if run_id is None:

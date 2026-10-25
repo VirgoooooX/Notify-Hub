@@ -15,6 +15,7 @@ from app.application.plugin_service import (
     PluginStateConflictError,
     _DatabaseStateStore,
 )
+from app.config import Settings
 from app.infrastructure.database.base import Base
 from app.infrastructure.database.plugin_models import PluginConfig, PluginRecord, PluginRun
 from app.infrastructure.database.session import create_session_factory
@@ -23,6 +24,7 @@ from app.plugin_runtime.context import PluginAIClient
 from app.plugin_runtime.http import RestrictedHttpClient, RestrictedHttpError
 from app.plugin_runtime.manifest import PluginManifest
 from app.plugin_runtime.registry import PluginRegistry
+from app.plugin_runtime.runner import RunOutcome
 from app.plugin_runtime.schedule import ScheduleError, next_run_at
 from app.workers.plugin_worker import PluginWorker
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -90,7 +92,11 @@ class FakePlugin:
 
     @classmethod
     def config_schema(cls):
-        return {"type": "object", "additionalProperties": False}
+        return {
+            "type": "object",
+            "properties": {"recipients": {"type": "array", "items": {"type": "string"}}},
+            "additionalProperties": False,
+        }
 
     async def run(self, context):
         await context.set_state("cursor", "done")
@@ -545,6 +551,103 @@ async def test_initialize_materializes_profile_default_for_enabled_plugin(tmp_pa
         assert plugin.status == "failed"
         assert "incompatible" in (plugin.last_error or "")
         assert config.config == {"decision_mode": "ai", "invalid": True}
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_plugin_health_alert_retries_and_manual_recovery(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "builtin"
+    _write_fake_plugin(plugin_root)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    emitter = FakeEmitter()
+    emitter.emit = AsyncMock(side_effect=RuntimeError("core unavailable"))
+
+    def make_service() -> PluginService:
+        return PluginService(
+            session_factory=factory,
+            registry=PluginRegistry({"builtin": plugin_root}),
+            event_emitter=emitter,
+            secret_resolver=FakeSecrets(),
+        )
+
+    service = make_service()
+    await service.initialize()
+    await service.enable("fake_monitor")
+    await service.update_config("fake_monitor", {"recipients": ["person-1"]})
+    for _ in range(service.CIRCUIT_OPEN_AFTER):
+        run_id = await service.queue_manual("fake_monitor")
+        await service._finish(
+            run_id,
+            "fake_monitor",
+            "manual",
+            datetime.now(UTC),
+            RunOutcome("failed", error_type="AIGatewayError"),
+        )
+    assert (await service.get_plugin("fake_monitor"))["circuit_open"] is True
+    assert await service.check_health() == 0
+    failed_event = emitter.emit.call_args.args[1]
+    assert failed_event.event_type == "system.plugin_circuit_open"
+    assert failed_event.recipients == ["person-1"]
+    assert failed_event.publish_to_mp is False and failed_event.publish_variants == []
+
+    restarted = make_service()
+    await restarted.initialize()
+    emitter.emit = AsyncMock(return_value=EventReceipt(event_id="evt-1", status="duplicate"))
+    assert await restarted.check_health() == 0
+    assert emitter.emit.call_args.args[1].event_key == failed_event.event_key
+    assert await restarted.check_health() == 0
+    assert emitter.emit.await_count == 1
+
+    run_id = await restarted.queue_manual("fake_monitor")
+    await restarted._finish(
+        run_id, "fake_monitor", "manual", datetime.now(UTC), RunOutcome("succeeded")
+    )
+    assert (await restarted.get_plugin("fake_monitor"))["circuit_open"] is False
+    emitter.emit.return_value = EventReceipt(event_id="evt-2", status="accepted")
+    assert await restarted.check_health() == 1
+    assert emitter.emit.call_args.args[1].event_type == "system.plugin_recovered"
+    assert await restarted.check_health() == 0
+    assert emitter.emit.await_count == 2
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_plugin_health_never_broadcasts_or_retargets_old_profile(tmp_path: Path) -> None:
+    plugin_root = tmp_path / "builtin"
+    _write_fake_plugin(plugin_root)
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = create_session_factory(engine)
+    emitter = FakeEmitter()
+    service = PluginService(
+        session_factory=factory,
+        registry=PluginRegistry({"builtin": plugin_root}),
+        event_emitter=emitter,
+        secret_resolver=FakeSecrets(),
+        settings=Settings(x_health_alert_recipient_ids=["global-recipient"]),
+    )
+    await service.initialize()
+    await service.enable("fake_monitor")
+    async with factory() as session, session.begin():
+        plugin = await session.get(PluginRecord, "fake_monitor")
+        plugin.circuit_open = True
+        plugin.status = "failed"
+    # No recipients and no x_source permission: global X recipients cannot leak in.
+    assert await service.check_health() == 0
+    assert emitter.events == []
+    await service.update_config("fake_monitor", {"recipients": ["person-1"]})
+    emitter.emit = AsyncMock(side_effect=RuntimeError("core unavailable"))
+    assert await service.check_health() == 0
+    async with factory() as session, session.begin():
+        plugin = await session.get(PluginRecord, "fake_monitor")
+        plugin.profile_id = "other-profile"
+    emitter.emit.reset_mock()
+    assert await service.check_health() == 0
+    emitter.emit.assert_not_awaited()
     await engine.dispose()
 
 

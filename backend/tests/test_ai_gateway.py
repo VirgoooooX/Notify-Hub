@@ -364,6 +364,10 @@ def _success_response(request: httpx.Request) -> httpx.Response:
     payload = json.loads(request.content)
     assert payload["task"] == "test_classifier"
     assert set(payload) == {"task", "messages", "output", "parameters"}
+    system_prompt = payload["messages"][0]["content"]
+    assert "Return one JSON object matching this exact JSON Schema:" in system_prompt
+    assert '"results":{"type":"array"' in system_prompt
+    assert '"confidence":{"type":"number"' in system_prompt
     user_data = json.loads(payload["messages"][1]["content"])
     results = [
         {"id": item["id"], "label": "notify", "confidence": 0.95, "reason": "match"}
@@ -427,6 +431,65 @@ async def test_ai_gateway_batches_and_reuses_persistent_cache(tmp_path: Path) ->
     assert [item.cache_hit for item in invocations] == [False, True]
     assert all(len(item.input_hash) == 64 for item in invocations)
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_rejects_duplicate_requested_classification_ids(tmp_path: Path) -> None:
+    service, factory, client = await _configured_service(
+        tmp_path, httpx.MockTransport(lambda _request: pytest.fail("must not send a request"))
+    )
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify_many(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="duplicate_request_ids",
+            instruction="Classify.",
+            labels=["notify", "ignore"],
+            items=[
+                AIClassificationItem(id="same", content="first"),
+                AIClassificationItem(id="same", content="second"),
+            ],
+        )
+    assert error.value.code == "ai_invalid_request"
+    await client.aclose()
+    await factory.kw["bind"].dispose()
+
+
+@pytest.mark.asyncio
+async def test_ai_gateway_rejects_duplicate_result_ids_without_caching(tmp_path: Path) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        successful = _success_response(request)
+        body = json.loads(successful.content)
+        result = json.loads(body["output"]["text"])
+        result["results"].append(dict(result["results"][0]))
+        body["output"]["text"] = json.dumps(result)
+        body["output"]["data"] = result
+        return httpx.Response(200, json=body)
+
+    service, factory, client = await _configured_service(tmp_path, httpx.MockTransport(handler))
+    with pytest.raises(AIGatewayError) as error:
+        await service.classify_many(
+            profile="test_classifier",
+            plugin_id=None,
+            plugin_run_id=None,
+            use_case="duplicate_result_ids",
+            instruction="Classify.",
+            labels=["notify", "ignore", "uncertain"],
+            items=[AIClassificationItem(id="one", content="reset")],
+        )
+    assert error.value.code == "ai_invalid_structured_output"
+    assert calls == 2
+    async with factory() as session:
+        row = await session.scalar(select(AIInvocation))
+        assert row.status == "failed" and row.error_code == "ai_invalid_structured_output"
+        assert await session.scalar(select(func.count(AIResponseCache.id))) == 0
+    await client.aclose()
+    await factory.kw["bind"].dispose()
 
 
 @pytest.mark.asyncio
@@ -641,11 +704,10 @@ async def test_disabled_reason_is_omitted_from_classification_fallback_prompts(
     def handler(request: httpx.Request) -> httpx.Response:
         payload = json.loads(request.content)
         system_prompt = payload["messages"][0]["content"]
-        assert (
-            'Return JSON only with shape {"results":[{"id":string,"label":string,'
-            '"confidence":number}]}'
-        ) in system_prompt
-        assert '"confidence":number,"reason":string' not in system_prompt
+        assert "Return one JSON object matching this exact JSON Schema:" in system_prompt
+        schema_text = system_prompt.split("matching this exact JSON Schema: ", 1)[1]
+        assert '"confidence":{"type":"number"' in schema_text
+        assert '"reason":' not in schema_text
         if mode == "json_object":
             assert payload["output"] == {"type": "json"}
         else:

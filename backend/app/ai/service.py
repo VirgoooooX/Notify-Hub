@@ -151,6 +151,8 @@ class AIService:
     ) -> list[AIClassificationResult]:
         if not 1 <= len(items) <= 5:
             raise AIGatewayError("ai_invalid_request", "classification requires 1 to 5 items")
+        if len({item.id for item in items}) != len(items):
+            raise AIGatewayError("ai_invalid_request", "classification item IDs must be unique")
         cleaned_labels = [label.strip() for label in labels if label.strip()]
         if len(cleaned_labels) < 2 or len(cleaned_labels) != len(set(cleaned_labels)):
             raise AIGatewayError("ai_invalid_request", "classification labels must be unique")
@@ -637,11 +639,8 @@ class AIService:
         mode = "json_schema" if profile.response_format == "auto" else profile.response_format
         last_error: AIProviderError | None = None
         effective_schema = apply_reason_schema_policy(schema, profile)
-        format_hint = (
-            "Return one JSON object matching this JSON Schema: "
-            + json.dumps(effective_schema, ensure_ascii=False, separators=(",", ":"))
-            if mode in {"json_object", "prompt_json"}
-            else "Return the requested structured result."
+        format_hint = "Return one JSON object matching this exact JSON Schema: " + json.dumps(
+            effective_schema, ensure_ascii=False, separators=(",", ":")
         )
         messages = [
             {
@@ -708,13 +707,11 @@ class AIService:
         mode: str,
         profile: AIProfile,
     ) -> list[dict[str, str]]:
-        fields = '"id":string,"label":string,"confidence":number'
-        if profile.include_reason:
-            fields += ',"reason":string'
-        format_hint = (
-            f'Return JSON only with shape {{"results":[{{{fields}}}]}}'
-            if mode in {"json_object", "prompt_json"}
-            else "Return the requested structured result."
+        classification_format = response_format("json_schema", labels, profile)
+        assert classification_format is not None
+        classification_schema = classification_format["json_schema"]["schema"]
+        format_hint = "Return one JSON object matching this exact JSON Schema: " + json.dumps(
+            classification_schema, ensure_ascii=False, separators=(",", ":")
         )
         payload = {
             "instruction": instruction,
